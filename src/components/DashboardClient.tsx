@@ -210,8 +210,8 @@ export default function DashboardClient() {
     <div className="min-h-screen bg-gray-50">
       <div className="sticky top-0 z-10">
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
             <div>
               <h1 className="text-base font-semibold text-gray-900 leading-tight">HRG Dashboard</h1>
@@ -223,7 +223,7 @@ export default function DashboardClient() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
             {/* WTD / PTD quick toggle */}
             <div className="flex rounded-lg border border-gray-200 overflow-hidden">
               {QUICK_TOGGLE.map(o => (
@@ -279,40 +279,43 @@ export default function DashboardClient() {
       </header>
 
       {!branchesLoading && branches.length > 0 && (
-        <div className="bg-gray-50 border-b border-gray-200"><div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-3 text-sm">
-            <span className="text-gray-600">
-              <strong className="text-gray-900">{branches.length}</strong> locations
-            </span>
-            {!dataLoading && metricsMap.size > 0 && (
-              <>
-                <span className="text-gray-300">·</span>
-                <span className="text-green-600 font-medium">{onTarget} on target</span>
-                <span className="text-gray-300">·</span>
-                <span className="text-red-600 font-medium">{overTarget} over target</span>
-              </>
-            )}
-            <span className="text-gray-300">·</span>
-            <span className="text-xs text-gray-500 self-center">
-              Lane&nbsp;
-              <span className="text-green-600 font-medium">≤3:30</span>
-              {" / "}
-              <span className="text-yellow-600 font-medium">≤4:00</span>
-            </span>
-            <span className="text-gray-300">·</span>
-            <span className="text-xs text-gray-500 self-center">
-              Pre-menu&nbsp;
-              <span className="text-green-600 font-medium">&lt;0:35</span>
-              {" / "}
-              <span className="text-yellow-600 font-medium">&lt;1:00</span>
-            </span>
-            <span className="text-gray-300">·</span>
-            <span className="text-xs text-gray-500 self-center">
-              Window&nbsp;
-              <span className="text-green-600 font-medium">&lt;0:52</span>
-              {" / "}
-              <span className="text-yellow-600 font-medium">&lt;1:00</span>
-            </span>
-            <div className="ml-auto flex rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-gray-50 border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <span className="text-gray-600">
+                <strong className="text-gray-900">{branches.length}</strong> locations
+              </span>
+              {!dataLoading && metricsMap.size > 0 && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-green-600 font-medium">{onTarget} on target</span>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-red-600 font-medium">{overTarget} over target</span>
+                </>
+              )}
+              <span className="text-gray-300">·</span>
+              <span className="text-xs text-gray-500">
+                Lane&nbsp;
+                <span className="text-green-600 font-medium">≤3:30</span>
+                {" / "}
+                <span className="text-yellow-600 font-medium">≤4:00</span>
+              </span>
+              <span className="text-gray-300">·</span>
+              <span className="text-xs text-gray-500">
+                Pre-menu&nbsp;
+                <span className="text-green-600 font-medium">&lt;0:35</span>
+                {" / "}
+                <span className="text-yellow-600 font-medium">&lt;1:00</span>
+              </span>
+              <span className="text-gray-300">·</span>
+              <span className="text-xs text-gray-500">
+                Window&nbsp;
+                <span className="text-green-600 font-medium">&lt;0:52</span>
+                {" / "}
+                <span className="text-yellow-600 font-medium">&lt;1:00</span>
+              </span>
+            </div>
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
               {(["summary", "daypart"] as const).map((mode) => (
                 <button
                   key={mode}
@@ -327,7 +330,8 @@ export default function DashboardClient() {
                 </button>
               ))}
             </div>
-          </div></div>
+          </div>
+        </div>
         )}
       </div>
 
@@ -339,7 +343,7 @@ export default function DashboardClient() {
           </div>
         )}
 
-        <div className="flex gap-6 items-start">
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
           {/* Cards grid */}
           <div className="flex-1 min-w-0">
             {branchesLoading && (
@@ -392,8 +396,8 @@ export default function DashboardClient() {
             )}
           </div>
 
-          {/* Leaderboard sidebar */}
-          <div className="w-52 shrink-0 hidden lg:flex lg:flex-col lg:gap-4">
+          {/* Leaderboard — sidebar on desktop, bottom section on mobile */}
+          <div className="flex flex-col gap-4 w-full lg:w-52 lg:shrink-0">
             <Leaderboard branches={branches} metric="lane_total" stores={lastWeekStores} />
             <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} />
           </div>
