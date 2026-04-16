@@ -223,7 +223,7 @@ export default function DashboardClient() {
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+          <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
             {/* WTD / PTD quick toggle */}
             <div className="flex rounded-lg border border-gray-200 overflow-hidden">
               {QUICK_TOGGLE.map(o => (
