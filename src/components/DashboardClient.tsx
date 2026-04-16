@@ -64,18 +64,22 @@ export default function DashboardClient() {
     setBranchesLoading(false);
 
     if (dataRes.ok) {
-      const { stores, range_label } = await dataRes.json() as {
+      const payload = await dataRes.json() as {
         stores: StoreMetrics[];
         range_label: string;
       };
+      const { stores, range_label } = payload;
+      console.log("[HRG] data fetch", key, "stores:", stores?.length, "keys:", stores?.slice(0,3).map(s=>s.store_name_and_id));
       setRangeLabel(range_label);
       const map = new Map<string, StoreMetrics>();
       for (const s of stores) {
         if (s.store_name_and_id) map.set(s.store_name_and_id, s);
       }
+      console.log("[HRG] metricsMap size:", map.size);
       setMetricsMap(map);
     } else {
       const d = await dataRes.json().catch(() => ({}));
+      console.error("[HRG] data fetch error:", dataRes.status, d);
       setError(d.error ?? "Failed to load metrics");
     }
 
@@ -109,6 +113,16 @@ export default function DashboardClient() {
       }
     }
     return null;
+  }
+
+  // Debug: log first branch key vs first map key once both are loaded
+  if (branches.length > 0 && metricsMap.size > 0) {
+    const b = branches[0];
+    const constructed = `${b.name} - ${b.client_branch_id}`;
+    const firstMapKey = metricsMap.keys().next().value;
+    if (!metricsMap.has(constructed) && !Array.from(metricsMap.keys()).some(k => b.client_branch_id && k.includes(b.client_branch_id))) {
+      console.warn("[HRG] KEY MISMATCH — branch key:", constructed, "| map key sample:", firstMapKey);
+    }
   }
 
   async function handleLogout() {
