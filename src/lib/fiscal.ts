@@ -47,9 +47,17 @@ function fmtDT(d: Date, endOfDay = false): string {
   return endOfDay ? `${base}T23:59:59` : `${base}T00:00:00`;
 }
 
+// HRG operates in Central time. Vercel servers run UTC, so we must derive
+// the current date in America/Chicago rather than the server's local clock.
 function today(): Date {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return new Date(get("year"), get("month") - 1, get("day"));
 }
 
 /** Find the fiscal period containing a given date */
