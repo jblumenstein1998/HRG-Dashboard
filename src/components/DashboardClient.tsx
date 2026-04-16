@@ -198,7 +198,7 @@ export default function DashboardClient() {
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <img src="/hrglogo%20(inverted).png" alt="HRG" className="h-9 w-auto" />
+            <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
             <div>
               <h1 className="text-base font-semibold text-gray-900 leading-tight">HRG Dashboard</h1>
               <p className="text-xs text-gray-500 leading-tight hidden sm:block">

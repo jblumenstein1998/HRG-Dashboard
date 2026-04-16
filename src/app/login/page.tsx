@@ -35,7 +35,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center px-4 bg-gray-50">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <img src="/hrglogo%20(inverted).png" alt="HRG" className="h-16 w-auto mx-auto mb-4" />
+          <img src="/hrglogo.png" alt="HRG" className="h-16 w-auto mx-auto mb-4" />
           <h1 className="text-2xl font-semibold text-gray-900">HRG Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">Hudson Restaurant Group</p>
         </div>
