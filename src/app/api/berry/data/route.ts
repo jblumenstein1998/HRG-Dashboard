@@ -276,8 +276,11 @@ export async function GET(request: NextRequest) {
     },
   };
 
-  // Store in data cache
-  dataCache.set(cacheKey, { data: payload, expiresAt: Date.now() + dataTTL(rangeKey) });
+  // Store in data cache — skip caching empty results so a transient Superset
+  // miss doesn't lock out valid data for the full TTL window.
+  if (stores.length > 0) {
+    dataCache.set(cacheKey, { data: payload, expiresAt: Date.now() + dataTTL(rangeKey) });
+  }
 
   return Response.json(payload);
 }
