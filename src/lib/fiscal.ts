@@ -84,9 +84,8 @@ function periodsInQuarter(quarter: number): FiscalPeriod[] {
  */
 export function getMtdRange(): { range: string; label: string } {
   const p = currentPeriod();
-  const t = today();
   return {
-    range: `${fmtDT(toDate(p.start))} : ${fmtDT(t, true)}`,
+    range: `${fmtDT(toDate(p.start))} : now`,
     label: `P${p.period} · MTD`,
   };
 }
@@ -111,9 +110,8 @@ export function getQtdRange(): { range: string; label: string } {
   const cur = currentPeriod();
   const qPeriods = periodsInQuarter(cur.quarter);
   const firstInQ = qPeriods[0];
-  const t = today();
   return {
-    range: `${fmtDT(toDate(firstInQ.start))} : ${fmtDT(t, true)}`,
+    range: `${fmtDT(toDate(firstInQ.start))} : now`,
     label: `Q${cur.quarter} · QTD`,
   };
 }
@@ -122,9 +120,8 @@ export function getQtdRange(): { range: string; label: string } {
  * "YTD" = fiscal year start through today
  */
 export function getYtdRange(): { range: string; label: string } {
-  const t = today();
   return {
-    range: `${fmtDT(toDate(FISCAL_YEAR_START))} : ${fmtDT(t, true)}`,
+    range: `${fmtDT(toDate(FISCAL_YEAR_START))} : now`,
     label: "FY2026 · YTD",
   };
 }
@@ -150,7 +147,7 @@ export function getWtdRange(): { range: string; label: string } {
   const diffToMonday = day === 0 ? 6 : day - 1;
   const monday = new Date(t.getFullYear(), t.getMonth(), t.getDate() - diffToMonday);
   return {
-    range: `${fmtDT(monday)} : ${fmtDT(t, true)}`,
+    range: `${fmtDT(monday)} : now`,
     label: "Week to Date",
   };
 }
@@ -162,9 +159,8 @@ export function getWtdRange(): { range: string; label: string } {
  */
 export function getTodayRange(): { range: string; label: string } {
   const t = today();
-  const tomorrow = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1);
   return {
-    range: `${fmtDT(t)} : ${fmtDT(tomorrow)}`,
+    range: `${fmtDT(t)} : now`,
     label: "Today",
   };
 }
