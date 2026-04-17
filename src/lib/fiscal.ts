@@ -224,18 +224,21 @@ export function formatRangeDates(range: string): string {
   if (parts.length !== 2) return range;
 
   const startStr = parts[0].split("T")[0];
-  const endRaw = parts[1];
-  const endDateStr = endRaw.split("T")[0];
-  const endTime = endRaw.split("T")[1] ?? "";
+  const endRaw = parts[1].trim();
 
-  // Exclusive midnight end — back up one day for display
-  const endStr = endTime.startsWith("00:00:00")
-    ? (() => {
-        const [y, m, d] = endDateStr.split("-").map(Number);
-        const prev = new Date(y, m - 1, d - 1);
-        return fmt(prev);
-      })()
-    : endDateStr;
+  // "now" keyword — display as today's date
+  const endStr = endRaw === "now"
+    ? fmt(today())
+    : (() => {
+        const endDateStr = endRaw.split("T")[0];
+        const endTime = endRaw.split("T")[1] ?? "";
+        // Exclusive midnight end — back up one day for display
+        if (endTime.startsWith("00:00:00")) {
+          const [y, m, d] = endDateStr.split("-").map(Number);
+          return fmt(new Date(y, m - 1, d - 1));
+        }
+        return endDateStr;
+      })();
 
   const fmtDate = (s: string) => {
     const [y, m, d] = s.split("-").map(Number);
