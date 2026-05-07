@@ -3,14 +3,16 @@
 import { useEffect, useState } from "react";
 import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { getStoreLabel } from "@/lib/stores";
-import { formatRangeDates, getLastWeekRange } from "@/lib/fiscal";
+import { formatRangeDates, getLastWeekRange, resolveRange, RangeKey } from "@/lib/fiscal";
 
 type Metric = "lane_total" | "window_service";
 
 type Props = {
   branches: BranchStore[];
   metric: Metric;
-  stores?: StoreMetrics[]; // pre-fetched data; if omitted the component fetches itself
+  stores?: StoreMetrics[];
+  rangeKey: RangeKey;
+  onRangeChange: (key: RangeKey) => void;
 };
 
 const METRIC_CONFIG: Record<Metric, {
@@ -30,6 +32,15 @@ const METRIC_CONFIG: Record<Metric, {
   },
 };
 
+const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
+  { key: "today",     label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "wtd",       label: "WTD" },
+  { key: "last_week", label: "Last Week" },
+  { key: "mtd",       label: "PTD" },
+  { key: "ytd",       label: "YTD" },
+];
+
 type RankedStore = {
   label: string;
   val: string | null;
@@ -44,49 +55,64 @@ function findBranch(branches: BranchStore[], storeNameAndId: string): BranchStor
   return null;
 }
 
-export default function Leaderboard({ branches, metric, stores: prefetched }: Props) {
+export default function Leaderboard({ branches, metric, stores: prefetched, rangeKey, onRangeChange }: Props) {
   const [ranked, setRanked] = useState<RankedStore[]>([]);
-  const [loading, setLoading] = useState(!prefetched);
+  const [loading, setLoading] = useState(true);
+  const [dateLabel, setDateLabel] = useState("");
   const config = METRIC_CONFIG[metric];
-  const dateLabel = formatRangeDates(getLastWeekRange().range);
 
   useEffect(() => {
-    function rank(stores: StoreMetrics[]) {
+    function rank(stores: StoreMetrics[], range: string) {
       const rows: RankedStore[] = stores.map((s) => {
         const branch = findBranch(branches, s.store_name_and_id);
         const label = branch ? getStoreLabel(branch) : s.store_name_and_id;
         const val = config.getValue(s);
         return { label, val, secs: parseMMSS(val) };
       });
+      // Fastest (lowest seconds) at the top
       rows.sort((a, b) => {
         if (a.secs == null && b.secs == null) return 0;
         if (a.secs == null) return 1;
         if (b.secs == null) return -1;
-        return b.secs - a.secs;
+        return a.secs - b.secs;
       });
       setRanked(rows);
+      setDateLabel(formatRangeDates(range));
+      setLoading(false);
     }
 
-    if (prefetched) {
-      rank(prefetched);
-      setLoading(false);
+    // Use prefetched data for last_week to avoid a duplicate fetch on initial load
+    if (rangeKey === "last_week" && prefetched) {
+      rank(prefetched, getLastWeekRange().range);
       return;
     }
 
-    fetch("/api/berry/data?range=last_week")
+    setLoading(true);
+    fetch(`/api/berry/data?range=${rangeKey}`)
       .then((r) => r.json())
-      .then(({ stores }: { stores: StoreMetrics[] }) => {
-        if (Array.isArray(stores)) rank(stores);
+      .then(({ stores, time_range }: { stores: StoreMetrics[]; time_range: string }) => {
+        if (Array.isArray(stores)) rank(stores, time_range ?? resolveRange(rangeKey).range);
       })
-      .finally(() => setLoading(false));
-  }, [branches, metric, prefetched]); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => setLoading(false));
+  }, [branches, metric, rangeKey, prefetched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-      <div className="mb-3">
-        <h2 className="text-sm font-semibold text-gray-900">Last Week · {config.title}</h2>
-        <p className="text-xs text-gray-400">{dateLabel} · slowest first</p>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-gray-900">{config.title}</h2>
+        <select
+          value={rangeKey}
+          onChange={(e) => onRangeChange(e.target.value as RangeKey)}
+          className="text-xs text-gray-600 border border-gray-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-red-600 cursor-pointer"
+        >
+          {RANGE_OPTIONS.map((o) => (
+            <option key={o.key} value={o.key}>{o.label}</option>
+          ))}
+        </select>
       </div>
+      {dateLabel && (
+        <p className="text-xs text-gray-400 mb-3">{dateLabel}</p>
+      )}
 
       {loading ? (
         <div className="flex flex-col gap-2">

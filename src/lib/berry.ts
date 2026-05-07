@@ -68,19 +68,19 @@ export function laneColor(secs: number | null): string {
   return "text-red-600";
 }
 
-/** Pre-menu queue: <35s green, <60s yellow, higher red */
+/** Pre-menu queue: ≤35s green, ≤60s yellow, higher red */
 export function preMenuColor(secs: number | null): string {
   if (secs == null) return "text-gray-300";
-  if (secs < 35) return "text-green-600";
-  if (secs < 60) return "text-yellow-600";
+  if (secs <= 35) return "text-green-600";
+  if (secs <= 60) return "text-yellow-600";
   return "text-red-600";
 }
 
-/** Window service: <52.5s green, <60s yellow, higher red */
+/** Window service: ≤52.5s green, ≤60s yellow, higher red */
 export function windowColor(secs: number | null): string {
   if (secs == null) return "text-gray-300";
-  if (secs < 52.5) return "text-green-600";
-  if (secs < 60) return "text-yellow-600";
+  if (secs <= 52.5) return "text-green-600";
+  if (secs <= 60) return "text-yellow-600";
   return "text-red-600";
 }
 

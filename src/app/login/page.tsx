@@ -37,7 +37,6 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <img src="/hrglogo.png" alt="HRG" className="h-20 w-auto mx-auto mb-4" />
           <h1 className="text-2xl font-semibold text-gray-900">HRG Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-1">Hudson Restaurant Group</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
@@ -86,8 +85,8 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
-        <p className="text-center text-xs text-gray-400 mt-6">
-          Powered by BerryAI · Hudson Restaurant Group
+        <p className="text-center text-xs text-gray-400 mt-6 italic">
+          Take care of the little things to accomplish the big things
         </p>
       </div>
     </div>

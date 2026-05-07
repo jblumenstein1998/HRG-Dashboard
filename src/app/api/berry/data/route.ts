@@ -17,7 +17,10 @@ const ROLLING_RANGES = new Set(["today", "yesterday", "wtd", "mtd", "qtd", "ytd"
 const dataCache = new Map<string, { data: unknown; expiresAt: number }>();
 
 function dataTTL(rangeKey: RangeKey): number {
-  return ROLLING_RANGES.has(rangeKey) ? 5 * 60 * 1000 : 60 * 60 * 1000;
+  // YTD/QTD span many months — heavy Superset queries; cache longer to limit re-queries
+  if (rangeKey === "ytd" || rangeKey === "qtd") return 30 * 60 * 1000;
+  if (ROLLING_RANGES.has(rangeKey)) return 5 * 60 * 1000;
+  return 60 * 60 * 1000;
 }
 
 const METRICS = [

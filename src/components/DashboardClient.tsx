@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import Leaderboard from "./Leaderboard";
@@ -14,17 +14,19 @@ const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
   { key: "wtd",       label: "WTD" },
   { key: "last_week", label: "Last Week" },
   { key: "mtd",       label: "PTD" },
+  { key: "ytd",       label: "YTD" },
 ];
 
 const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "last_period", label: "Last Period" },
   { key: "qtd",         label: "Quarter to Date" },
-  { key: "ytd",         label: "Year to Date" },
   ...PERIODS.map((p) => ({ key: `p${p.period}` as RangeKey, label: `P${p.period} (Full)` })),
 ];
 
 export default function DashboardClient() {
   const router = useRouter();
+  const latestFetchId = useRef(0);
+  const branchesLoaded = useRef(false);
   const [rangeKey, setRangeKey] = useState<RangeKey>("mtd");
   const [rangeLabel, setRangeLabel] = useState("");
   const [viewMode, setViewMode] = useState<"summary" | "daypart">("summary");
@@ -33,61 +35,82 @@ export default function DashboardClient() {
   const [lastWeekStores, setLastWeekStores] = useState<StoreMetrics[] | undefined>(undefined);
   const [branchesLoading, setBranchesLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(true);
+  const [revealedCount, setRevealedCount] = useState(0);
+  const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [leaderboardRange, setLeaderboardRange] = useState<RangeKey>("last_week");
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
-    setBranchesLoading(true);
+    const fetchId = ++latestFetchId.current;
     setDataLoading(true);
     setError(null);
 
-    const [branchRes, dataRes] = await Promise.all([
-      fetch("/api/berry/branches"),
-      fetch(`/api/berry/data?range=${key}${bust ? "&bust=1" : ""}`),
-    ]);
+    const bustParam = bust ? "&bust=1" : "";
+    const needsBranches = !branchesLoaded.current || bust;
+    if (needsBranches) setBranchesLoading(true);
 
-    if (branchRes.status === 401 || dataRes.status === 401) {
-      router.push("/login");
-      return;
+    const tasks: Promise<void>[] = [
+      fetch(`/api/berry/data?range=${key}${bustParam}`).then(async res => {
+        if (fetchId !== latestFetchId.current) return; // superseded by a newer selection
+        if (res.status === 401) { router.push("/login"); return; }
+        if (res.ok) {
+          const payload = await res.json() as { stores: StoreMetrics[]; range_label: string };
+          const { stores, range_label } = payload;
+          console.log("[HRG] data fetch", key, "stores:", stores?.length, "keys:", stores?.slice(0,3).map(s=>s.store_name_and_id));
+          setRangeLabel(range_label);
+          const map = new Map<string, StoreMetrics>();
+          for (const s of stores) {
+            if (s.store_name_and_id) map.set(s.store_name_and_id, s);
+          }
+          console.log("[HRG] metricsMap size:", map.size);
+          setMetricsMap(map);
+        } else {
+          const d = await res.json().catch(() => ({}));
+          console.error("[HRG] data fetch error:", res.status, d);
+          setError(d.error ?? "Failed to load metrics");
+        }
+        setDataLoading(false);
+        setLastRefresh(new Date());
+      }),
+    ];
+
+    if (needsBranches) {
+      tasks.push(
+        fetch("/api/berry/branches").then(async res => {
+          if (fetchId !== latestFetchId.current) return;
+          if (res.status === 401) { router.push("/login"); return; }
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            setError(d.error ?? "Failed to load locations");
+            setBranchesLoading(false);
+            return;
+          }
+          const branchList: BranchStore[] = await res.json();
+          setBranches(branchList);
+          branchesLoaded.current = true;
+          setBranchesLoading(false);
+        })
+      );
     }
 
-    if (!branchRes.ok) {
-      const d = await branchRes.json().catch(() => ({}));
-      setError(d.error ?? "Failed to load locations");
-      setBranchesLoading(false);
-      setDataLoading(false);
-      return;
-    }
-
-    const branchList: BranchStore[] = await branchRes.json();
-    setBranches(branchList);
-    setBranchesLoading(false);
-
-    if (dataRes.ok) {
-      const payload = await dataRes.json() as {
-        stores: StoreMetrics[];
-        range_label: string;
-      };
-      const { stores, range_label } = payload;
-      console.log("[HRG] data fetch", key, "stores:", stores?.length, "keys:", stores?.slice(0,3).map(s=>s.store_name_and_id));
-      setRangeLabel(range_label);
-      const map = new Map<string, StoreMetrics>();
-      for (const s of stores) {
-        if (s.store_name_and_id) map.set(s.store_name_and_id, s);
-      }
-      console.log("[HRG] metricsMap size:", map.size);
-      setMetricsMap(map);
-    } else {
-      const d = await dataRes.json().catch(() => ({}));
-      console.error("[HRG] data fetch error:", dataRes.status, d);
-      setError(d.error ?? "Failed to load metrics");
-    }
-
-    setDataLoading(false);
-    setLastRefresh(new Date());
+    await Promise.all(tasks);
   }, [router]);
 
   useEffect(() => { fetchData(rangeKey); }, [rangeKey, fetchData]);
+
+  // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
+  useEffect(() => {
+    if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; }
+    if (dataLoading || branches.length === 0) { setRevealedCount(0); return; }
+    let count = 0;
+    revealTimer.current = setInterval(() => {
+      count++;
+      setRevealedCount(count);
+      if (count >= branches.length) { clearInterval(revealTimer.current!); revealTimer.current = null; }
+    }, 60);
+    return () => { if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; } };
+  }, [dataLoading, branches.length]);
 
   // Fetch last-week data once for leaderboards (independent of range selection)
   useEffect(() => {
@@ -193,9 +216,13 @@ export default function DashboardClient() {
     URL.revokeObjectURL(url);
   }
 
-  const onTarget = branches.filter(b => {
+  const beatTarget = branches.filter(b => {
     const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
     return secs != null && secs <= 210;
+  }).length;
+  const onTarget = branches.filter(b => {
+    const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
+    return secs != null && secs > 210 && secs <= 240;
   }).length;
   const overTarget = branches.filter(b => {
     const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
@@ -214,13 +241,15 @@ export default function DashboardClient() {
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
             <div>
-              <h1 className="text-base font-semibold text-gray-900 leading-tight">HRG Dashboard</h1>
-              <p className="text-xs text-gray-500 leading-tight hidden sm:block">
-                Drive-Thru · {rangeLabel || `P${cp.period} · MTD`}
-              </p>
-              <p className="text-xs text-gray-400 leading-tight hidden sm:block">
-                {resolvedDates}
-              </p>
+              <select
+                value="/dashboard"
+                onChange={e => router.push(e.target.value)}
+                className="text-base font-semibold text-gray-900 leading-tight bg-transparent border-0 p-0 cursor-pointer focus:outline-none focus:ring-0"
+              >
+                <option value="/dashboard">Drive-Thru</option>
+                <option value="/food-cost">Food Cost</option>
+              </select>
+              {rangeLabel && <p className="text-xs text-gray-400 leading-tight">{rangeLabel} · {resolvedDates}{now ? ` · ${now}` : ""}</p>}
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
@@ -230,8 +259,7 @@ export default function DashboardClient() {
                 <button
                   key={o.key}
                   onClick={() => handleRangeChange(o.key)}
-                  disabled={dataLoading}
-                  className={`text-xs px-3 py-1.5 transition disabled:opacity-50 ${
+                  className={`text-xs px-3 py-1.5 transition ${
                     rangeKey === o.key
                       ? "bg-red-700 text-white font-medium"
                       : "bg-white text-gray-600 hover:bg-gray-50"
@@ -245,28 +273,19 @@ export default function DashboardClient() {
             <select
               value={RANGE_OPTIONS.some(o => o.key === rangeKey) ? rangeKey : ""}
               onChange={(e) => { if (e.target.value) handleRangeChange(e.target.value as RangeKey); }}
-              disabled={dataLoading}
-              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-600 disabled:opacity-50"
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-600"
             >
-              <option value="">Compare…</option>
+              <option value="">Period…</option>
               {RANGE_OPTIONS.map(o => (
                 <option key={o.key} value={o.key}>{o.label}</option>
               ))}
             </select>
-            {now && <span className="text-xs text-gray-400 hidden sm:block">· {now}</span>}
             <button
               onClick={() => fetchData(rangeKey, true)}
               disabled={dataLoading}
               className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
             >
               {dataLoading ? "Loading…" : "Refresh"}
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={dataLoading || metricsMap.size === 0}
-              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
-            >
-              Export
             </button>
             <button
               onClick={handleLogout}
@@ -281,38 +300,44 @@ export default function DashboardClient() {
       {!branchesLoading && branches.length > 0 && (
         <div className="bg-gray-50 border-b border-gray-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-sm">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <span className="text-gray-600">
-                <strong className="text-gray-900">{branches.length}</strong> locations
-              </span>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+              <span className="text-gray-600"><strong className="text-gray-900">{branches.length}</strong> locations</span>
               {!dataLoading && metricsMap.size > 0 && (
                 <>
                   <span className="text-gray-300">·</span>
-                  <span className="text-green-600 font-medium">{onTarget} on target</span>
+                  <span className="text-green-600 font-medium">{beatTarget} beat</span>
                   <span className="text-gray-300">·</span>
-                  <span className="text-red-600 font-medium">{overTarget} over target</span>
+                  <span className="text-yellow-600 font-medium">{onTarget} on target</span>
+                  <span className="text-gray-300">·</span>
+                  <span className="text-red-600 font-medium">{overTarget} over</span>
                 </>
               )}
               <span className="text-gray-300">·</span>
-              <span className="text-xs text-gray-500">
+              <span className="text-gray-500">
                 Lane&nbsp;
                 <span className="text-green-600 font-medium">≤3:30</span>
                 {" / "}
                 <span className="text-yellow-600 font-medium">≤4:00</span>
+                {" / "}
+                <span className="text-red-600 font-medium">&gt;4:00</span>
               </span>
               <span className="text-gray-300">·</span>
-              <span className="text-xs text-gray-500">
+              <span className="text-gray-500">
                 Pre-menu&nbsp;
-                <span className="text-green-600 font-medium">&lt;0:35</span>
+                <span className="text-green-600 font-medium">≤0:35</span>
                 {" / "}
-                <span className="text-yellow-600 font-medium">&lt;1:00</span>
+                <span className="text-yellow-600 font-medium">≤1:00</span>
+                {" / "}
+                <span className="text-red-600 font-medium">&gt;1:00</span>
               </span>
               <span className="text-gray-300">·</span>
-              <span className="text-xs text-gray-500">
+              <span className="text-gray-500">
                 Window&nbsp;
-                <span className="text-green-600 font-medium">&lt;0:52</span>
+                <span className="text-green-600 font-medium">≤0:52.5</span>
                 {" / "}
-                <span className="text-yellow-600 font-medium">&lt;1:00</span>
+                <span className="text-yellow-600 font-medium">≤1:00</span>
+                {" / "}
+                <span className="text-red-600 font-medium">&gt;1:00</span>
               </span>
             </div>
             <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
@@ -363,31 +388,37 @@ export default function DashboardClient() {
               </div>
             )}
 
-            {!branchesLoading && branches.length > 0 && (
-              <div className="flex flex-col gap-8">
-                {groupBranches(branches).map(({ section, branches: sectionBranches }) => (
-                  sectionBranches.length > 0 && (
-                    <div key={section}>
-                      <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
-                        {section}
-                      </h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {sectionBranches.map(branch => (
-                          <LocationCard
-                            key={branch.id}
-                            branch={branch}
-                            metrics={getMetrics(branch)}
-                            loading={dataLoading}
-                            rangeLabel={rangeLabel}
-                            viewMode={viewMode}
-                          />
-                        ))}
+            {!branchesLoading && branches.length > 0 && (() => {
+              let gIdx = 0;
+              return (
+                <div className="flex flex-col gap-8">
+                  {groupBranches(branches).map(({ section, branches: sectionBranches }) =>
+                    sectionBranches.length > 0 ? (
+                      <div key={section}>
+                        <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
+                          {section}
+                        </h2>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {sectionBranches.map(branch => {
+                            const visible = gIdx++ < revealedCount;
+                            return (
+                              <LocationCard
+                                key={branch.id}
+                                branch={branch}
+                                metrics={visible ? getMetrics(branch) : null}
+                                loading={!visible}
+                                rangeLabel={rangeLabel}
+                                viewMode={viewMode}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )
-                ))}
-              </div>
-            )}
+                    ) : null
+                  )}
+                </div>
+              );
+            })()}
 
             {!branchesLoading && branches.length === 0 && !error && (
               <div className="text-center py-20 text-gray-400">
@@ -398,8 +429,8 @@ export default function DashboardClient() {
 
           {/* Leaderboard — sidebar on desktop, bottom section on mobile */}
           <div className="flex flex-col gap-4 w-full lg:w-52 lg:shrink-0">
-            <Leaderboard branches={branches} metric="lane_total" stores={lastWeekStores} />
-            <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} />
+            <Leaderboard branches={branches} metric="lane_total" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
+            <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
           </div>
         </div>
       </main>
