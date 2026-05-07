@@ -508,18 +508,22 @@ export default function FoodCostClient() {
 
   useEffect(() => {
     fetch("/api/netchef/dates")
-      .then(r => r.json())
-      .then((opts: DateOption[]) => {
-        if (Array.isArray(opts) && opts.length) {
-          setDateOptions(opts);
-          const prior = opts[1] ?? opts[0];
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok || !Array.isArray(data)) {
+          setError(`Failed to load date options: ${data?.error ?? JSON.stringify(data)}`);
+          return;
+        }
+        if (data.length) {
+          setDateOptions(data);
+          const prior = data[1] ?? data[0];
           setStartDate(prior.startDate);
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
           fetchData(prior.startDate, prior.endDate);
         }
       })
-      .catch(() => {})
+      .catch(err => setError(`Network error loading dates: ${err?.message ?? err}`))
       .finally(() => setDatesLoading(false));
   }, [fetchData]);
 
