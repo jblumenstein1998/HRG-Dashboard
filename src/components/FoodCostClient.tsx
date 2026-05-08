@@ -132,7 +132,7 @@ function RefLineLabel({ viewBox, color, text }: { viewBox?: { x: number; y: numb
 }
 
 function buildYTicks(visibleMax: number): { yMax: number; ticks: number[] } {
-  const yMax = Math.max(1, Math.ceil(visibleMax + 0.25));
+  const yMax = Math.max(2, Math.ceil(visibleMax + 0.25));
   const step = [0.5, 1, 2].find(s => {
     const n = yMax / s;
     return Number.isInteger(n) && n >= 4 && n <= 7;
@@ -271,10 +271,10 @@ function HistoryChart() {
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={pointsWithAverages} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#d1d5db" vertical={false} />
-          <ReferenceLine y={1} stroke="#16a34a" strokeDasharray="5 3" strokeWidth={1.5} label={<RefLineLabel color="#16a34a" text="1.0%" />} />
-          <ReferenceLine y={1.5} stroke="#dc2626" strokeDasharray="5 3" strokeWidth={1.5} label={<RefLineLabel color="#dc2626" text="1.5%" />} />
+          <ReferenceLine y={1} stroke="#16a34a" strokeDasharray="5 3" strokeWidth={1.5} ifOverflow="visible" label={<RefLineLabel color="#16a34a" text="1.0%" />} />
+          <ReferenceLine y={1.5} stroke="#dc2626" strokeDasharray="5 3" strokeWidth={1.5} ifOverflow="visible" label={<RefLineLabel color="#dc2626" text="1.5%" />} />
           <XAxis dataKey="label" tick={axisStyle} />
-          <YAxis tick={<YTick />} domain={[0, yMax]} ticks={yTicks} width={40} />
+          <YAxis tick={<YTick />} domain={[0, yMax]} ticks={yTicks} width={40} interval={0} />
           <Tooltip content={<PeriodTooltip />} />
           {storeNames.map((name, i) =>
             visibleStores.has(name) ? (
