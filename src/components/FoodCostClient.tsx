@@ -207,7 +207,7 @@ function HistoryChart() {
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   };
 
-  const pointsWithAverages = points.map(pt => ({
+  const pointsWithAverages: PeriodPoint[] = points.map(pt => ({
     ...pt,
     "TN Avg": avgVals(tnNames, pt),
     "VA Avg": avgVals(vaNames, pt),
