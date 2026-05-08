@@ -131,10 +131,15 @@ function RefLineLabel({ viewBox, color, text }: { viewBox?: { x: number; y: numb
   );
 }
 
-function buildYTicks(yMax: number): number[] {
-  // 5 evenly spaced ticks — reference values (1.0, 1.5) are handled by ReferenceLine labels
-  const regular = Array.from({ length: 5 }, (_, i) => Math.round((i * yMax / 4) * 10) / 10);
-  return [...new Set(regular)].sort((a, b) => a - b);
+function buildYTicks(visibleMax: number): { yMax: number; ticks: number[] } {
+  const yMax = Math.max(1, Math.ceil(visibleMax + 0.25));
+  const step = [0.5, 1, 2].find(s => {
+    const n = yMax / s;
+    return Number.isInteger(n) && n >= 4 && n <= 7;
+  }) ?? 1;
+  const ticks: number[] = [];
+  for (let v = step; v <= yMax + 1e-9; v += step) ticks.push(Math.round(v * 10) / 10);
+  return { yMax, ticks };
 }
 
 function PeriodTooltip({ active, payload, label }: { active?: boolean; payload?: {dataKey: string; value: number | null; color: string}[]; label?: string }) {
@@ -160,6 +165,7 @@ function HistoryChart() {
   const [points, setPoints] = useState<PeriodPoint[]>([]);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set());
+  const [visibleAverages, setVisibleAverages] = useState(new Set(["TN Avg", "VA Avg", "HRG Avg"]));
 
   useEffect(() => {
     fetch("/api/netchef/period-history")
@@ -193,17 +199,41 @@ function HistoryChart() {
   const storeNames = Object.keys(points[0]).filter(k => k !== "label");
   const axisStyle = { fontSize: 10, fill: "#9ca3af" };
 
-  const visibleMax = points.reduce((max, pt) => {
+  const tnNames = TN_STORES.filter(n => storeNames.includes(n));
+  const vaNames = VA_STORES.filter(n => storeNames.includes(n));
+
+  const avgVals = (names: string[], pt: PeriodPoint) => {
+    const vals = names.map(n => pt[n]).filter((v): v is number => typeof v === "number");
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+
+  const pointsWithAverages = points.map(pt => ({
+    ...pt,
+    "TN Avg": avgVals(tnNames, pt),
+    "VA Avg": avgVals(vaNames, pt),
+    "HRG Avg": avgVals(storeNames, pt),
+  }));
+
+  const AVG_KEYS = ["TN Avg", "VA Avg", "HRG Avg"] as const;
+  const AVG_COLORS: Record<string, string> = { "TN Avg": "#f97316", "VA Avg": "#a855f7", "HRG Avg": "#374151" };
+  const AVG_ACCENT: Record<string, string>  = { "TN Avg": "#c2410c", "VA Avg": "#a855f7", "HRG Avg": "#374151" };
+
+  const visibleMax = pointsWithAverages.reduce((max, pt) => {
     for (const name of storeNames) {
       if (visibleStores.has(name)) {
         const v = pt[name];
         if (typeof v === "number" && v > max) max = v;
       }
     }
+    for (const key of AVG_KEYS) {
+      if (visibleAverages.has(key)) {
+        const v = pt[key];
+        if (typeof v === "number" && v > max) max = v;
+      }
+    }
     return max;
   }, 0);
-  const yMax = Math.max(2, Math.ceil((visibleMax + 0.25) / 2) * 2);
-  const yTicks = buildYTicks(yMax);
+  const { yMax, ticks: yTicks } = buildYTicks(visibleMax);
 
   const renderDot = (color: string) => (props: { cx?: number; cy?: number; index?: number }) => {
     const { cx, cy, index } = props;
@@ -232,8 +262,6 @@ function HistoryChart() {
     });
   };
 
-  const tnNames = TN_STORES.filter(n => storeNames.includes(n));
-  const vaNames = VA_STORES.filter(n => storeNames.includes(n));
   const tnAll = tnNames.length > 0 && tnNames.every(n => visibleStores.has(n));
   const vaAll = vaNames.length > 0 && vaNames.every(n => visibleStores.has(n));
 
@@ -241,7 +269,7 @@ function HistoryChart() {
     <div className="bg-white rounded-xl border border-gray-200 p-4 mt-6">
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Variance Trend — by Store — Absolute Value</p>
       <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={points} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
+        <LineChart data={pointsWithAverages} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#d1d5db" vertical={false} />
           <ReferenceLine y={1} stroke="#16a34a" strokeDasharray="5 3" strokeWidth={1.5} label={<RefLineLabel color="#16a34a" text="1.0%" />} />
           <ReferenceLine y={1.5} stroke="#dc2626" strokeDasharray="5 3" strokeWidth={1.5} label={<RefLineLabel color="#dc2626" text="1.5%" />} />
@@ -257,6 +285,19 @@ function HistoryChart() {
                 stroke={STORE_COLORS[i % STORE_COLORS.length]}
                 strokeWidth={1.5}
                 dot={renderDot(STORE_COLORS[i % STORE_COLORS.length])}
+                connectNulls
+              />
+            ) : null
+          )}
+          {AVG_KEYS.map(key =>
+            visibleAverages.has(key) ? (
+              <Line
+                key={key}
+                type="monotone"
+                dataKey={key}
+                stroke={AVG_COLORS[key]}
+                strokeWidth={1.5}
+                dot={renderDot(AVG_COLORS[key])}
                 connectNulls
               />
             ) : null
@@ -316,6 +357,24 @@ function HistoryChart() {
               </label>
             );
           })}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 border-t border-gray-100">
+          {AVG_KEYS.map(key => (
+            <label key={key} className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none" style={{ color: AVG_COLORS[key] }}>
+              <input
+                type="checkbox"
+                checked={visibleAverages.has(key)}
+                onChange={() => setVisibleAverages(prev => {
+                  const s = new Set(prev);
+                  if (s.has(key)) s.delete(key); else s.add(key);
+                  return s;
+                })}
+                style={{ accentColor: AVG_ACCENT[key] }}
+                className="rounded border-gray-300"
+              />
+              {key}
+            </label>
+          ))}
         </div>
       </div>
     </div>
