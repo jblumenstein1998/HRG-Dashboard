@@ -20,6 +20,17 @@ const FY2025_PERIODS = [
 
 const FY2026_PERIODS = PERIODS.map(p => ({ ...p, fy: 2026 }));
 
+function periodWeekLabel(weekStartISO: string): string {
+  const allPeriods = [...FY2025_PERIODS, ...FY2026_PERIODS];
+  const period = allPeriods.find(p => weekStartISO >= p.start && weekStartISO <= p.end);
+  if (!period) return "last wk";
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  const pStart = new Date(period.start + "T00:00:00").getTime();
+  const wStart = new Date(weekStartISO + "T00:00:00").getTime();
+  const weekNum = Math.floor((wStart - pStart) / msPerWeek) + 1;
+  return `P${period.period}-W${weekNum}`;
+}
+
 function todayCST(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
@@ -37,9 +48,14 @@ export async function GET() {
     const allPeriods = [...FY2025_PERIODS, ...FY2026_PERIODS];
     const last12 = allPeriods.filter(p => p.end < today).slice(-12);
 
-    // Most recent closed week (index 1 = last complete week)
+    // Most recent closed week: find the entry ending on last Sunday
     const allDates = await fetchAvailableDates(3);
-    const lastWeek = allDates[1] ?? allDates[0];
+    const todayDate = new Date(today + "T00:00:00");
+    const dow = todayDate.getDay(); // 0=Sun
+    const lastSun = new Date(todayDate);
+    lastSun.setDate(todayDate.getDate() - dow);
+    const sunStr = `${lastSun.getFullYear()}-${String(lastSun.getMonth()+1).padStart(2,"0")}-${String(lastSun.getDate()).padStart(2,"0")}`;
+    const lastWeek = allDates.find(d => d.endDate === sunStr) ?? allDates[1] ?? allDates[0];
 
     const ranges: { label: string; start: string; end: string }[] = [
       ...last12.map(p => ({
@@ -48,7 +64,7 @@ export async function GET() {
         end:   p.end,
       })),
       ...(lastWeek
-        ? [{ label: "last wk", start: lastWeek.startDate, end: lastWeek.endDate }]
+        ? [{ label: periodWeekLabel(lastWeek.startDate), start: lastWeek.startDate, end: lastWeek.endDate }]
         : []),
     ];
 

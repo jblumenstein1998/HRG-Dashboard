@@ -83,6 +83,19 @@ function varianceBg(v: number | null): string {
   return "bg-red-50";
 }
 
+// ── Date helpers ──────────────────────────────────────────────────────────────
+
+function lastCompletedWeekEndDate(): string {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const lastSun = new Date(today);
+  lastSun.setDate(today.getDate() - today.getDay()); // go back to Sunday (0 = stay, 1 = back 1, etc.)
+  const y = lastSun.getFullYear();
+  const m = String(lastSun.getMonth() + 1).padStart(2, "0");
+  const d = String(lastSun.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 // ── Period dropdown options ────────────────────────────────────────────────────
 
 const HISTORY_RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
@@ -104,6 +117,150 @@ function rangeToHistoryParams(key: RangeKey): { start: string; end?: string } {
     return { start, end: `${adj.getFullYear()}-${String(adj.getMonth()+1).padStart(2,"0")}-${String(adj.getDate()).padStart(2,"0")}` };
   }
   return { start, end: endDate };
+}
+
+// ── Recent weeks table ────────────────────────────────────────────────────────
+
+type RecentWeeksData = {
+  weeks: string[];
+  weekRanges: { start: string; end: string }[];
+  stores: { locationId: number; name: string; values: (number | null)[] }[];
+};
+
+type WeekItemPair = { prev: ItemData[] | "loading" | "error"; curr: ItemData[] | "loading" | "error" };
+
+function RecentWeeksTable() {
+  const [data, setData] = useState<RecentWeeksData | null>(null);
+  const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [itemsCache, setItemsCache] = useState<Record<number, WeekItemPair>>({});
+
+  useEffect(() => {
+    fetch("/api/netchef/recent-weeks")
+      .then(r => r.json())
+      .then((d: unknown) => {
+        if (d && typeof d === "object" && "weeks" in d && "stores" in d) {
+          setData(d as RecentWeeksData);
+          setStatus("done");
+        } else {
+          setStatus("error");
+        }
+      })
+      .catch(() => setStatus("error"));
+  }, []);
+
+  const handleToggle = (locationId: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(locationId)) { next.delete(locationId); return next; }
+      next.add(locationId);
+      return next;
+    });
+    if (!data || itemsCache[locationId]) return;
+    const [prevRange, currRange] = data.weekRanges;
+    setItemsCache(prev => ({ ...prev, [locationId]: { prev: "loading", curr: "loading" } }));
+    const base = `/api/netchef/items?locationId=${locationId}&mode=variance`;
+    fetch(`${base}&start=${prevRange.start}&end=${prevRange.end}&limit=200`)
+      .then(r => r.json())
+      .then((d: ItemData[]) => setItemsCache(prev => ({ ...prev, [locationId]: { ...prev[locationId], prev: d } })))
+      .catch(() => setItemsCache(prev => ({ ...prev, [locationId]: { ...prev[locationId], prev: "error" } })));
+    fetch(`${base}&start=${currRange.start}&end=${currRange.end}`)
+      .then(r => r.json())
+      .then((d: ItemData[]) => setItemsCache(prev => ({ ...prev, [locationId]: { ...prev[locationId], curr: d } })))
+      .catch(() => setItemsCache(prev => ({ ...prev, [locationId]: { ...prev[locationId], curr: "error" } })));
+  };
+
+  if (status === "loading") return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4 h-20 flex items-center justify-center">
+      <span className="text-xs text-gray-400 animate-pulse">Loading recent weeks…</span>
+    </div>
+  );
+
+  if (status === "error" || !data) return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4 h-14 flex items-center justify-center">
+      <span className="text-xs text-gray-400">Recent weeks failed to load — check server logs</span>
+    </div>
+  );
+
+  const fmtWow = (v: number | null) => {
+    if (v === null) return "—";
+    if (v < 0) return `(${Math.abs(v).toFixed(2)}%)`;
+    if (v > 0) return `+${v.toFixed(2)}%`;
+    return `${v.toFixed(2)}%`;
+  };
+
+  const COL_COUNT = 2 + data.weeks.length + 1; // rank + location + weeks + wow
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-sm font-semibold text-gray-800">Variance — Recent Weeks</h2>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            {data.weeks.map(w => (
+              <th key={w} className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-40">{w}</th>
+            ))}
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-40">W/W Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.stores.map((store, i) => {
+            const prev = store.values[0];
+            const curr = store.values[1];
+            const wow = prev !== null && curr !== null ? curr - prev : null;
+            const absDelta = prev !== null && curr !== null ? Math.abs(curr) - Math.abs(prev) : null;
+            const rowBg = absDelta === null ? "" : absDelta > 0 ? "bg-red-50" : absDelta < 0 ? "bg-green-50" : "";
+            const isOpen = expandedIds.has(store.locationId);
+            const cache = itemsCache[store.locationId];
+            const isLoading = !cache || cache.prev === "loading" || cache.curr === "loading";
+            const isError = cache?.prev === "error" || cache?.curr === "error";
+            const currItems = Array.isArray(cache?.curr) ? (cache.curr as ItemData[]) : [];
+            const prevItems = Array.isArray(cache?.prev) ? (cache.prev as ItemData[]) : [];
+            const prevMap = new Map(prevItems.map(item => [item.name, item.variancePct]));
+
+            return (
+              <Fragment key={store.locationId}>
+                <tr className={`border-b border-[#ececec] ${rowBg} cursor-pointer hover:brightness-95`} onClick={() => handleToggle(store.locationId)}>
+                  <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                  <td className="px-4 py-3 font-medium text-gray-900">{store.name}</td>
+                  {store.values.map((v, j) => (
+                    <td key={j} className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtPct(v, 2)}</td>
+                  ))}
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${absDelta === null ? "text-gray-400" : absDelta > 0 ? "text-red-600" : absDelta < 0 ? "text-green-600" : "text-gray-500"}`}>{fmtWow(wow)}</td>
+                </tr>
+                {isOpen && isLoading && (
+                  <tr className="bg-gray-50"><td colSpan={COL_COUNT} className="px-4 py-2 text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+                )}
+                {isOpen && isError && (
+                  <tr className="bg-gray-50"><td colSpan={COL_COUNT} className="px-4 py-2 text-xs text-red-500">Failed to load items</td></tr>
+                )}
+                {isOpen && !isLoading && !isError && currItems.length === 0 && (
+                  <tr className="bg-gray-50"><td colSpan={COL_COUNT} className="px-4 py-2 text-xs text-gray-400">No item data for this period</td></tr>
+                )}
+                {isOpen && !isLoading && !isError && currItems.map((item, j) => {
+                  const itemPrev = prevMap.get(item.name) ?? null;
+                  const itemWow = item.variancePct !== null && itemPrev !== null ? item.variancePct - itemPrev : null;
+                  return (
+                    <tr key={`item-${j}`} className="bg-gray-50 border-t border-gray-100">
+                      <td className="px-3 py-1.5" />
+                      <td className="px-4 py-1.5 text-xs text-gray-600">{item.name}</td>
+                      <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">{fmtPct(itemPrev, 2)}</td>
+                      <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">{fmtPct(item.variancePct, 2)}</td>
+                      <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">{fmtWow(itemWow)}</td>
+                    </tr>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ── History chart ─────────────────────────────────────────────────────────────
@@ -148,7 +305,7 @@ function PeriodTooltip({ active, payload, label }: { active?: boolean; payload?:
     .filter(p => p.value != null)
     .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs max-h-72 overflow-y-auto">
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
       <p className="font-semibold text-gray-700 mb-2 uppercase tracking-wide">{label}</p>
       {sorted.map(p => (
         <div key={p.dataKey} className="flex items-center gap-2 py-0.5">
@@ -575,7 +732,8 @@ export default function FoodCostClient() {
         }
         if (data.length) {
           setDateOptions(data);
-          const prior = data[1] ?? data[0];
+          const sunStr = lastCompletedWeekEndDate();
+          const prior = data.find((o: DateOption) => o.endDate === sunStr) ?? data[1] ?? data[0];
           setStartDate(prior.startDate);
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
@@ -590,20 +748,23 @@ export default function FoodCostClient() {
   const endOptions   = dateOptions.map(o => o.endDate);
 
   const setLastWeek = () => {
-    const opt = dateOptions[1] ?? dateOptions[0];
+    const sunStr = lastCompletedWeekEndDate();
+    const opt = dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0];
     if (opt) { setStartDate(opt.startDate); setEndDate(opt.endDate); setActiveQuick("last_week"); fetchData(opt.startDate, opt.endDate); }
   };
 
   const setYTD = () => {
     const ytdStart = [...dateOptions].reverse().find(o => o.startDate >= FISCAL_YEAR_START)?.startDate;
-    const ytdEnd   = (dateOptions[1] ?? dateOptions[0])?.endDate;
+    const sunStr = lastCompletedWeekEndDate();
+    const ytdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
     if (ytdStart && ytdEnd) { setStartDate(ytdStart); setEndDate(ytdEnd); setActiveQuick("ytd"); fetchData(ytdStart, ytdEnd); }
   };
 
   const setPTD = () => {
     const cp = currentPeriod();
     const ptdStart = [...dateOptions].reverse().find(o => o.startDate >= cp.start)?.startDate;
-    const ptdEnd   = (dateOptions[1] ?? dateOptions[0])?.endDate;
+    const sunStr = lastCompletedWeekEndDate();
+    const ptdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
     if (ptdStart && ptdEnd) { setStartDate(ptdStart); setEndDate(ptdEnd); setActiveQuick("ptd"); fetchData(ptdStart, ptdEnd); }
   };
 
@@ -834,6 +995,10 @@ export default function FoodCostClient() {
             />
           </div>
         )}
+
+        <div className="mt-6">
+          <RecentWeeksTable />
+        </div>
 
         <HistoryChart />
       </main>

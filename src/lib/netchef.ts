@@ -308,7 +308,8 @@ export async function fetchLocationItems(
   locationId: number,
   startDate: string,
   endDate: string,
-  mode: "actual" | "variance" = "variance"
+  mode: "actual" | "variance" = "variance",
+  limit = 5
 ): Promise<ItemData[]> {
   const toMMDDYYYY = (iso: string) => {
     const [y, m, d] = iso.split("-");
@@ -345,12 +346,12 @@ export async function fetchLocationItems(
     return mapped
       .filter(r => r.name && r.actualCostPct !== null)
       .sort((a, b) => (b.actualCostPct ?? 0) - (a.actualCostPct ?? 0))
-      .slice(0, 5);
+      .slice(0, limit);
   }
   return mapped
     .filter(r => r.name && r.variancePct !== null)
     .sort((a, b) => Math.abs(b.variancePct ?? 0) - Math.abs(a.variancePct ?? 0))
-    .slice(0, 5);
+    .slice(0, limit);
 }
 
 // ── Period-level history (per-store, last N periods + last week) ──────────────
