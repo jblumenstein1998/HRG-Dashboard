@@ -29,6 +29,7 @@ const METRICS = [
   "CHAR_window_service",
   "CHAR_lane_queue",
   "CHAR_pre_menu_queue",
+  "ww_flagged_pull_forward_cars",
 ];
 
 const PEAK_DAYPARTS = new Set([2, 4]);
@@ -105,10 +106,11 @@ function computeStoreMetrics(
       store_name_and_id: store,
       overall: {
         // Use Superset's store-level aggregation directly (matches Berry dashboard)
-        lane_total:     overallByStore.get(store) ?? null,
-        total_cars:     sumNum(storeRows.map((r) => r.CHAR_total_cars)),
-        window_service: weightedAvgMMSS(storeRows, "CHAR_window_service"),
-        pre_menu_queue: weightedAvgMMSS(storeRows, "CHAR_pre_menu_queue"),
+        lane_total:            overallByStore.get(store) ?? null,
+        total_cars:            sumNum(storeRows.map((r) => r.CHAR_total_cars)),
+        flagged_pull_forward:  sumNum(storeRows.map((r) => r.ww_flagged_pull_forward_cars)),
+        window_service:        weightedAvgMMSS(storeRows, "CHAR_window_service"),
+        pre_menu_queue:        weightedAvgMMSS(storeRows, "CHAR_pre_menu_queue"),
       },
       peak: {
         lane_total:     weightedAvgMMSS(peakRows,    "CHAR_ lane_total_with_total_pick"),
@@ -273,6 +275,7 @@ export async function GET(request: NextRequest) {
       query_time_range: timeRange,
       superset_status: chartRes.status,
       result_keys: Object.keys(chartData?.result?.[0] ?? {}),
+      field_names: rawRows[0] ? Object.keys(rawRows[0]) : [],
       sample_rows: rawRows.slice(0, 3),
       applied_filters: chartData?.result?.[0]?.applied_filters ?? [],
       rejected_filters: chartData?.result?.[0]?.rejected_filters ?? [],

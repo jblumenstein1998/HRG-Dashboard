@@ -20,6 +20,7 @@ export type DaypartRow = {
   CHAR_window_service?: string | null;
   CHAR_lane_queue?: string | null;
   CHAR_pre_menu_queue?: string | null;
+  ww_flagged_pull_forward_cars?: number | null;
   [key: string]: unknown;
 };
 
@@ -44,6 +45,7 @@ export type StoreMetrics = {
   overall: {
     lane_total: string | null;
     total_cars: number | null;
+    flagged_pull_forward: number | null;
     window_service: string | null;
     pre_menu_queue: string | null;
   };

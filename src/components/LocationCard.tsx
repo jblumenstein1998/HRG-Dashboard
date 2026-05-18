@@ -85,6 +85,17 @@ function SummaryView({
               </span>
           }
         </div>
+        <div className="pb-1">
+          <p className="text-xs text-gray-400 mb-0.5">Flagged pull-fwd</p>
+          {loading
+            ? <Skeleton w="w-10" h="h-6" />
+            : <span className="text-xl font-semibold text-gray-700 tabular-nums">
+                {metrics?.overall.flagged_pull_forward != null
+                  ? Math.round(metrics.overall.flagged_pull_forward).toLocaleString()
+                  : "—"}
+              </span>
+          }
+        </div>
       </div>
 
       {/* Peak / Non-peak breakdown */}
