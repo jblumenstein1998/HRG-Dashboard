@@ -137,6 +137,23 @@ function mergeCookies(base: string, override: string): string {
 
 let loginPromise: Promise<Session> | null = null;
 
+// Limit concurrent Net-Chef API calls so a burst of 36+ requests on cold load
+// doesn't cause NC to return empty totalSummaries for some locations.
+class Semaphore {
+  private permits: number;
+  private queue: Array<() => void> = [];
+  constructor(permits: number) { this.permits = permits; }
+  acquire(): Promise<void> {
+    if (this.permits > 0) { this.permits--; return Promise.resolve(); }
+    return new Promise(resolve => { this.queue.push(resolve); });
+  }
+  release(): void {
+    const next = this.queue.shift();
+    if (next) { next(); } else { this.permits++; }
+  }
+}
+const ncSemaphore = new Semaphore(4);
+
 async function getSession(): Promise<Session> {
   if (session && Date.now() < session.expiresAt) return session;
   // Coalesce concurrent callers onto a single login attempt so that 12 parallel
@@ -157,6 +174,8 @@ function invalidateSession() {
 // ── Common fetch wrapper ──────────────────────────────────────────────────────
 
 async function ncFetch(path: string, body: unknown): Promise<unknown> {
+  await ncSemaphore.acquire();
+  try {
   const s = await getSession();
   const url = `${NC_BASE}${path}?_dc=${Date.now()}`;
 
@@ -184,6 +203,9 @@ async function ncFetch(path: string, body: unknown): Promise<unknown> {
   }
 
   return res.json();
+  } finally {
+    ncSemaphore.release();
+  }
 }
 
 // ── Location list ─────────────────────────────────────────────────────────────
@@ -241,10 +263,19 @@ export async function fetchLocationReport(
     pagingInfo: { page: 1, start: 0, limit: 1000000 },
   }) as Record<string, unknown>;
 
-  const totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
+  let totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
   if (!totals) {
-    console.log("[NC] no totalSummaries for location", locationId);
-    return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null };
+    console.log("[NC] no totalSummaries for location", locationId, "— retrying in 1s");
+    await new Promise(r => setTimeout(r, 1000));
+    const retry = await ncFetch("/resource/actualvstheoretical/location/details", {
+      extraCriteriaMap: { startDate: toMMDDYYYY(startDate), endDate: toMMDDYYYY(endDate), locationIdFilter: locationId, isConsolidated: false },
+      pagingInfo: { page: 1, start: 0, limit: 1000000 },
+    }) as Record<string, unknown>;
+    totals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
+    if (!totals) {
+      console.log("[NC] no totalSummaries for location", locationId, "after retry — giving up");
+      return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null };
+    }
   }
 
   if (locationId === 425) {
