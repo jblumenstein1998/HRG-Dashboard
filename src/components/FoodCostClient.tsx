@@ -129,7 +129,7 @@ type RecentWeeksData = {
 
 type WeekItemPair = { prev: ItemData[] | "loading" | "error"; curr: ItemData[] | "loading" | "error" };
 
-function RecentWeeksTable() {
+function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean }) {
   const [data, setData] = useState<RecentWeeksData | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -208,7 +208,10 @@ function RecentWeeksTable() {
           </tr>
         </thead>
         <tbody>
-          {data.stores.map((store, i) => {
+          {data.stores.filter(s =>
+            (VA_STORES.includes(s.name) && showVA) ||
+            (TN_STORES.includes(s.name) && showTN)
+          ).map((store, i) => {
             const prev = store.values[0];
             const curr = store.values[1];
             const wow = prev !== null && curr !== null ? curr - prev : null;
@@ -557,6 +560,7 @@ function RankTable({
   expandedIds,
   itemsCache,
   onToggle,
+  marketGroups,
 }: {
   title: string;
   rows: LocationData[];
@@ -574,10 +578,52 @@ function RankTable({
   expandedIds?: Set<number>;
   itemsCache?: Record<number, ItemData[] | "loading" | "error">;
   onToggle?: (row: LocationData) => void;
+  marketGroups?: { label: string; rows: LocationData[] }[];
 }) {
   const green  = rows.filter(r => colorFn(r[pctKey] as number | null).includes("green")).length;
   const yellow = rows.filter(r => colorFn(r[pctKey] as number | null).includes("yellow")).length;
   const red    = rows.filter(r => colorFn(r[pctKey] as number | null).includes("red")).length;
+
+  const renderRow = (row: LocationData, rank: number) => {
+    const pct      = row[pctKey] as number | null;
+    const dollars  = row[dollarsKey] as number | null;
+    const isOpen   = expandedIds?.has(row.locationId) ?? false;
+    const rowItems = itemsCache?.[row.locationId];
+    return (
+      <Fragment key={row.locationId}>
+        <tr
+          className={`border-b border-gray-50 ${bgFn(pct)} ${expandable ? "cursor-pointer hover:brightness-95" : ""}`}
+          onClick={() => expandable && onToggle?.(row)}
+        >
+          <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{rank}.</td>
+          <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
+          <td className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtDollars(dollars)}</td>
+          <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(pct)}`}>{fmtPct(pct, pctDecimals)}</td>
+        </tr>
+        {isOpen && rowItems === "loading" && (
+          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+        )}
+        {isOpen && rowItems === "error" && (
+          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-red-500">Failed to load items</td></tr>
+        )}
+        {isOpen && Array.isArray(rowItems) && rowItems.length === 0 && (
+          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400">No item data for this period</td></tr>
+        )}
+        {isOpen && Array.isArray(rowItems) && rowItems.map((item, j) => (
+          <tr key={`item-${j}`} className="bg-gray-50 border-t border-gray-100">
+            <td className="px-3 py-1.5" />
+            <td className="pl-4 pr-4 py-1.5 text-xs text-gray-600">{item.name}</td>
+            <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">
+              {itemMode === "actual" ? fmtDollars(item.actualCostDollars) : fmtDollars(item.varianceDollars)}
+            </td>
+            <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">
+              {itemMode === "actual" ? fmtPct(item.actualCostPct) : fmtPct(item.variancePct, pctDecimals)}
+            </td>
+          </tr>
+        ))}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -615,55 +661,43 @@ function RankTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => {
-              const pct      = row[pctKey] as number | null;
-              const dollars  = row[dollarsKey] as number | null;
-              const isOpen   = expandedIds?.has(row.locationId) ?? false;
-              const rowItems = itemsCache?.[row.locationId];
-              return (
-                <Fragment key={row.locationId}>
-                  <tr
-                    className={`border-b border-gray-50 ${bgFn(pct)} ${expandable ? "cursor-pointer hover:brightness-95" : ""}`}
-                    onClick={() => expandable && onToggle?.(row)}
-                  >
-                    <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtDollars(dollars)}</td>
-                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(pct)}`}>{fmtPct(pct, pctDecimals)}</td>
-                  </tr>
-                  {isOpen && rowItems === "loading" && (
-                    <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400 animate-pulse">Loading…</td></tr>
-                  )}
-                  {isOpen && rowItems === "error" && (
-                    <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-red-500">Failed to load items</td></tr>
-                  )}
-                  {isOpen && Array.isArray(rowItems) && rowItems.length === 0 && (
-                    <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400">No item data for this period</td></tr>
-                  )}
-                  {isOpen && Array.isArray(rowItems) && rowItems.map((item, j) => (
-                    <tr key={`item-${j}`} className="bg-gray-50 border-t border-gray-100">
-                      <td className="px-3 py-1.5" />
-                      <td className="pl-4 pr-4 py-1.5 text-xs text-gray-600">{item.name}</td>
-                      <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">
-                        {itemMode === "actual" ? fmtDollars(item.actualCostDollars) : fmtDollars(item.varianceDollars)}
-                      </td>
-                      <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">
-                        {itemMode === "actual" ? fmtPct(item.actualCostPct) : fmtPct(item.variancePct, pctDecimals)}
+            {marketGroups ? (
+              <>
+                {marketGroups.map((group, gi) => (
+                  <Fragment key={group.label}>
+                    <tr className={`border-b border-gray-200 ${gi > 0 ? "border-t-2 border-t-gray-200" : ""}`}>
+                      <td colSpan={4} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                        {group.label}
                       </td>
                     </tr>
-                  ))}
-                </Fragment>
-              );
-            })}
-            {loading && (loadingCount ?? 0) > 0 && (
-              <tr className="border-b border-gray-50">
-                <td colSpan={4} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
-                  Loading {loadingCount} more…
-                </td>
-              </tr>
-            )}
-            {rows.length === 0 && !loading && (
-              <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+                    {group.rows.map((row, i) => renderRow(row, i + 1))}
+                    {group.rows.length === 0 && !loading && (
+                      <tr><td colSpan={4} className="px-4 py-3 text-center text-xs text-gray-400">No data</td></tr>
+                    )}
+                  </Fragment>
+                ))}
+                {loading && (loadingCount ?? 0) > 0 && (
+                  <tr className="border-b border-gray-50">
+                    <td colSpan={4} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
+                      Loading {loadingCount} more…
+                    </td>
+                  </tr>
+                )}
+              </>
+            ) : (
+              <>
+                {rows.map((row, i) => renderRow(row, i + 1))}
+                {loading && (loadingCount ?? 0) > 0 && (
+                  <tr className="border-b border-gray-50">
+                    <td colSpan={4} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
+                      Loading {loadingCount} more…
+                    </td>
+                  </tr>
+                )}
+                {rows.length === 0 && !loading && (
+                  <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+                )}
+              </>
             )}
           </tbody>
         </table>
@@ -690,6 +724,9 @@ export default function FoodCostClient() {
   const [expandedIds, setExpandedIds]       = useState<Set<number>>(new Set());
   const [cogsItemsCache, setCogsItemsCache] = useState<Record<number, ItemData[] | "loading" | "error">>({});
   const [varItemsCache,  setVarItemsCache]  = useState<Record<number, ItemData[] | "loading" | "error">>({});
+
+  const [showVA, setShowVA] = useState(true);
+  const [showTN, setShowTN] = useState(true);
 
   const fetchData = useCallback(async (start: string, end: string, bust = false) => {
     if (!start || !end) return;
@@ -811,9 +848,19 @@ export default function FoodCostClient() {
     .filter(l => l.actualCostPct !== null)
     .sort((a, b) => (a.actualCostPct ?? 0) - (b.actualCostPct ?? 0));
 
+  const vaActual = byActual.filter(l => VA_STORES.includes(l.locationName));
+  const tnActual = byActual.filter(l => TN_STORES.includes(l.locationName));
+  const cogsRows = byActual.filter(l =>
+    (VA_STORES.includes(l.locationName) && showVA) ||
+    (TN_STORES.includes(l.locationName) && showTN)
+  );
   const byVariance = [...allLocations]
     .filter(l => l.variancePct !== null)
-    .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0));
+    .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
+    .filter(l =>
+      (VA_STORES.includes(l.locationName) && showVA) ||
+      (TN_STORES.includes(l.locationName) && showTN)
+    );
 
   const fetchedLabel = reportMeta
     ? `${fmtDate(reportMeta.startDate)} – ${fmtDate(reportMeta.endDate)} · ${new Date(reportMeta.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
@@ -938,6 +985,16 @@ export default function FoodCostClient() {
               <span className="bg-red-100 text-red-700 px-1.5 py-1 whitespace-nowrap border-l border-gray-200">&gt; 1.5%</span>
             </span>
           </span>
+          <div className="ml-auto flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input type="checkbox" checked={showVA} onChange={e => setShowVA(e.target.checked)} className="rounded border-gray-300" />
+              VA
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
+              TN
+            </label>
+          </div>
         </div>
       </div>
 
@@ -961,7 +1018,7 @@ export default function FoodCostClient() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <RankTable
               title="COGS"
-              rows={byActual}
+              rows={cogsRows}
               pctKey="actualCostPct"
               dollarsKey="actualCostDollars"
               colorFn={actualColor}
@@ -997,7 +1054,7 @@ export default function FoodCostClient() {
         )}
 
         <div className="mt-6">
-          <RecentWeeksTable />
+          <RecentWeeksTable showVA={showVA} showTN={showTN} />
         </div>
 
         <HistoryChart />
