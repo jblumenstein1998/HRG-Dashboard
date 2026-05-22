@@ -4,9 +4,9 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import Leaderboard from "./Leaderboard";
-import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
+import { BranchStore, StoreMetrics, parseMMSS, laneColor, preMenuColor, windowColor } from "@/lib/berry";
 import { RangeKey, PERIODS, currentPeriod, resolveRange, formatRangeDates } from "@/lib/fiscal";
-import { groupBranches } from "@/lib/stores";
+import { groupBranches, getStoreLabel } from "@/lib/stores";
 
 const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
   { key: "today",     label: "Today" },
@@ -325,8 +325,8 @@ export default function DashboardClient() {
 
       {!branchesLoading && branches.length > 0 && (
         <div className="bg-gray-50 border-b border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-sm">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
               <span className="text-gray-600"><strong className="text-gray-900">{branches.length}</strong> locations</span>
               {!dataLoading && metricsMap.size > 0 && (
                 <>
@@ -388,7 +388,7 @@ export default function DashboardClient() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {error && (
-          <div className="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between gap-4">
+          <div className="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-xs text-red-700 flex items-center justify-between gap-4">
             <span>{error}</span>
             <button onClick={() => fetchData(rangeKey)} className="text-xs font-medium underline underline-offset-2 shrink-0">Retry</button>
           </div>
@@ -459,7 +459,149 @@ export default function DashboardClient() {
             <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
           </div>
         </div>
+
+        <RankingTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
       </main>
+    </div>
+  );
+}
+
+// ── Ranking table ─────────────────────────────────────────────────────────────
+
+type SortCol =
+  | "overall_lane" | "overall_window"
+  | "peak_lane" | "peak_window"
+  | "nonpeak_lane" | "nonpeak_window"
+  | "total_cars" | "pull_forward";
+
+function RankingTable({
+  branches,
+  getMetrics,
+  loading,
+}: {
+  branches: BranchStore[];
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+  loading: boolean;
+}) {
+  const [sortCol, setSortCol] = useState<SortCol>("overall_lane");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const handleCol = (col: SortCol) => {
+    if (col === sortCol) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(col);
+      setSortDir(col === "total_cars" || col === "pull_forward" ? "desc" : "asc");
+    }
+  };
+
+  const getVal = (m: StoreMetrics | null, col: SortCol): number | null => {
+    if (!m) return null;
+    switch (col) {
+      case "overall_lane":    return parseMMSS(m.overall.lane_total);
+      case "overall_window":  return parseMMSS(m.overall.window_service);
+      case "peak_lane":      return parseMMSS(m.peak.lane_total);
+      case "peak_window":    return parseMMSS(m.peak.window_service);
+      case "nonpeak_lane":   return parseMMSS(m.nonpeak.lane_total);
+      case "nonpeak_window": return parseMMSS(m.nonpeak.window_service);
+      case "total_cars":      return m.overall.total_cars;
+      case "pull_forward":    return m.overall.flagged_pull_forward;
+    }
+  };
+
+  const rows = [...branches]
+    .map(b => ({ branch: b, metrics: getMetrics(b) }))
+    .sort((a, b) => {
+      const va = getVal(a.metrics, sortCol);
+      const vb = getVal(b.metrics, sortCol);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
+
+  const arrow = (col: SortCol) =>
+    sortCol !== col ? <span className="ml-0.5 text-gray-300">↕</span>
+      : sortDir === "asc" ? <span className="ml-0.5">↑</span>
+      : <span className="ml-0.5">↓</span>;
+
+  const th = (col: SortCol, label: string, extraCls = "") => (
+    <th
+      onClick={() => handleCol(col)}
+      className={`px-3 py-1 text-right text-xs font-semibold uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 transition-colors ${
+        sortCol === col ? "text-gray-800" : "text-gray-400"
+      } ${extraCls}`}
+    >
+      {label}{arrow(col)}
+    </th>
+  );
+
+  if (loading || branches.length === 0) return null;
+
+  return (
+    <div className="mt-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-xs font-semibold text-gray-800">Rankings</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8 align-bottom">#</th>
+              <th rowSpan={2} className="text-left px-4 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide align-bottom">Location</th>
+              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200">Overall</th>
+              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200 bg-gray-50">Peak</th>
+              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200 bg-blue-50">Non-Peak</th>
+              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 align-bottom whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 transition-colors" onClick={() => handleCol("total_cars")}>
+                Cars{arrow("total_cars")}
+              </th>
+              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 align-bottom whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 transition-colors" onClick={() => handleCol("pull_forward")}>
+                Flagged Pull-Fwd{arrow("pull_forward")}
+              </th>
+            </tr>
+            <tr className="border-b border-gray-100">
+              {th("overall_lane",   "Lane",     "border-l border-gray-200")}
+              {th("overall_window", "Window",   "")}
+              {th("peak_lane",   "Lane",   "border-l border-gray-200 bg-gray-50")}
+              {th("peak_window", "Window", "bg-gray-50")}
+              {th("nonpeak_lane",   "Lane",   "border-l border-gray-200 bg-blue-50")}
+              {th("nonpeak_window", "Window", "bg-blue-50")}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ branch, metrics }, i) => (
+              <tr key={branch.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                <td className="px-3 py-1.5 text-right text-[13px] text-gray-400 tabular-nums">{i + 1}.</td>
+                <td className="px-4 py-1.5 font-medium text-[13px] text-gray-900 whitespace-nowrap">{getStoreLabel(branch)}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.overall.lane_total))}`}>
+                  {metrics?.overall.lane_total ?? "—"}
+                </td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.overall.window_service))}`}>
+                  {metrics?.overall.window_service ?? "—"}
+                </td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.peak.lane_total))}`}>
+                  {metrics?.peak.lane_total ?? "—"}
+                </td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.peak.window_service))}`}>
+                  {metrics?.peak.window_service ?? "—"}
+                </td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.nonpeak.lane_total))}`}>
+                  {metrics?.nonpeak.lane_total ?? "—"}
+                </td>
+                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.nonpeak.window_service))}`}>
+                  {metrics?.nonpeak.window_service ?? "—"}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-[13px] text-gray-700 border-l border-gray-100">
+                  {metrics?.overall.total_cars != null ? Math.round(metrics.overall.total_cars).toLocaleString() : "—"}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-[13px] text-gray-700 border-l border-gray-100">
+                  {metrics?.overall.flagged_pull_forward != null ? Math.round(metrics.overall.flagged_pull_forward).toLocaleString() : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
