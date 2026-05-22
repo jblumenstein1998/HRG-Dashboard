@@ -100,6 +100,7 @@ function computeStoreMetrics(
         total_cars: r.CHAR_total_cars ?? null,
         pre_menu_queue: r.CHAR_pre_menu_queue ?? null,
         window_service: r.CHAR_window_service ?? null,
+        flagged_pull_forward: r.ww_flagged_pull_forward_cars ?? null,
       }));
 
     results.push({

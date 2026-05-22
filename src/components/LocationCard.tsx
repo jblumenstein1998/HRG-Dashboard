@@ -1,6 +1,6 @@
 "use client";
 
-import { BranchStore, StoreMetrics, parseMMSS, laneColor, preMenuColor, windowColor } from "@/lib/berry";
+import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { getStoreLabel } from "@/lib/stores";
 
 type Props = {
@@ -68,28 +68,37 @@ function SummaryView({
         <div>
           <p className="text-xs text-gray-400 mb-0.5">Lane Total</p>
           {loading
-            ? <Skeleton w="w-24" h="h-9" />
-            : <span className={`text-3xl font-bold tabular-nums ${laneColor(overallSecs)}`}>
+            ? <Skeleton w="w-20" h="h-8" />
+            : <span className={`text-2xl font-bold tabular-nums ${laneColor(overallSecs)}`}>
                 {metrics?.overall.lane_total ?? "—"}
               </span>
           }
         </div>
-        <div className="pb-1">
+        <div>
+          <p className="text-xs text-gray-400 mb-0.5">Window</p>
+          {loading
+            ? <Skeleton w="w-16" h="h-8" />
+            : <span className={`text-2xl font-bold tabular-nums ${windowColor(parseMMSS(metrics?.overall.window_service))}`}>
+                {metrics?.overall.window_service ?? "—"}
+              </span>
+          }
+        </div>
+        <div className="pb-0.5">
           <p className="text-xs text-gray-400 mb-0.5">Cars</p>
           {loading
-            ? <Skeleton w="w-14" h="h-6" />
-            : <span className="text-xl font-semibold text-gray-700 tabular-nums">
+            ? <Skeleton w="w-10" h="h-5" />
+            : <span className="text-base font-semibold text-gray-700 tabular-nums">
                 {metrics?.overall.total_cars != null
                   ? Math.round(metrics.overall.total_cars).toLocaleString()
                   : "—"}
               </span>
           }
         </div>
-        <div className="pb-1">
-          <p className="text-xs text-gray-400 mb-0.5">Flagged pull-fwd</p>
+        <div className="pb-0.5">
+          <p className="text-xs text-gray-400 mb-0.5">Flagged</p>
           {loading
-            ? <Skeleton w="w-10" h="h-6" />
-            : <span className="text-xl font-semibold text-gray-700 tabular-nums">
+            ? <Skeleton w="w-10" h="h-5" />
+            : <span className="text-base font-semibold text-gray-700 tabular-nums">
                 {metrics?.overall.flagged_pull_forward != null
                   ? Math.round(metrics.overall.flagged_pull_forward).toLocaleString()
                   : "—"}
@@ -114,13 +123,6 @@ function SummaryView({
                   val={data?.lane_total}
                   colorFn={laneColor}
                   secs={parseMMSS(data?.lane_total)}
-                  loading={loading}
-                />
-                <MetricRow
-                  label="Pre-menu"
-                  val={data?.pre_menu_queue}
-                  colorFn={preMenuColor}
-                  secs={parseMMSS(data?.pre_menu_queue)}
                   loading={loading}
                 />
                 <MetricRow
@@ -156,8 +158,8 @@ function DaypartView({
         <p className="text-xs text-gray-400">DP</p>
         <p className="text-xs text-gray-400 text-right">Lane</p>
         <p className="text-xs text-gray-400 text-right">Cars</p>
-        <p className="text-xs text-gray-400 text-right">Pre-menu</p>
         <p className="text-xs text-gray-400 text-right">Window</p>
+        <p className="text-xs text-gray-400 text-right">Flagged</p>
       </div>
       <div className="flex flex-col gap-1.5 border-t border-gray-100 pt-2">
         {dpIndices.map((dp) => {
@@ -183,11 +185,11 @@ function DaypartView({
                   <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
                     {row?.total_cars != null ? Math.round(row.total_cars).toLocaleString() : "—"}
                   </p>
-                  <p className={`text-xs font-semibold tabular-nums text-right ${preMenuColor(parseMMSS(row?.pre_menu_queue))}`}>
-                    {row?.pre_menu_queue ?? "—"}
-                  </p>
                   <p className={`text-xs font-semibold tabular-nums text-right ${windowColor(parseMMSS(row?.window_service))}`}>
                     {row?.window_service ?? "—"}
+                  </p>
+                  <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
+                    {row?.flagged_pull_forward != null ? Math.round(row.flagged_pull_forward).toLocaleString() : "—"}
                   </p>
                 </>
               )}

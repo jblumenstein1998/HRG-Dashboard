@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import Leaderboard from "./Leaderboard";
-import { BranchStore, StoreMetrics, parseMMSS, laneColor, preMenuColor, windowColor } from "@/lib/berry";
+import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { RangeKey, PERIODS, currentPeriod, resolveRange, formatRangeDates } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel } from "@/lib/stores";
 
@@ -349,15 +349,6 @@ export default function DashboardClient() {
               </span>
               <span className="text-gray-300">·</span>
               <span className="text-gray-500">
-                Pre-menu&nbsp;
-                <span className="text-green-600 font-medium">≤0:35</span>
-                {" / "}
-                <span className="text-yellow-600 font-medium">≤1:00</span>
-                {" / "}
-                <span className="text-red-600 font-medium">&gt;1:00</span>
-              </span>
-              <span className="text-gray-300">·</span>
-              <span className="text-gray-500">
                 Window&nbsp;
                 <span className="text-green-600 font-medium">≤0:52.5</span>
                 {" / "}
@@ -451,6 +442,8 @@ export default function DashboardClient() {
                 <p className="text-lg font-medium">No locations found</p>
               </div>
             )}
+
+            <RankingTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
           </div>
 
           {/* Leaderboard — sidebar on desktop, bottom section on mobile */}
@@ -459,8 +452,6 @@ export default function DashboardClient() {
             <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
           </div>
         </div>
-
-        <RankingTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
       </main>
     </div>
   );
@@ -556,7 +547,7 @@ function RankingTable({
                 Cars{arrow("total_cars")}
               </th>
               <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 align-bottom whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 transition-colors" onClick={() => handleCol("pull_forward")}>
-                Flagged Pull-Fwd{arrow("pull_forward")}
+                Flagged{arrow("pull_forward")}
               </th>
             </tr>
             <tr className="border-b border-gray-100">

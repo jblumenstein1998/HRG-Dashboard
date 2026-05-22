@@ -37,6 +37,7 @@ export type DaypartMetrics = {
   total_cars: number | null;
   pre_menu_queue: string | null;
   window_service: string | null;
+  flagged_pull_forward: number | null;
 };
 
 /** Per-store metrics after peak/non-peak computation */
