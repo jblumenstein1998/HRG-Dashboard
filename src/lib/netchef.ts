@@ -496,9 +496,9 @@ export type DateOption = {
   endDate: string;
 };
 
-export async function fetchAvailableDates(limit = 25): Promise<DateOption[]> {
+async function doFetchAvailableDates(limit: number): Promise<Response> {
   const s = await getSession();
-  const res = await fetch(
+  return fetch(
     `${NC_BASE}/resource/actualvstheoretical/location/details/availabledates?_dc=${Date.now()}`,
     {
       method: "POST",
@@ -514,6 +514,16 @@ export async function fetchAvailableDates(limit = 25): Promise<DateOption[]> {
       body: JSON.stringify({ pagingInfo: { page: 1, start: 0, limit } }),
     }
   );
+}
+
+export async function fetchAvailableDates(limit = 25): Promise<DateOption[]> {
+  let res = await doFetchAvailableDates(limit);
+
+  if (res.status === 401 || res.status === 403) {
+    console.log("[NC] availabledates got", res.status, "— invalidating session and retrying");
+    invalidateSession();
+    res = await doFetchAvailableDates(limit);
+  }
 
   const text = await res.text().catch(() => "");
   console.log("[NC] availabledates status:", res.status, "body:", text.slice(0, 1000));
