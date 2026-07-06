@@ -9,6 +9,21 @@ const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 10
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
+const SALES_BY_NC_NAME: Record<string, number> = {
+  "Brentwood":    27363.91,
+  "Columbia":     88470.35,
+  "Springfield":  71117.06,
+  "Spring Hill":  58965.91,
+  "White House":  73532.96,
+  "Hampton":      82493.35,   // HAMPTON_57002
+  "Beach":        38858.58,   // VIRGINIABEACH_57007
+  "Jefferson":    41776.42,   // NEWPORTNEWS_57005
+  "Oyster":       40062.46,   // NEWPORTNEWS_57003
+  "College":      53974.17,   // SUFFOLK_57001
+  "Hillcrest":    46032.77,   // CHESAPEAKE_57006
+  "Chesapeake":   59232.93,   // CHESAPEAKE_57004
+};
+
 type LocationData = {
   locationName: string;
   locationId: number;
@@ -262,6 +277,212 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ── Variance YoY ─────────────────────────────────────────────────────────────
+
+const WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 26, 52];
+
+function computeRangeFromWeeks(endDate: string, nWeeks: number, opts: DateOption[]): { start: string; end: string } | null {
+  const available = opts
+    .filter(o => o.endDate <= endDate)
+    .sort((a, b) => b.endDate.localeCompare(a.endDate));
+  if (available.length < nWeeks) return null;
+  return { start: available[nWeeks - 1].startDate, end: available[0].endDate };
+}
+
+function computePriorYearRange(start: string, end: string, opts: DateOption[]): { start: string; end: string } | null {
+  if (!opts.length) return null;
+  const DAY_MS = 86_400_000;
+  const tStart = new Date(start).getTime() - 52 * 7 * DAY_MS;
+  const tEnd   = new Date(end).getTime()   - 52 * 7 * DAY_MS;
+  const closest = (arr: DateOption[], target: number, key: "startDate" | "endDate") =>
+    arr.reduce((b, o) => Math.abs(new Date(o[key]).getTime() - target) < Math.abs(new Date(b[key]).getTime() - target) ? o : b)[key];
+  return { start: closest(opts, tStart, "startDate"), end: closest(opts, tEnd, "endDate") };
+}
+
+function VarianceYoyTable({
+  dateOptions,
+  reportMeta,
+  showVA,
+  showTN,
+}: {
+  dateOptions: DateOption[];
+  reportMeta: { startDate: string; endDate: string } | null;
+  showVA: boolean;
+  showTN: boolean;
+}) {
+  const [currEnd,   setCurrEnd]   = useState("");
+  const [priorEnd,  setPriorEnd]  = useState("");
+  const [nWeeks,    setNWeeks]    = useState(1);
+
+  const [currLocMap,  setCurrLocMap]  = useState<Record<number, LocationData>>({});
+  const [priorLocMap, setPriorLocMap] = useState<Record<number, LocationData | null>>({});
+  const [currLoading,  setCurrLoading]  = useState(false);
+  const [priorLoading, setPriorLoading] = useState(false);
+
+  // Sync when main page fetches
+  useEffect(() => {
+    if (!reportMeta || !dateOptions.length) return;
+    setCurrEnd(reportMeta.endDate);
+    const weeksInRange = dateOptions.filter(o => o.endDate >= reportMeta.startDate && o.endDate <= reportMeta.endDate).length;
+    setNWeeks(weeksInRange || 1);
+    const pyEnd = computePriorYearRange(reportMeta.startDate, reportMeta.endDate, dateOptions)?.end ?? "";
+    setPriorEnd(pyEnd);
+  }, [reportMeta?.startDate, reportMeta?.endDate, dateOptions]);
+
+  // Fetch current
+  useEffect(() => {
+    if (!currEnd || !dateOptions.length) return;
+    const range = computeRangeFromWeeks(currEnd, nWeeks, dateOptions);
+    if (!range) return;
+    setCurrLocMap({});
+    setCurrLoading(true);
+    let cancelled = false;
+    Promise.all(LOCATION_IDS.map(async id => {
+      try {
+        const res = await fetch(`/api/netchef/data?start=${range.start}&end=${range.end}&locationId=${id}`);
+        const json = await res.json();
+        if (!cancelled) setCurrLocMap(prev => ({ ...prev, [id]: json as LocationData }));
+      } catch { /* skip */ }
+    })).finally(() => { if (!cancelled) setCurrLoading(false); });
+    return () => { cancelled = true; };
+  }, [currEnd, nWeeks, dateOptions]);
+
+  // Fetch prior
+  useEffect(() => {
+    if (!priorEnd || !dateOptions.length) return;
+    const range = computeRangeFromWeeks(priorEnd, nWeeks, dateOptions);
+    if (!range) return;
+    setPriorLocMap({});
+    setPriorLoading(true);
+    let cancelled = false;
+    Promise.all(LOCATION_IDS.map(async id => {
+      try {
+        const res = await fetch(`/api/netchef/data?start=${range.start}&end=${range.end}&locationId=${id}`);
+        const json = await res.json();
+        if (!cancelled) setPriorLocMap(prev => ({ ...prev, [id]: json as LocationData }));
+      } catch {
+        if (!cancelled) setPriorLocMap(prev => ({ ...prev, [id]: null }));
+      }
+    })).finally(() => { if (!cancelled) setPriorLoading(false); });
+    return () => { cancelled = true; };
+  }, [priorEnd, nWeeks, dateOptions]);
+
+  const currRange  = currEnd  && dateOptions.length ? computeRangeFromWeeks(currEnd,  nWeeks, dateOptions) : null;
+  const priorRange = priorEnd && dateOptions.length ? computeRangeFromWeeks(priorEnd, nWeeks, dateOptions) : null;
+
+  const rows = Object.values(currLocMap)
+    .filter(l =>
+      (VA_STORES.includes(l.locationName) && showVA) ||
+      (TN_STORES.includes(l.locationName) && showTN)
+    )
+    .sort((a, b) => {
+      const aCurr  = a.variancePct;
+      const aPrior = (priorLocMap[a.locationId] as LocationData | null | undefined)?.variancePct ?? null;
+      const bCurr  = b.variancePct;
+      const bPrior = (priorLocMap[b.locationId] as LocationData | null | undefined)?.variancePct ?? null;
+      const aDelta = aCurr !== null && aPrior !== null ? Math.abs(aCurr) - Math.abs(aPrior) : null;
+      const bDelta = bCurr !== null && bPrior !== null ? Math.abs(bCurr) - Math.abs(bPrior) : null;
+      if (aDelta === null && bDelta === null) return 0;
+      if (aDelta === null) return 1;
+      if (bDelta === null) return -1;
+      return aDelta - bDelta;
+    });
+
+  const fmtChange = (v: number | null) => {
+    if (v === null) return "—";
+    if (v < 0) return `(${Math.abs(v).toFixed(2)}%)`;
+    if (v > 0) return `+${v.toFixed(2)}%`;
+    return "0.00%";
+  };
+
+  const selectCls = "text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300 w-full";
+  const isLoading = currLoading || priorLoading;
+
+  return (
+    <div className="flex items-start gap-4">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-fit">
+        <div className="px-4 py-3 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-800">Variance — Year Over Year</h2>
+        </div>
+        <table className="w-auto text-sm">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+              <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                {priorRange ? `${fmtDate(priorRange.start)} – ${fmtDate(priorRange.end)}` : "Prior Year"}
+              </th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                {currRange ? `${fmtDate(currRange.start)} – ${fmtDate(currRange.end)}` : "Current"}
+              </th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">YoY Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && rows.length === 0 ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={i} className="border-b border-gray-50 animate-pulse">
+                  <td className="px-3 py-3"><div className="h-4 bg-gray-100 rounded w-6 ml-auto" /></td>
+                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-24" /></td>
+                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+                </tr>
+              ))
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+            ) : (
+              rows.map((row, i) => {
+                const curr = row.variancePct;
+                const priorEntry = priorLocMap[row.locationId];
+                const prior = priorEntry === undefined ? undefined : (priorEntry as LocationData | null)?.variancePct ?? null;
+                const change   = curr !== null && prior != null ? curr - prior : null;
+                const absDelta = curr !== null && prior != null ? Math.abs(curr) - Math.abs(prior) : null;
+                const changeColor =
+                  absDelta === null ? "text-gray-400" :
+                  absDelta < 0 ? "text-green-600" :
+                  absDelta > 0 ? "text-red-600" : "text-gray-500";
+                return (
+                  <tr key={row.locationId} className="border-b border-gray-50">
+                    <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
+                    <td className={`px-4 py-3 text-right tabular-nums ${prior === undefined ? "text-gray-300 animate-pulse" : varianceColor(prior)}`}>
+                      {prior === undefined ? "—" : fmtPct(prior, 2)}
+                    </td>
+                    <td className={`px-4 py-3 text-right tabular-nums font-semibold ${varianceColor(curr)}`}>{fmtPct(curr, 2)}</td>
+                    <td className={`px-4 py-3 text-right tabular-nums font-semibold ${changeColor}`}>{fmtChange(change)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-4 shrink-0">
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Weeks</p>
+          <select value={nWeeks} onChange={e => setNWeeks(Number(e.target.value))} className={selectCls}>
+            {WEEK_OPTIONS.map(n => <option key={n} value={n}>{n} {n === 1 ? "week" : "weeks"}</option>)}
+          </select>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Current — End Date</p>
+          <select value={currEnd} onChange={e => setCurrEnd(e.target.value)} className={selectCls}>
+            {dateOptions.map(o => <option key={o.endDate} value={o.endDate}>{fmtDate(o.endDate)}</option>)}
+          </select>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Prior Year — End Date</p>
+          <select value={priorEnd} onChange={e => setPriorEnd(e.target.value)} className={selectCls}>
+            {dateOptions.map(o => <option key={o.endDate} value={o.endDate}>{fmtDate(o.endDate)}</option>)}
+          </select>
+        </div>
+      </div>
     </div>
   );
 }
@@ -706,6 +927,91 @@ function RankTable({
   );
 }
 
+// ── COGS by Sales table ───────────────────────────────────────────────────────
+
+function CogsBySalesTable({
+  rows,
+  loading,
+  loadingCount,
+  dateRange,
+}: {
+  rows: LocationData[];
+  loading: boolean;
+  loadingCount?: number;
+  dateRange?: { start: string; end: string } | null;
+}) {
+  const sorted = [...rows].sort((a, b) => {
+    const sa = SALES_BY_NC_NAME[a.locationName] ?? -1;
+    const sb = SALES_BY_NC_NAME[b.locationName] ?? -1;
+    return sb - sa;
+  });
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <h2 className="text-sm font-semibold text-gray-800">
+          COGS - ranked by sales &mdash; Last Week
+          {dateRange && (
+            <span className="ml-1.5 font-normal text-gray-400">
+              {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
+            </span>
+          )}
+        </h2>
+      </div>
+      {loading && sorted.length === 0 ? (
+        <div>
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-gray-50 animate-pulse">
+              <div className="h-4 bg-gray-100 rounded w-6" />
+              <div className="h-4 bg-gray-100 rounded flex-1" />
+              <div className="h-4 bg-gray-100 rounded w-16" />
+              <div className="h-4 bg-gray-100 rounded w-20" />
+              <div className="h-4 bg-gray-100 rounded w-16" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+              <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">COGS</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Sales</th>
+              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">COGS %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row, i) => {
+              const pct   = row.actualCostPct;
+              const sales = SALES_BY_NC_NAME[row.locationName] ?? null;
+              return (
+                <tr key={row.locationId} className={`border-b border-gray-50 ${actualBg(pct)}`}>
+                  <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                  <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtDollars(row.actualCostDollars)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-700">{sales != null ? fmtDollars(sales) : "—"}</td>
+                  <td className={`px-4 py-3 text-right font-semibold tabular-nums ${actualColor(pct)}`}>{fmtPct(pct)}</td>
+                </tr>
+              );
+            })}
+            {loading && (loadingCount ?? 0) > 0 && (
+              <tr className="border-b border-gray-50">
+                <td colSpan={5} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
+                  Loading {loadingCount} more…
+                </td>
+              </tr>
+            )}
+            {sorted.length === 0 && !loading && (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+            )}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FoodCostClient() {
@@ -727,6 +1033,10 @@ export default function FoodCostClient() {
 
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
+
+  const [lastWeekLocMap, setLastWeekLocMap] = useState<Record<number, LocationData>>({});
+  const [lastWeekLoadingIds, setLastWeekLoadingIds] = useState<Set<number>>(new Set());
+  const [lastWeekRange, setLastWeekRange] = useState<{ start: string; end: string } | null>(null);
 
   const fetchData = useCallback(async (start: string, end: string, bust = false) => {
     if (!start || !end) return;
@@ -775,6 +1085,19 @@ export default function FoodCostClient() {
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
           fetchData(prior.startDate, prior.endDate);
+
+          // Fetch last-week data independently for the COGS-by-sales table (always pinned to last week)
+          setLastWeekRange({ start: prior.startDate, end: prior.endDate });
+          setLastWeekLoadingIds(new Set(LOCATION_IDS));
+          Promise.all(LOCATION_IDS.map(async id => {
+            try {
+              const res = await fetch(`/api/netchef/data?start=${prior.startDate}&end=${prior.endDate}&locationId=${id}`);
+              const json = await res.json();
+              setLastWeekLocMap(prev => ({ ...prev, [id]: json as LocationData }));
+            } catch { /* skip */ } finally {
+              setLastWeekLoadingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+            }
+          }));
         }
       })
       .catch(err => setError(`Network error loading dates: ${err?.message ?? err}`))
@@ -854,6 +1177,12 @@ export default function FoodCostClient() {
     (VA_STORES.includes(l.locationName) && showVA) ||
     (TN_STORES.includes(l.locationName) && showTN)
   );
+
+  const lastWeekCogsRows = Object.values(lastWeekLocMap)
+    .filter(l => l.actualCostPct !== null && (
+      (VA_STORES.includes(l.locationName) && showVA) ||
+      (TN_STORES.includes(l.locationName) && showTN)
+    ));
   const byVariance = [...allLocations]
     .filter(l => l.variancePct !== null)
     .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
@@ -881,6 +1210,7 @@ export default function FoodCostClient() {
                 >
                   <option value="/dashboard">Drive-Thru</option>
                   <option value="/food-cost">Food Cost</option>
+                  <option value="/par">POS Sales</option>
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -1053,11 +1383,33 @@ export default function FoodCostClient() {
           </div>
         )}
 
+        {(allLocations.length > 0 || loading) && (
+          <div className="mt-6">
+            <VarianceYoyTable
+              dateOptions={dateOptions}
+              reportMeta={reportMeta}
+              showVA={showVA}
+              showTN={showTN}
+            />
+          </div>
+        )}
+
         <div className="mt-6">
           <RecentWeeksTable showVA={showVA} showTN={showTN} />
         </div>
 
         <HistoryChart />
+
+        {(allLocations.length > 0 || loading) && (
+          <div className="mt-6">
+            <CogsBySalesTable
+              rows={lastWeekCogsRows}
+              loading={lastWeekLoadingIds.size > 0}
+              loadingCount={lastWeekLoadingIds.size}
+              dateRange={lastWeekRange}
+            />
+          </div>
+        )}
       </main>
     </div>
   );

@@ -270,6 +270,7 @@ export default function DashboardClient() {
                 >
                   <option value="/dashboard">Drive-Thru</option>
                   <option value="/food-cost">Food Cost</option>
+                  <option value="/par">POS Sales</option>
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -444,6 +445,7 @@ export default function DashboardClient() {
             )}
 
             <RankingTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
+            <SalesTierTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
           </div>
 
           {/* Leaderboard — sidebar on desktop, bottom section on mobile */}
@@ -453,6 +455,104 @@ export default function DashboardClient() {
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+// ── Sales tier table ──────────────────────────────────────────────────────────
+
+const SALES_BY_ID: Record<string, number> = {
+  "57001":  53974.17,
+  "57002":  82493.35,
+  "57003":  40062.46,
+  "57004":  59232.93,
+  "57005":  41776.42,
+  "57006":  46032.77,
+  "57007":  38858.58,
+  "56301":  27363.91,
+  "28901":  88470.35,
+  "36001":  71117.06,
+  "61401":  58965.91,
+  "42601":  73532.96,
+};
+
+const TIERS = [
+  { label: "< $45k",      min: 0,     max: 45000    },
+  { label: "$45k – $65k", min: 45000, max: 65000    },
+  { label: "$65k – $85k", min: 65000, max: 85000    },
+  { label: "> $85k",      min: 85000, max: Infinity },
+];
+
+function lookupSales(branch: BranchStore, metrics: StoreMetrics | null): number | undefined {
+  if (branch.client_branch_id) {
+    const v = SALES_BY_ID[branch.client_branch_id];
+    if (v != null) return v;
+  }
+  const sni = metrics?.store_name_and_id ?? branch.name ?? "";
+  for (const [key, val] of Object.entries(SALES_BY_ID)) {
+    if (sni.includes(key)) return val;
+  }
+  return undefined;
+}
+
+function SalesTierTable({
+  branches,
+  getMetrics,
+  loading,
+}: {
+  branches: BranchStore[];
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+  loading: boolean;
+}) {
+  if (loading || branches.length === 0) return null;
+
+  const tiered = TIERS.map(tier => ({
+    label: tier.label,
+    branches: branches
+      .filter(b => {
+        const sales = lookupSales(b, getMetrics(b));
+        return sales != null && sales >= tier.min && sales < tier.max;
+      })
+      .sort((a, b) => {
+        const ta = parseMMSS(getMetrics(a)?.overall.lane_total);
+        const tb = parseMMSS(getMetrics(b)?.overall.lane_total);
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return ta - tb;
+      }),
+  })).filter(t => t.branches.length > 0);
+
+  return (
+    <div className="mt-8">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        {tiered.map(tier => (
+          <div key={tier.label} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-900">{tier.label}</span>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {tier.branches.map(branch => {
+                const m = getMetrics(branch);
+                const sales = lookupSales(branch, m);
+                return (
+                  <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
+                    <div>
+                      <p className="text-[13px] font-medium text-gray-900 leading-tight">{getStoreLabel(branch)}</p>
+                      <p className="text-[11px] text-gray-600 tabular-nums">
+                        {sales != null ? `$${Math.round(sales).toLocaleString()}` : ""}
+                      </p>
+                    </div>
+                    <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
+                      {m?.overall.lane_total ?? "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
