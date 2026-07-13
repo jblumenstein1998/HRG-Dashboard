@@ -10,18 +10,18 @@ const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Co
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 const SALES_BY_NC_NAME: Record<string, number> = {
-  "Brentwood":    27363.91,
-  "Columbia":     88470.35,
-  "Springfield":  71117.06,
-  "Spring Hill":  58965.91,
-  "White House":  73532.96,
-  "Hampton":      82493.35,   // HAMPTON_57002
-  "Beach":        38858.58,   // VIRGINIABEACH_57007
-  "Jefferson":    41776.42,   // NEWPORTNEWS_57005
-  "Oyster":       40062.46,   // NEWPORTNEWS_57003
-  "College":      53974.17,   // SUFFOLK_57001
-  "Hillcrest":    46032.77,   // CHESAPEAKE_57006
-  "Chesapeake":   59232.93,   // CHESAPEAKE_57004
+  "Brentwood":    28810.32,
+  "Columbia":     92068.68,
+  "Springfield":  71126.22,
+  "Spring Hill":  61214.89,
+  "White House":  74775.39,
+  "Hampton":      79197.00,   // HAMPTON_57002
+  "Beach":        40444.26,   // VIRGINIABEACH_57007
+  "Jefferson":    40276.53,   // NEWPORTNEWS_57005
+  "Oyster":       43927.75,   // NEWPORTNEWS_57003
+  "College":      57349.65,   // SUFFOLK_57001
+  "Hillcrest":    45264.96,   // CHESAPEAKE_57006
+  "Chesapeake":   59107.71,   // CHESAPEAKE_57004
 };
 
 type LocationData = {
