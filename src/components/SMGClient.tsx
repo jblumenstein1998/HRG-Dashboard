@@ -23,6 +23,14 @@ const DASH_BY_METRIC: Record<SmgMetricKey, string | undefined> = {
 
 const axisStyle = { fontSize: 10, fill: "#9ca3af" };
 
+function niceStep(range: number, targetCount = 5): number {
+  if (range <= 0) return 5;
+  const raw = range / targetCount;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  return norm < 1.5 ? 1 * mag : norm < 3 ? 2 * mag : norm < 7 ? 5 * mag : 10 * mag;
+}
+
 function DashSwatch({ color, dash }: { color: string; dash?: string }) {
   return (
     <svg width="20" height="8" className="shrink-0">
@@ -93,8 +101,22 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
     }
   }
   const hasVisibleData = Number.isFinite(visibleMin) && Number.isFinite(visibleMax);
-  const yMin = hasVisibleData ? visibleMin - 5 : 0;
-  const yMax = hasVisibleData ? visibleMax + 5 : isPercent ? 10 : 5;
+
+  // Percent metrics: both bounds zoom to fit the visible data on 10% increments (so a
+  // low-range metric like "Experienced Problem" isn't squished by a fixed 0-100 axis),
+  // capped at 100% since a percentage can never exceed that.
+  // Count is not a percentage: floor at 0 (a survey count can't be negative), headroom above the max.
+  const yMin = isPercent
+    ? hasVisibleData ? Math.floor(visibleMin / 10) * 10 : 0
+    : 0;
+  const countStep = niceStep(hasVisibleData ? visibleMax + 5 : 5);
+  const yMax = isPercent
+    ? hasVisibleData ? Math.min(Math.ceil(visibleMax / 10) * 10, 100) : 100
+    : Math.ceil((hasVisibleData ? visibleMax + 5 : 5) / countStep) * countStep;
+
+  const yTicks: number[] = isPercent
+    ? Array.from({ length: (yMax - yMin) / 10 + 1 }, (_, i) => yMin + i * 10)
+    : Array.from({ length: yMax / countStep + 1 }, (_, i) => i * countStep);
 
   const renderDot = (color: string) => (props: { cx?: number; cy?: number; index?: number }) => {
     const { cx, cy, index } = props;
@@ -167,7 +189,7 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
         <LineChart data={points} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#d1d5db" vertical={false} />
           <XAxis dataKey="label" tick={axisStyle} />
-          <YAxis tick={<YTick isPercent={isPercent} />} domain={[yMin, yMax]} width={40} />
+          <YAxis tick={<YTick isPercent={isPercent} />} domain={[yMin, yMax]} ticks={yTicks} width={40} />
           <Tooltip content={<SmgTooltip isPercentByName={isPercentByName} />} />
           {lineSpecs.map(spec => (
             <Line
