@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import Leaderboard from "./Leaderboard";
+import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { RangeKey, PERIODS, currentPeriod, resolveRange, formatRangeDates } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel } from "@/lib/stores";
@@ -455,6 +456,8 @@ export default function DashboardClient() {
             <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
           </div>
         </div>
+
+        <DriveThruTrendCharts branches={branches} />
       </main>
     </div>
   );

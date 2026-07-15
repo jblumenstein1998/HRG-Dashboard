@@ -489,10 +489,21 @@ function VarianceYoyTable({
 
 // ── History chart ─────────────────────────────────────────────────────────────
 
-const STORE_COLORS = [
-  "#dc2626","#2563eb","#16a34a","#d97706","#7c3aed","#0891b2",
-  "#db2777","#65a30d","#ea580c","#0284c7","#9333ea","#0d9488",
-];
+// Canonical per-store colors — kept identical across Food Cost variance, SMG, and Drive-Thru trend charts.
+const STORE_COLOR: Record<string, string> = {
+  "Springfield":  "#2563eb",
+  "White House":  "#16a34a",
+  "Brentwood":    "#d97706",
+  "Spring Hill":  "#7c3aed",
+  "Columbia":     "#dc2626",
+  "Jefferson":    "#0891b2",
+  "Oyster":       "#db2777",
+  "Hampton":      "#65a30d",
+  "College":      "#ea580c",
+  "Chesapeake":   "#0284c7",
+  "Hillcrest":    "#9333ea",
+  "Beach":        "#0d9488",
+};
 
 function YTick({ x, y, payload }: { x?: number; y?: number; payload?: { value: number } }) {
   const v = payload?.value ?? 0;
@@ -657,15 +668,15 @@ function HistoryChart() {
           <XAxis dataKey="label" tick={axisStyle} />
           <YAxis tick={<YTick />} domain={[0, yMax]} ticks={yTicks} width={40} interval={0} />
           <Tooltip content={<PeriodTooltip />} />
-          {storeNames.map((name, i) =>
+          {storeNames.map((name) =>
             visibleStores.has(name) ? (
               <Line
                 key={name}
                 type="monotone"
                 dataKey={name}
-                stroke={STORE_COLORS[i % STORE_COLORS.length]}
+                stroke={STORE_COLOR[name] ?? "#6b7280"}
                 strokeWidth={1.5}
-                dot={renderDot(STORE_COLORS[i % STORE_COLORS.length])}
+                dot={renderDot(STORE_COLOR[name] ?? "#6b7280")}
                 connectNulls
               />
             ) : null
@@ -697,21 +708,18 @@ function HistoryChart() {
             />
             TN
           </label>
-          {tnNames.map(name => {
-            const idx = storeNames.indexOf(name);
-            return (
-              <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={visibleStores.has(name)}
-                  onChange={() => toggleStore(name)}
-                  style={{ accentColor: STORE_COLORS[idx % STORE_COLORS.length] }}
-                  className="rounded border-gray-300"
-                />
-                {name}
-              </label>
-            );
-          })}
+          {tnNames.map(name => (
+            <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={visibleStores.has(name)}
+                onChange={() => toggleStore(name)}
+                style={{ accentColor: STORE_COLOR[name] ?? "#6b7280" }}
+                className="rounded border-gray-300"
+              />
+              {name}
+            </label>
+          ))}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
           <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none w-8">
@@ -723,21 +731,18 @@ function HistoryChart() {
             />
             VA
           </label>
-          {vaNames.map(name => {
-            const idx = storeNames.indexOf(name);
-            return (
-              <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={visibleStores.has(name)}
-                  onChange={() => toggleStore(name)}
-                  style={{ accentColor: STORE_COLORS[idx % STORE_COLORS.length] }}
-                  className="rounded border-gray-300"
-                />
-                {name}
-              </label>
-            );
-          })}
+          {vaNames.map(name => (
+            <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={visibleStores.has(name)}
+                onChange={() => toggleStore(name)}
+                style={{ accentColor: STORE_COLOR[name] ?? "#6b7280" }}
+                className="rounded border-gray-300"
+              />
+              {name}
+            </label>
+          ))}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 border-t border-gray-100">
           {AVG_KEYS.map(key => (

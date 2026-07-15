@@ -6,9 +6,14 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { SMG_TREND_DATA, SMG_METRICS, SMG_STORES, type SmgMetricKey, type SmgWeekPoint } from "@/lib/smgTrendData";
 import { SMG_TREND_DATA_MONTHLY } from "@/lib/smgTrendDataMonthly";
 
-const STORE_COLORS = [
-  "#dc2626", "#2563eb", "#16a34a", "#d97706", "#7c3aed",
-];
+// Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
+const STORE_COLOR: Record<string, string> = {
+  "Columbia":     "#dc2626",
+  "Springfield":  "#2563eb",
+  "White House":  "#16a34a",
+  "Brentwood":    "#d97706",
+  "Spring Hill":  "#7c3aed",
+};
 const COMBINED_COLOR = "#374151";
 
 const DASH_BY_METRIC: Record<SmgMetricKey, string | undefined> = {
@@ -151,10 +156,10 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
 
   type LineSpec = { key: string; store: string; metric: SmgMetricKey; name: string; color: string };
   const lineSpecs: LineSpec[] = [];
-  SMG_STORES.forEach((name, i) => {
+  SMG_STORES.forEach(name => {
     if (!visibleStores.has(name)) return;
     selectedMetrics.forEach(m => {
-      lineSpecs.push({ key: `${name}-${m.key}`, store: name, metric: m.key, name: lineName(name, m.label), color: STORE_COLORS[i % STORE_COLORS.length] });
+      lineSpecs.push({ key: `${name}-${m.key}`, store: name, metric: m.key, name: lineName(name, m.label), color: STORE_COLOR[name] });
     });
   });
   if (showCombined) {
@@ -229,13 +234,13 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
           />
           All
         </label>
-        {SMG_STORES.map((name, i) => (
+        {SMG_STORES.map(name => (
           <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={visibleStores.has(name)}
               onChange={() => toggleStore(name)}
-              style={{ accentColor: STORE_COLORS[i % STORE_COLORS.length] }}
+              style={{ accentColor: STORE_COLOR[name] }}
               className="rounded border-gray-300"
             />
             {name}
