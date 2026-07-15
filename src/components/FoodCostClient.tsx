@@ -1211,6 +1211,7 @@ export default function FoodCostClient() {
                   <option value="/dashboard">Drive-Thru</option>
                   <option value="/food-cost">Food Cost</option>
                   <option value="/par">POS Sales</option>
+                  <option value="/smg">SMG</option>
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
