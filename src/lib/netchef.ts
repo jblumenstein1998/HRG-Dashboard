@@ -264,26 +264,28 @@ export async function fetchLocationReport(
   }) as Record<string, unknown>;
 
   let totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
-  if (!totals) {
-    console.log("[NC] no totalSummaries for location", locationId, "— retrying in 1s");
+  const isBlank = (t: Record<string, unknown> | undefined): t is undefined =>
+    !t || (Number(t.actualCost) === 0 && Number(t.actualCostPercent) === 0);
+
+  if (isBlank(totals)) {
+    console.log("[NC] blank/missing totalSummaries for location", locationId, "— retrying in 1s");
     await new Promise(r => setTimeout(r, 1000));
     const retry = await ncFetch("/resource/actualvstheoretical/location/details", {
       extraCriteriaMap: { startDate: toMMDDYYYY(startDate), endDate: toMMDDYYYY(endDate), locationIdFilter: locationId, isConsolidated: false },
       pagingInfo: { page: 1, start: 0, limit: 1000000 },
     }) as Record<string, unknown>;
     totals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
-    if (!totals) {
-      console.log("[NC] no totalSummaries for location", locationId, "after retry — giving up");
+    if (isBlank(totals)) {
+      console.log("[NC] blank/missing totalSummaries for location", locationId, "after retry — giving up");
       return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null };
     }
   }
 
-  if (locationId === 425) {
-    console.log("[NC] totalSummaries length:", (data.totalSummaries as unknown[]).length);
-    console.log("[NC] totalSummaries[0]:", JSON.stringify(totals));
-    console.log("[NC] top-level keys:", Object.keys(data).join(", "));
+  if (locationId === 425 || locationId === 689) {
+    console.log(`[NC] loc ${locationId} totalSummaries length:`, (data.totalSummaries as unknown[])?.length ?? "undefined");
+    console.log(`[NC] loc ${locationId} totalSummaries[0]:`, JSON.stringify(totals));
     const rows = data.rows as unknown[] | undefined;
-    if (rows?.length) console.log("[NC] rows[0]:", JSON.stringify(rows[0]));
+    if (rows?.length) console.log(`[NC] loc ${locationId} rows[0]:`, JSON.stringify(rows[0]));
   }
 
   const actualCostPct     = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : null;

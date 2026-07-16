@@ -245,7 +245,7 @@ export async function GET(request: NextRequest) {
     body: JSON.stringify(chartBody),
   });
 
-  const chartData = await chartRes.json();
+  const chartData = await chartRes.json().catch(() => ({}));
   if (!chartRes.ok) {
     // Invalidate auth cache on 401/403 so next request re-authenticates
     if (chartRes.status === 401 || chartRes.status === 403) invalidateSession();

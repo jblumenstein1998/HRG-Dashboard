@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { BranchStore } from "@/lib/berry";
 import { groupBranches, getStoreLabel, SectionedBranches } from "@/lib/stores";
+import { CopyableTitle } from "@/components/CopyImageButton";
 
 type WeeklyStorePoint = {
   lane_total_secs: number | null;
@@ -112,6 +113,8 @@ function TrendChart({
   storeColor,
   metric,
   isTime,
+  yAxisMin,
+  yAxisStep,
 }: {
   title: string;
   points: WeeklyHistoryPoint[];
@@ -119,11 +122,14 @@ function TrendChart({
   storeColor: (branch: BranchStore) => string;
   metric: keyof WeeklyStorePoint;
   isTime: boolean;
+  yAxisMin?: number;
+  yAxisStep?: number;
 }) {
   const storeOrder = sections.flatMap(s => s.branches);
   const [visibleStores, setVisibleStores] = useState<Set<string>>(
     new Set(storeOrder.map(b => getStoreLabel(b)))
   );
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const rows = points.map(pt => {
     const row: Record<string, string | number | null> = { label: pt.label };
@@ -153,12 +159,12 @@ function TrendChart({
   // Time metrics zoom to fit the visible data (a tight 180-240s cluster shouldn't be
   // squashed against a 0-anchored axis); the count metric floors at 0 since it can't be negative.
   const rawRange = hasVisibleData ? Math.max(visibleMax - visibleMin, 1) : isTime ? 60 : 10;
-  const step = niceStep(rawRange);
-  const yMin = floorAtZero
+  const step = yAxisStep ?? niceStep(rawRange);
+  const yMin = yAxisMin ?? (floorAtZero
     ? 0
-    : hasVisibleData ? Math.floor(visibleMin / step) * step : 0;
-  const target = hasVisibleData ? visibleMax : step * 5;
-  const yMax = Math.max(Math.ceil(target / step) * step, yMin + step);
+    : hasVisibleData ? Math.floor(visibleMin / step) * step : 0);
+  const target = hasVisibleData ? visibleMax : yMin + step * 5;
+  const yMax = yMin + Math.max(Math.ceil((target - yMin) / step), 1) * step;
   const yTicks = Array.from({ length: Math.round((yMax - yMin) / step) + 1 }, (_, i) => yMin + i * step);
 
   const renderDot = (color: string) => (props: { cx?: number; cy?: number; index?: number }) => {
@@ -188,8 +194,10 @@ function TrendChart({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{title}</p>
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 p-4">
+      <div className="mb-3">
+        <CopyableTitle title={title} targetRef={cardRef} />
+      </div>
 
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={rows} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
@@ -199,6 +207,7 @@ function TrendChart({
             tick={isTime ? <YTickTime /> : <YTickCount />}
             domain={[yMin, yMax]}
             ticks={yTicks}
+            interval={0}
             width={isTime ? 44 : 36}
           />
           <Tooltip content={<TrendTooltip isTime={isTime} />} />
@@ -299,8 +308,8 @@ export default function DriveThruTrendCharts({ branches }: { branches: BranchSto
 
   return (
     <div className="mt-6 flex flex-col gap-4">
-      <TrendChart title="Lane Total — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="lane_total_secs" isTime />
-      <TrendChart title="Window Time — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="window_service_secs" isTime />
+      <TrendChart title="Lane Total — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="lane_total_secs" isTime yAxisMin={150} yAxisStep={30} />
+      <TrendChart title="Window Time — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="window_service_secs" isTime yAxisMin={40} yAxisStep={10} />
       <TrendChart title="Menu Time — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="menu_board_secs" isTime />
       <TrendChart title="Flagged Pull-Forward Cars — Weekly, 2026 P1–P6" points={points} sections={sections} storeColor={storeColor} metric="flagged_pull_forward" isTime={false} />
     </div>

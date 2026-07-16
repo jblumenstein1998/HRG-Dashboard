@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { getStoreLabel } from "@/lib/stores";
 import { formatRangeDates, getLastWeekRange, resolveRange, RangeKey } from "@/lib/fiscal";
+import { CopyableTitle } from "@/components/CopyImageButton";
 
 type Metric = "lane_total" | "window_service";
 
@@ -60,6 +61,7 @@ export default function Leaderboard({ branches, metric, stores: prefetched, rang
   const [loading, setLoading] = useState(true);
   const [dateLabel, setDateLabel] = useState("");
   const config = METRIC_CONFIG[metric];
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function rank(stores: StoreMetrics[], range: string) {
@@ -97,9 +99,9 @@ export default function Leaderboard({ branches, metric, stores: prefetched, rang
   }, [branches, metric, rangeKey, prefetched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-gray-900">{config.title}</h2>
+        <CopyableTitle title={config.title} targetRef={cardRef} className="text-sm font-semibold text-gray-900" />
         <select
           value={rangeKey}
           onChange={(e) => onRangeChange(e.target.value as RangeKey)}

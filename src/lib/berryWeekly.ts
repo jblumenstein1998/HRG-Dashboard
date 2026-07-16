@@ -97,6 +97,14 @@ function sumNum(values: (number | null | undefined)[]): number | null {
   return valid.reduce((a, b) => a + b, 0);
 }
 
+function totalCars(rows: DaypartRow[]): number {
+  let total = 0;
+  for (const row of rows) {
+    if (row.CHAR_total_cars != null) total += row.CHAR_total_cars;
+  }
+  return total;
+}
+
 async function fetchWeek(
   guestToken: string,
   sessionCookie: string,
@@ -215,6 +223,19 @@ async function fetchWeek(
 
     const result: Record<string, WeeklyStorePoint> = {};
     for (const [store, rows] of byStore) {
+      // No cars at all this week means the store had no real drive-thru activity — Superset
+      // still returns a row for it with 0-filled metrics rather than omitting it, so treat
+      // the whole point as missing (null) rather than plotting a false "0" on the charts.
+      if (totalCars(rows) === 0) {
+        result[store] = {
+          lane_total_secs: null,
+          window_service_secs: null,
+          menu_board_secs: null,
+          flagged_pull_forward: null,
+        };
+        continue;
+      }
+
       const laneStr = overallByStore.get(store) ?? null;
       const laneSecs = laneStr != null ? parseMMSS(laneStr) : null;
       const windowSecsAvg = weightedAvgSecs(rows, "CHAR_window_service");

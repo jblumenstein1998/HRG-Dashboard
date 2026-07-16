@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { SMG_TREND_DATA, SMG_METRICS, SMG_STORES, type SmgMetricKey, type SmgWeekPoint } from "@/lib/smgTrendData";
 import { SMG_TREND_DATA_MONTHLY } from "@/lib/smgTrendDataMonthly";
+import { CopyableTitle } from "@/components/CopyImageButton";
 
 // Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
 const STORE_COLOR: Record<string, string> = {
@@ -80,10 +81,11 @@ function SmgTooltip({ active, payload, label, isPercentByName }: {
   );
 }
 
-function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[] }) {
+function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; points: SmgWeekPoint[]; yAxisMin?: number; yAxisMax?: number }) {
   const [activeMetrics, setActiveMetrics] = useState<Set<SmgMetricKey>>(new Set(["overall"]));
   const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set(SMG_STORES));
   const [showCombined, setShowCombined] = useState(true);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const selectedMetrics = SMG_METRICS.filter(m => activeMetrics.has(m.key));
   const multiMetric = selectedMetrics.length > 1;
@@ -112,11 +114,11 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
   // capped at 100% since a percentage can never exceed that.
   // Count is not a percentage: floor at 0 (a survey count can't be negative), headroom above the max.
   const yMin = isPercent
-    ? hasVisibleData ? Math.floor(visibleMin / 10) * 10 : 0
+    ? yAxisMin ?? (hasVisibleData ? Math.floor(visibleMin / 10) * 10 : 0)
     : 0;
   const countStep = niceStep(hasVisibleData ? visibleMax + 5 : 5);
   const yMax = isPercent
-    ? hasVisibleData ? Math.min(Math.ceil(visibleMax / 10) * 10, 100) : 100
+    ? yAxisMax ?? (hasVisibleData ? Math.min(Math.ceil(visibleMax / 10) * 10, 100) : 100)
     : Math.ceil((hasVisibleData ? visibleMax + 5 : 5) / countStep) * countStep;
 
   const yTicks: number[] = isPercent
@@ -172,21 +174,23 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
   );
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{title}</p>
-        <div className="flex flex-wrap rounded-lg border border-gray-200 overflow-hidden">
-          {SMG_METRICS.map(m => (
-            <button
-              key={m.key}
-              onClick={() => toggleMetric(m.key)}
-              className={`text-xs px-3 py-1.5 transition ${
-                activeMetrics.has(m.key) ? "bg-red-700 text-white font-medium" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
+        <CopyableTitle title={title} targetRef={cardRef} />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap rounded-lg border border-gray-200 overflow-hidden">
+            {SMG_METRICS.map(m => (
+              <button
+                key={m.key}
+                onClick={() => toggleMetric(m.key)}
+                className={`text-xs px-3 py-1.5 transition ${
+                  activeMetrics.has(m.key) ? "bg-red-700 text-white font-medium" : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -194,7 +198,7 @@ function SmgTrendChart({ title, points }: { title: string; points: SmgWeekPoint[
         <LineChart data={points} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#d1d5db" vertical={false} />
           <XAxis dataKey="label" tick={axisStyle} />
-          <YAxis tick={<YTick isPercent={isPercent} />} domain={[yMin, yMax]} ticks={yTicks} width={40} />
+          <YAxis tick={<YTick isPercent={isPercent} />} domain={[yMin, yMax]} ticks={yTicks} interval={0} width={40} />
           <Tooltip content={<SmgTooltip isPercentByName={isPercentByName} />} />
           {lineSpecs.map(spec => (
             <Line
@@ -301,7 +305,7 @@ export default function SMGClient() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
         <SmgTrendChart title="SMG Trend — by Store — Weekly" points={SMG_TREND_DATA} />
-        <SmgTrendChart title="SMG Trend — by Store — Monthly" points={SMG_TREND_DATA_MONTHLY} />
+        <SmgTrendChart title="SMG Trend — by Store — Monthly" points={SMG_TREND_DATA_MONTHLY} yAxisMin={40} yAxisMax={100} />
       </main>
     </div>
   );

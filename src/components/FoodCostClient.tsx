@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useCallback, useEffect, Fragment } from "react";
+import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
+import { CopyableTitle } from "@/components/CopyImageButton";
 
 const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
@@ -149,6 +150,7 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [itemsCache, setItemsCache] = useState<Record<number, WeekItemPair>>({});
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/netchef/recent-weeks")
@@ -207,9 +209,9 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
   const COL_COUNT = 2 + data.weeks.length + 1; // rank + location + weeks + wow
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-800">Variance — Recent Weeks</h2>
+        <CopyableTitle title="Variance — Recent Weeks" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -303,6 +305,98 @@ function computePriorYearRange(start: string, end: string, opts: DateOption[]): 
   return { start: closest(opts, tStart, "startDate"), end: closest(opts, tEnd, "endDate") };
 }
 
+type YoyMetric = "variance" | "cogs";
+
+function fmtYoyChange(v: number | null) {
+  if (v === null) return "—";
+  if (v < 0) return `(${Math.abs(v).toFixed(2)}%)`;
+  if (v > 0) return `+${v.toFixed(2)}%`;
+  return "0.00%";
+}
+
+function YoyMetricTable({
+  title,
+  metric,
+  rows,
+  priorLocMap,
+  currRange,
+  priorRange,
+  isLoading,
+}: {
+  title: string;
+  metric: YoyMetric;
+  rows: LocationData[];
+  priorLocMap: Record<number, LocationData | null>;
+  currRange: { start: string; end: string } | null;
+  priorRange: { start: string; end: string } | null;
+  isLoading: boolean;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const pctKey  = metric === "cogs" ? "actualCostPct" : "variancePct";
+  const colorFn = metric === "cogs" ? actualColor : varianceColor;
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-fit">
+      <div className="px-4 py-3 border-b border-gray-100">
+        <CopyableTitle title={title} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+      </div>
+      <table className="w-auto text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+              {priorRange ? `${fmtDate(priorRange.start)} – ${fmtDate(priorRange.end)}` : "Prior Year"}
+            </th>
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+              {currRange ? `${fmtDate(currRange.start)} – ${fmtDate(currRange.end)}` : "Current"}
+            </th>
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">YoY Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {isLoading && rows.length === 0 ? (
+            Array.from({ length: 8 }).map((_, i) => (
+              <tr key={i} className="border-b border-gray-50 animate-pulse">
+                <td className="px-3 py-3"><div className="h-4 bg-gray-100 rounded w-6 ml-auto" /></td>
+                <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-24" /></td>
+                <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+                <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+                <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
+              </tr>
+            ))
+          ) : rows.length === 0 ? (
+            <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+          ) : (
+            rows.map((row, i) => {
+              const curr = row[pctKey];
+              const priorEntry = priorLocMap[row.locationId];
+              const prior = priorEntry === undefined ? undefined : (priorEntry?.[pctKey] ?? null);
+              const change   = curr !== null && prior != null ? curr - prior : null;
+              const absDelta = curr !== null && prior != null ? Math.abs(curr) - Math.abs(prior) : null;
+              const changeColor =
+                absDelta === null ? "text-gray-400" :
+                absDelta < 0 ? "text-green-600" :
+                absDelta > 0 ? "text-red-600" : "text-gray-500";
+              return (
+                <tr key={row.locationId} className="border-b border-gray-50">
+                  <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                  <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
+                  <td className={`px-4 py-3 text-right tabular-nums ${prior === undefined ? "text-gray-300 animate-pulse" : colorFn(prior)}`}>
+                    {prior === undefined ? "—" : fmtPct(prior, 2)}
+                  </td>
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${colorFn(curr)}`}>{fmtPct(curr, 2)}</td>
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${changeColor}`}>{fmtYoyChange(change)}</td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function VarianceYoyTable({
   dateOptions,
   reportMeta,
@@ -374,29 +468,25 @@ function VarianceYoyTable({
   const currRange  = currEnd  && dateOptions.length ? computeRangeFromWeeks(currEnd,  nWeeks, dateOptions) : null;
   const priorRange = priorEnd && dateOptions.length ? computeRangeFromWeeks(priorEnd, nWeeks, dateOptions) : null;
 
-  const rows = Object.values(currLocMap)
-    .filter(l =>
-      (VA_STORES.includes(l.locationName) && showVA) ||
-      (TN_STORES.includes(l.locationName) && showTN)
-    )
-    .sort((a, b) => {
-      const aCurr  = a.variancePct;
-      const aPrior = (priorLocMap[a.locationId] as LocationData | null | undefined)?.variancePct ?? null;
-      const bCurr  = b.variancePct;
-      const bPrior = (priorLocMap[b.locationId] as LocationData | null | undefined)?.variancePct ?? null;
-      const aDelta = aCurr !== null && aPrior !== null ? Math.abs(aCurr) - Math.abs(aPrior) : null;
-      const bDelta = bCurr !== null && bPrior !== null ? Math.abs(bCurr) - Math.abs(bPrior) : null;
-      if (aDelta === null && bDelta === null) return 0;
-      if (aDelta === null) return 1;
-      if (bDelta === null) return -1;
-      return aDelta - bDelta;
-    });
-
-  const fmtChange = (v: number | null) => {
-    if (v === null) return "—";
-    if (v < 0) return `(${Math.abs(v).toFixed(2)}%)`;
-    if (v > 0) return `+${v.toFixed(2)}%`;
-    return "0.00%";
+  const rowsFor = (metric: YoyMetric) => {
+    const pctKey = metric === "cogs" ? "actualCostPct" : "variancePct";
+    return Object.values(currLocMap)
+      .filter(l =>
+        (VA_STORES.includes(l.locationName) && showVA) ||
+        (TN_STORES.includes(l.locationName) && showTN)
+      )
+      .sort((a, b) => {
+        const aCurr  = a[pctKey];
+        const aPrior = (priorLocMap[a.locationId] as LocationData | null | undefined)?.[pctKey] ?? null;
+        const bCurr  = b[pctKey];
+        const bPrior = (priorLocMap[b.locationId] as LocationData | null | undefined)?.[pctKey] ?? null;
+        const aDelta = aCurr !== null && aPrior !== null ? Math.abs(aCurr) - Math.abs(aPrior) : null;
+        const bDelta = bCurr !== null && bPrior !== null ? Math.abs(bCurr) - Math.abs(bPrior) : null;
+        if (aDelta === null && bDelta === null) return 0;
+        if (aDelta === null) return 1;
+        if (bDelta === null) return -1;
+        return aDelta - bDelta;
+      });
   };
 
   const selectCls = "text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300 w-full";
@@ -404,64 +494,24 @@ function VarianceYoyTable({
 
   return (
     <div className="flex items-start gap-4">
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-fit">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-800">Variance — Year Over Year</h2>
-        </div>
-        <table className="w-auto text-sm">
-          <thead>
-            <tr className="border-b border-gray-100">
-              <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
-              <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                {priorRange ? `${fmtDate(priorRange.start)} – ${fmtDate(priorRange.end)}` : "Prior Year"}
-              </th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                {currRange ? `${fmtDate(currRange.start)} – ${fmtDate(currRange.end)}` : "Current"}
-              </th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">YoY Change</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && rows.length === 0 ? (
-              Array.from({ length: 8 }).map((_, i) => (
-                <tr key={i} className="border-b border-gray-50 animate-pulse">
-                  <td className="px-3 py-3"><div className="h-4 bg-gray-100 rounded w-6 ml-auto" /></td>
-                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-24" /></td>
-                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
-                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
-                  <td className="px-4 py-3"><div className="h-4 bg-gray-100 rounded w-16 ml-auto" /></td>
-                </tr>
-              ))
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
-            ) : (
-              rows.map((row, i) => {
-                const curr = row.variancePct;
-                const priorEntry = priorLocMap[row.locationId];
-                const prior = priorEntry === undefined ? undefined : (priorEntry as LocationData | null)?.variancePct ?? null;
-                const change   = curr !== null && prior != null ? curr - prior : null;
-                const absDelta = curr !== null && prior != null ? Math.abs(curr) - Math.abs(prior) : null;
-                const changeColor =
-                  absDelta === null ? "text-gray-400" :
-                  absDelta < 0 ? "text-green-600" :
-                  absDelta > 0 ? "text-red-600" : "text-gray-500";
-                return (
-                  <tr key={row.locationId} className="border-b border-gray-50">
-                    <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
-                    <td className={`px-4 py-3 text-right tabular-nums ${prior === undefined ? "text-gray-300 animate-pulse" : varianceColor(prior)}`}>
-                      {prior === undefined ? "—" : fmtPct(prior, 2)}
-                    </td>
-                    <td className={`px-4 py-3 text-right tabular-nums font-semibold ${varianceColor(curr)}`}>{fmtPct(curr, 2)}</td>
-                    <td className={`px-4 py-3 text-right tabular-nums font-semibold ${changeColor}`}>{fmtChange(change)}</td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      <YoyMetricTable
+        title="Variance — Comparison"
+        metric="variance"
+        rows={rowsFor("variance")}
+        priorLocMap={priorLocMap}
+        currRange={currRange}
+        priorRange={priorRange}
+        isLoading={isLoading}
+      />
+      <YoyMetricTable
+        title="COGS — Comparison"
+        metric="cogs"
+        rows={rowsFor("cogs")}
+        priorLocMap={priorLocMap}
+        currRange={currRange}
+        priorRange={priorRange}
+        isLoading={isLoading}
+      />
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-4 shrink-0">
         <div>
@@ -558,6 +608,7 @@ function HistoryChart() {
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set());
   const [visibleAverages, setVisibleAverages] = useState(new Set(["TN Avg", "VA Avg", "HRG Avg"]));
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/netchef/period-history")
@@ -658,8 +709,10 @@ function HistoryChart() {
   const vaAll = vaNames.length > 0 && vaNames.every(n => visibleStores.has(n));
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 mt-6">
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Variance Trend — by Store — Absolute Value</p>
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 p-4 mt-6">
+      <div className="mb-3">
+        <CopyableTitle title="Variance Trend — by Store — Absolute Value" targetRef={cardRef} />
+      </div>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={pointsWithAverages} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#d1d5db" vertical={false} />
@@ -809,6 +862,7 @@ function RankTable({
   const green  = rows.filter(r => colorFn(r[pctKey] as number | null).includes("green")).length;
   const yellow = rows.filter(r => colorFn(r[pctKey] as number | null).includes("yellow")).length;
   const red    = rows.filter(r => colorFn(r[pctKey] as number | null).includes("red")).length;
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const renderRow = (row: LocationData, rank: number) => {
     const pct      = row[pctKey] as number | null;
@@ -852,9 +906,9 @@ function RankTable({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-gray-800">{title}</h2>
+        <CopyableTitle title={title} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
         {rows.length > 0 && (
           <div className="flex items-center gap-2 text-xs shrink-0">
             <span className="text-green-600 font-medium">{green} beat</span>
@@ -950,18 +1004,17 @@ function CogsBySalesTable({
     const sb = SALES_BY_NC_NAME[b.locationName] ?? -1;
     return sb - sa;
   });
+  const cardRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
       <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-semibold text-gray-800">
-          COGS - ranked by sales &mdash; Last Week
-          {dateRange && (
-            <span className="ml-1.5 font-normal text-gray-400">
-              {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
-            </span>
-          )}
-        </h2>
+        <CopyableTitle title="COGS - ranked by sales — Last Week" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {dateRange && (
+          <span className="ml-1.5 text-sm font-normal text-gray-400">
+            {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
+          </span>
+        )}
       </div>
       {loading && sorted.length === 0 ? (
         <div>

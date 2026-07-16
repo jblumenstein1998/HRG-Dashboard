@@ -8,6 +8,7 @@ import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
 import { RangeKey, PERIODS, currentPeriod, resolveRange, formatRangeDates } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel } from "@/lib/stores";
+import { CopyableTitle } from "@/components/CopyImageButton";
 
 const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
   { key: "today",     label: "Today" },
@@ -531,31 +532,44 @@ function SalesTierTable({
     <div className="mt-8">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         {tiered.map(tier => (
-          <div key={tier.label} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-900">{tier.label}</span>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {tier.branches.map(branch => {
-                const m = getMetrics(branch);
-                const sales = lookupSales(branch, m);
-                return (
-                  <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
-                    <div>
-                      <p className="text-[13px] font-medium text-gray-900 leading-tight">{getStoreLabel(branch)}</p>
-                      <p className="text-[11px] text-gray-600 tabular-nums">
-                        {sales != null ? `$${Math.round(sales).toLocaleString()}` : ""}
-                      </p>
-                    </div>
-                    <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
-                      {m?.overall.lane_total ?? "—"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function SalesTierCard({
+  tier,
+  getMetrics,
+}: {
+  tier: { label: string; branches: BranchStore[] };
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
+        <CopyableTitle title={tier.label} targetRef={cardRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" />
+      </div>
+      <div className="divide-y divide-gray-50">
+        {tier.branches.map(branch => {
+          const m = getMetrics(branch);
+          const sales = lookupSales(branch, m);
+          return (
+            <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
+              <div>
+                <p className="text-[13px] font-medium text-gray-900 leading-tight">{getStoreLabel(branch)}</p>
+                <p className="text-[11px] text-gray-600 tabular-nums">
+                  {sales != null ? `$${Math.round(sales).toLocaleString()}` : ""}
+                </p>
+              </div>
+              <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
+                {m?.overall.lane_total ?? "—"}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -580,6 +594,7 @@ function RankingTable({
 }) {
   const [sortCol, setSortCol] = useState<SortCol>("overall_lane");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const handleCol = (col: SortCol) => {
     if (col === sortCol) {
@@ -634,9 +649,9 @@ function RankingTable({
   if (loading || branches.length === 0) return null;
 
   return (
-    <div className="mt-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div ref={cardRef} className="mt-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100">
-        <h2 className="text-xs font-semibold text-gray-800">Rankings</h2>
+        <CopyableTitle title="Rankings" targetRef={cardRef} className="text-xs font-semibold text-gray-800" />
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
