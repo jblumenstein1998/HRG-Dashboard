@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, Fragment } from "react";
+import { useEffect, useState, useCallback, useRef, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import Leaderboard from "./Leaderboard";
@@ -498,7 +498,7 @@ function SalesTierTable({
 }) {
   const [salesByStoreId, setSalesByStoreId] = useState<Record<string, number>>({});
   const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
-  const cardRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/par/weekly-sales")
@@ -529,53 +529,60 @@ function SalesTierTable({
       }),
   })).filter(t => t.branches.length > 0);
 
-  if (tiered.length === 0) return null;
-
   return (
-    <div ref={cardRef} className="mt-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <CopyableTitle title="By Sales Tier" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+    <div ref={gridRef} className="mt-8 grid grid-cols-2 xl:grid-cols-4 gap-4">
+      {tiered.map(tier => (
+        <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
+      ))}
+    </div>
+  );
+}
+
+function SalesTierCard({
+  tier,
+  getMetrics,
+  salesByStoreId,
+  productivityByStoreId,
+  copyTargetRef,
+}: {
+  tier: { label: string; branches: BranchStore[] };
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+  salesByStoreId: Record<string, number>;
+  productivityByStoreId: Record<string, number | null>;
+  copyTargetRef: RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
+        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" />
       </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-gray-100">
-            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Net Sales</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Productivity</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Lane Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tiered.map(tier => (
-            <Fragment key={tier.label}>
-              <tr className="bg-gray-50">
-                <td colSpan={4} className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-700 border-b border-gray-100">
-                  {tier.label}
-                </td>
-              </tr>
-              {tier.branches.map(branch => {
-                const m = getMetrics(branch);
-                const sales = lookupMetric(branch, m, salesByStoreId);
-                const productivity = lookupMetric(branch, m, productivityByStoreId);
-                return (
-                  <tr key={branch.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-2 font-medium text-gray-900">{getStoreLabel(branch)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                      {sales != null ? `$${Math.round(sales).toLocaleString()}` : "—"}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                      {productivity != null ? `$${productivity.toFixed(2)}` : "—"}
-                    </td>
-                    <td className={`px-4 py-2 text-right font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
-                      {m?.overall.lane_total ?? "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
+      <div className="divide-y divide-gray-50">
+        {tier.branches.map(branch => {
+          const m = getMetrics(branch);
+          const sales = lookupMetric(branch, m, salesByStoreId);
+          const productivity = lookupMetric(branch, m, productivityByStoreId);
+          return (
+            <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
+              <div>
+                <p className="text-[13px] font-medium text-gray-900 leading-tight">{getStoreLabel(branch)}</p>
+                {sales != null && (
+                  <p className="text-[11px] text-gray-600 tabular-nums">
+                    Net Sales: ${Math.round(sales).toLocaleString()}
+                  </p>
+                )}
+                {productivity != null && (
+                  <p className="text-[11px] text-gray-600 tabular-nums">
+                    Productivity: ${productivity.toFixed(2)}
+                  </p>
+                )}
+              </div>
+              <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
+                {m?.overall.lane_total ?? "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
