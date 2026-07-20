@@ -10,6 +10,57 @@ type Status = "idle" | "copying" | "done" | "error";
 // height scales proportionally to preserve aspect ratio.
 const TARGET_WIDTH_PX = 1200;
 const OUTPUT_PIXEL_RATIO = 2; // final output resolution multiplier, for crispness on paste
+const CAPTURE_BG = "#ffffff";
+
+// Crops the canvas down to the bounding box of its actual (non-background) content
+// on all four sides. The safety buffer in `copy()` intentionally over-captures
+// height to dodge a rendering crop bug, and any pre-existing margin (e.g. a card's
+// own margin-top) can also sneak into the raw capture — this removes all of it so
+// the output is just the tight outline of the cards, no border.
+function trimToContent(canvas: HTMLCanvasElement, bgColor: string): HTMLCanvasElement {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  const { width, height } = canvas;
+  if (width === 0 || height === 0) return canvas;
+
+  const bgMatch = bgColor.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  const bg = bgMatch ? [parseInt(bgMatch[1], 16), parseInt(bgMatch[2], 16), parseInt(bgMatch[3], 16)] : [255, 255, 255];
+  const TOLERANCE = 4;
+
+  const { data } = ctx.getImageData(0, 0, width, height);
+  const isContent = (x: number, y: number) => {
+    const i = (y * width + x) * 4;
+    return (
+      data[i + 3] > 0 &&
+      (Math.abs(data[i] - bg[0]) > TOLERANCE ||
+        Math.abs(data[i + 1] - bg[1]) > TOLERANCE ||
+        Math.abs(data[i + 2] - bg[2]) > TOLERANCE)
+    );
+  };
+
+  let top = 0, bottom = height - 1, left = 0, right = width - 1;
+
+  topScan: for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x += 4) if (isContent(x, y)) { top = y; break topScan; }
+  }
+  bottomScan: for (let y = height - 1; y >= top; y--) {
+    for (let x = 0; x < width; x += 4) if (isContent(x, y)) { bottom = y; break bottomScan; }
+  }
+  leftScan: for (let x = 0; x < width; x++) {
+    for (let y = top; y <= bottom; y += 4) if (isContent(x, y)) { left = x; break leftScan; }
+  }
+  rightScan: for (let x = width - 1; x >= left; x--) {
+    for (let y = top; y <= bottom; y += 4) if (isContent(x, y)) { right = x; break rightScan; }
+  }
+
+  if (top === 0 && bottom === height - 1 && left === 0 && right === width - 1) return canvas; // nothing to trim
+
+  const trimmed = document.createElement("canvas");
+  trimmed.width = right - left + 1;
+  trimmed.height = bottom - top + 1;
+  trimmed.getContext("2d")?.drawImage(canvas, -left, -top);
+  return trimmed;
+}
 
 export function useCopyImage(targetRef: RefObject<HTMLElement | null>) {
   const [status, setStatus] = useState<Status>("idle");
@@ -29,11 +80,19 @@ export function useCopyImage(targetRef: RefObject<HTMLElement | null>) {
         else cb.removeAttribute("checked");
       });
 
-      const sourceCanvas = await toCanvas(node, {
+      // html-to-image's internal SVG-foreignObject clone occasionally renders a hair
+      // taller than the live node (sub-pixel/border differences), which silently
+      // crops the last row of content when the canvas is sized to the exact live
+      // measurement. Over-capturing height and trimming the resulting blank rows
+      // back off (below) avoids that without leaving a visible margin.
+      const nodeRect = node.getBoundingClientRect();
+      const rawCanvas = await toCanvas(node, {
         pixelRatio: 2,
-        backgroundColor: "#ffffff",
+        height: Math.ceil(nodeRect.height) + 40,
+        backgroundColor: CAPTURE_BG,
         filter: (el) => !(el instanceof HTMLElement && el.hasAttribute("data-copy-image-ignore")),
       });
+      const sourceCanvas = trimToContent(rawCanvas, CAPTURE_BG);
 
       // Rescale the already-rendered capture to a fixed output width, preserving aspect ratio.
       const targetWidthPx  = TARGET_WIDTH_PX * OUTPUT_PIXEL_RATIO;

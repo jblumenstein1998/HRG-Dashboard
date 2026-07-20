@@ -530,7 +530,10 @@ function SalesTierTable({
   })).filter(t => t.branches.length > 0);
 
   return (
-    <div ref={gridRef} className="mt-8 grid grid-cols-2 xl:grid-cols-4 gap-4">
+    // flex-wrap with explicit item widths (not CSS grid) — same 2/4-column layout,
+    // but items-start means each card sizes to its own content instead of being
+    // stretched to match the tallest tier.
+    <div ref={gridRef} className="mt-8 flex flex-wrap items-start gap-4">
       {tiered.map(tier => (
         <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
       ))}
@@ -552,7 +555,7 @@ function SalesTierCard({
   copyTargetRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="w-[calc(50%-8px)] xl:w-[calc(25%-12px)] bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
         <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" />
       </div>
