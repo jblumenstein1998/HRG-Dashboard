@@ -178,7 +178,7 @@ function usePosData(locations: PARLocation[], mode: Mode) {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  return { dataMap, loadingIds, weeks, periods, rangeStart, rangeEnd };
+  return { dataMap, loadingIds, weeks, periods, rangeStart, rangeEnd, refetch: fetchAll };
 }
 
 function PosTierTable({
@@ -404,6 +404,18 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
   const [showTN, setShowTN] = useState(true);
   const [mode, setMode] = useState<Mode>("weeks");
   const posData = usePosData(locations, mode);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetch("/api/par/refresh", { method: "POST" });
+    } catch (err) {
+      console.error("[PAR] cache refresh failed", err);
+    }
+    posData.refetch();
+    setRefreshing(false);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -466,6 +478,13 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
               <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
               TN
             </label>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+            >
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
           </div>
         </div>
       </div>

@@ -164,7 +164,7 @@ export const getOrders = unstable_cache(
     });
   },
   ["par-orders"],
-  { revalidate: CACHE_REVALIDATE_SECONDS },
+  { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
 export const getShifts = unstable_cache(
@@ -193,7 +193,7 @@ export const getShifts = unstable_cache(
     });
   },
   ["par-shifts"],
-  { revalidate: CACHE_REVALIDATE_SECONDS },
+  { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
 export const getDayParts = unstable_cache(
@@ -215,7 +215,7 @@ export const getDayParts = unstable_cache(
     }).sort((a, b) => a.startMinutes - b.startMinutes);
   },
   ["par-dayparts"],
-  { revalidate: CACHE_REVALIDATE_SECONDS },
+  { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
 // ── Date utilities ────────────────────────────────────────────────────────────
