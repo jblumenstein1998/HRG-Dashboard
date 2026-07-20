@@ -203,14 +203,6 @@ function PosTierTable({
     (l.state === "VA" && showVA) || (l.state === "TN" && showTN)
   );
 
-  if (loading) {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 animate-pulse">
-        Loading {loadingIds.size} location{loadingIds.size !== 1 ? "s" : ""}…
-      </div>
-    );
-  }
-
   const tiered = TIERS.map(tier => ({
     label: tier.label,
     stores: visibleLocs
@@ -233,8 +225,11 @@ function PosTierTable({
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
         <CopyableTitle title={cardTitle} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {loading && (
+          <span className="text-xs text-gray-400 animate-pulse">Loading {loadingIds.size} more…</span>
+        )}
       </div>
       <table className="w-full text-sm table-fixed">
         <colgroup>
@@ -262,7 +257,9 @@ function PosTierTable({
           </tr>
         </thead>
         <tbody>
-          {tiered.map(tier => (
+          {tiered.length === 0 && loading ? (
+            <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400 animate-pulse">Loading…</td></tr>
+          ) : tiered.map(tier => (
             <Fragment key={tier.label}>
               <tr className="bg-gray-50">
                 <td colSpan={5} className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest text-gray-700 border-b border-gray-100">
