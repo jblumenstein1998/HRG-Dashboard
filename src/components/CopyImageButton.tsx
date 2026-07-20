@@ -62,7 +62,7 @@ function trimToContent(canvas: HTMLCanvasElement, bgColor: string): HTMLCanvasEl
   return trimmed;
 }
 
-export function useCopyImage(targetRef: RefObject<HTMLElement | null>) {
+export function useCopyImage(targetRef: RefObject<HTMLElement | null>, heightBufferPx = 0) {
   const [status, setStatus] = useState<Status>("idle");
 
   const copy = async () => {
@@ -81,14 +81,15 @@ export function useCopyImage(targetRef: RefObject<HTMLElement | null>) {
       });
 
       // html-to-image's internal SVG-foreignObject clone occasionally renders a hair
-      // taller than the live node (sub-pixel/border differences), which silently
-      // crops the last row of content when the canvas is sized to the exact live
-      // measurement. Over-capturing height and trimming the resulting blank rows
-      // back off (below) avoids that without leaving a visible margin.
+      // taller than the live node (sub-pixel/border differences), silently cropping
+      // the last row of content — but forcing an explicit height also stretches the
+      // node itself, which visibly drags a bordered card's own border down with it.
+      // So heightBufferPx is opt-in per caller (only needed for the borderless
+      // multi-card grid wrapper) rather than applied to every copy target.
       const nodeRect = node.getBoundingClientRect();
       const rawCanvas = await toCanvas(node, {
         pixelRatio: 2,
-        height: Math.ceil(nodeRect.height) + 40,
+        ...(heightBufferPx > 0 ? { height: Math.ceil(nodeRect.height) + heightBufferPx } : {}),
         backgroundColor: CAPTURE_BG,
         filter: (el) => !(el instanceof HTMLElement && el.hasAttribute("data-copy-image-ignore")),
       });
@@ -125,12 +126,16 @@ export function CopyableTitle({
   title,
   targetRef,
   className = "text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700",
+  heightBufferPx = 0,
 }: {
   title: string;
   targetRef: RefObject<HTMLElement | null>;
   className?: string;
+  // Only needed when the copy target itself has no visible border/background
+  // (e.g. a bare grid wrapper) — see the comment in useCopyImage for why.
+  heightBufferPx?: number;
 }) {
-  const { status, copy } = useCopyImage(targetRef);
+  const { status, copy } = useCopyImage(targetRef, heightBufferPx);
 
   return (
     <span className="inline-flex items-center gap-2">

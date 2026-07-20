@@ -557,7 +557,7 @@ function SalesTierCard({
   return (
     <div className="w-[calc(50%-8px)] xl:w-[calc(25%-12px)] bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
-        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" />
+        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" heightBufferPx={40} />
       </div>
       <div className="divide-y divide-gray-50">
         {tier.branches.map(branch => {
