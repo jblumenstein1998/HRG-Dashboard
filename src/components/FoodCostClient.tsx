@@ -10,20 +10,8 @@ const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 10
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
-const SALES_BY_NC_NAME: Record<string, number> = {
-  "Brentwood":    28810.32,
-  "Columbia":     92068.68,
-  "Springfield":  71126.22,
-  "Spring Hill":  61214.89,
-  "White House":  74775.39,
-  "Hampton":      79197.00,   // HAMPTON_57002
-  "Beach":        40444.26,   // VIRGINIABEACH_57007
-  "Jefferson":    40276.53,   // NEWPORTNEWS_57005
-  "Oyster":       43927.75,   // NEWPORTNEWS_57003
-  "College":      57349.65,   // SUFFOLK_57001
-  "Hillcrest":    45264.96,   // CHESAPEAKE_57006
-  "Chesapeake":   59107.71,   // CHESAPEAKE_57004
-};
+// Weekly sales are pulled live from PAR (see /api/par/weekly-sales, salesByLocationName)
+// instead of this hand-maintained map — PAR and Net-Chef use identical location names.
 
 type LocationData = {
   locationName: string;
@@ -999,9 +987,18 @@ function CogsBySalesTable({
   loadingCount?: number;
   dateRange?: { start: string; end: string } | null;
 }) {
+  const [salesByName, setSalesByName] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    fetch("/api/par/weekly-sales")
+      .then(r => r.json())
+      .then(d => setSalesByName(d.salesByLocationName ?? {}))
+      .catch(err => console.error("[FoodCost] weekly sales fetch failed", err));
+  }, []);
+
   const sorted = [...rows].sort((a, b) => {
-    const sa = SALES_BY_NC_NAME[a.locationName] ?? -1;
-    const sb = SALES_BY_NC_NAME[b.locationName] ?? -1;
+    const sa = salesByName[a.locationName] ?? -1;
+    const sb = salesByName[b.locationName] ?? -1;
     return sb - sa;
   });
   const cardRef = useRef<HTMLDivElement>(null);
@@ -1042,7 +1039,7 @@ function CogsBySalesTable({
           <tbody>
             {sorted.map((row, i) => {
               const pct   = row.actualCostPct;
-              const sales = SALES_BY_NC_NAME[row.locationName] ?? null;
+              const sales = salesByName[row.locationName] ?? null;
               return (
                 <tr key={row.locationId} className={`border-b border-gray-50 ${actualBg(pct)}`}>
                   <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>

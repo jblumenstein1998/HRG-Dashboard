@@ -465,21 +465,8 @@ export default function DashboardClient() {
 }
 
 // ── Sales tier table ──────────────────────────────────────────────────────────
-
-const SALES_BY_ID: Record<string, number> = {
-  "57001":  57349.65,
-  "57002":  79197.00,
-  "57003":  43927.75,
-  "57004":  59107.71,
-  "57005":  40276.53,
-  "57006":  45264.96,
-  "57007":  40444.26,
-  "56301":  28810.32,
-  "28901":  92068.68,
-  "36001":  71126.22,
-  "61401":  61214.89,
-  "42601":  74775.39,
-};
+// Weekly sales are pulled live from PAR (see /api/par/weekly-sales) instead of the
+// hand-maintained SALES_BY_ID map this used to be.
 
 const TIERS = [
   { label: "< $45k",      min: 0,     max: 45000    },
@@ -488,13 +475,13 @@ const TIERS = [
   { label: "> $85k",      min: 85000, max: Infinity },
 ];
 
-function lookupSales(branch: BranchStore, metrics: StoreMetrics | null): number | undefined {
+function lookupSales(branch: BranchStore, metrics: StoreMetrics | null, salesByStoreId: Record<string, number>): number | undefined {
   if (branch.client_branch_id) {
-    const v = SALES_BY_ID[branch.client_branch_id];
+    const v = salesByStoreId[branch.client_branch_id];
     if (v != null) return v;
   }
   const sni = metrics?.store_name_and_id ?? branch.name ?? "";
-  for (const [key, val] of Object.entries(SALES_BY_ID)) {
+  for (const [key, val] of Object.entries(salesByStoreId)) {
     if (sni.includes(key)) return val;
   }
   return undefined;
@@ -509,13 +496,22 @@ function SalesTierTable({
   getMetrics: (b: BranchStore) => StoreMetrics | null;
   loading: boolean;
 }) {
+  const [salesByStoreId, setSalesByStoreId] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    fetch("/api/par/weekly-sales")
+      .then(r => r.json())
+      .then(d => setSalesByStoreId(d.salesByStoreId ?? {}))
+      .catch(err => console.error("[DriveThru] weekly sales fetch failed", err));
+  }, []);
+
   if (loading || branches.length === 0) return null;
 
   const tiered = TIERS.map(tier => ({
     label: tier.label,
     branches: branches
       .filter(b => {
-        const sales = lookupSales(b, getMetrics(b));
+        const sales = lookupSales(b, getMetrics(b), salesByStoreId);
         return sales != null && sales >= tier.min && sales < tier.max;
       })
       .sort((a, b) => {
@@ -532,7 +528,7 @@ function SalesTierTable({
     <div className="mt-8">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         {tiered.map(tier => (
-          <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} />
+          <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} />
         ))}
       </div>
     </div>
@@ -542,9 +538,11 @@ function SalesTierTable({
 function SalesTierCard({
   tier,
   getMetrics,
+  salesByStoreId,
 }: {
   tier: { label: string; branches: BranchStore[] };
   getMetrics: (b: BranchStore) => StoreMetrics | null;
+  salesByStoreId: Record<string, number>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   return (
@@ -555,7 +553,7 @@ function SalesTierCard({
       <div className="divide-y divide-gray-50">
         {tier.branches.map(branch => {
           const m = getMetrics(branch);
-          const sales = lookupSales(branch, m);
+          const sales = lookupSales(branch, m, salesByStoreId);
           return (
             <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
               <div>
