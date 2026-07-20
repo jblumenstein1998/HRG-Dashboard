@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PAR_LOCATIONS, getWeeklyNetSales } from "@/lib/par";
+import { PAR_LOCATIONS, getWeeklyNetSales, getWeeklyLaborHours } from "@/lib/par";
 
 function toISO(d: Date): string {
   return d.toISOString().split("T")[0];
@@ -19,19 +19,28 @@ export async function GET() {
   const { start, end } = lastCompletedWeek();
 
   const results = await Promise.all(
-    PAR_LOCATIONS.map(async loc => ({
-      storeId: loc.storeId,
-      name: loc.name,
-      netSales: await getWeeklyNetSales(loc.storeId, start, end),
-    }))
+    PAR_LOCATIONS.map(async loc => {
+      const [netSales, laborHours] = await Promise.all([
+        getWeeklyNetSales(loc.storeId, start, end),
+        getWeeklyLaborHours(loc.storeId, start, end),
+      ]);
+      return {
+        storeId: loc.storeId,
+        name: loc.name,
+        netSales,
+        productivity: laborHours > 0 ? Math.round((netSales / laborHours) * 100) / 100 : null,
+      };
+    })
   );
 
   const salesByStoreId: Record<string, number> = {};
   const salesByLocationName: Record<string, number> = {};
+  const productivityByStoreId: Record<string, number | null> = {};
   for (const r of results) {
     salesByStoreId[r.storeId] = r.netSales;
     salesByLocationName[r.name] = r.netSales;
+    productivityByStoreId[r.storeId] = r.productivity;
   }
 
-  return NextResponse.json({ weekStart: start, weekEnd: end, salesByStoreId, salesByLocationName });
+  return NextResponse.json({ weekStart: start, weekEnd: end, salesByStoreId, salesByLocationName, productivityByStoreId });
 }

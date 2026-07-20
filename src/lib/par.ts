@@ -239,6 +239,13 @@ export async function getWeeklyNetSales(storeId: string, weekStart: string, week
   return Math.round(total * 100) / 100;
 }
 
+export async function getWeeklyLaborHours(storeId: string, weekStart: string, weekEnd: string): Promise<number> {
+  const dates = dateRange(weekStart, weekEnd);
+  const daily = await Promise.all(dates.map(d => getShifts(storeId, d).catch(() => [])));
+  const totalMinutes = daily.flat().reduce((sum, s) => sum + s.minutesWorked, 0);
+  return Math.round((totalMinutes / 60) * 100) / 100;
+}
+
 // ── Labor distribution helpers ────────────────────────────────────────────────
 
 export function shiftByHour(shift: PARShift): number[] {

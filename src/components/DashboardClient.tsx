@@ -475,13 +475,13 @@ const TIERS = [
   { label: "> $85k",      min: 85000, max: Infinity },
 ];
 
-function lookupSales(branch: BranchStore, metrics: StoreMetrics | null, salesByStoreId: Record<string, number>): number | undefined {
+function lookupMetric<T>(branch: BranchStore, metrics: StoreMetrics | null, map: Record<string, T>): T | undefined {
   if (branch.client_branch_id) {
-    const v = salesByStoreId[branch.client_branch_id];
+    const v = map[branch.client_branch_id];
     if (v != null) return v;
   }
   const sni = metrics?.store_name_and_id ?? branch.name ?? "";
-  for (const [key, val] of Object.entries(salesByStoreId)) {
+  for (const [key, val] of Object.entries(map)) {
     if (sni.includes(key)) return val;
   }
   return undefined;
@@ -497,11 +497,15 @@ function SalesTierTable({
   loading: boolean;
 }) {
   const [salesByStoreId, setSalesByStoreId] = useState<Record<string, number>>({});
+  const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     fetch("/api/par/weekly-sales")
       .then(r => r.json())
-      .then(d => setSalesByStoreId(d.salesByStoreId ?? {}))
+      .then(d => {
+        setSalesByStoreId(d.salesByStoreId ?? {});
+        setProductivityByStoreId(d.productivityByStoreId ?? {});
+      })
       .catch(err => console.error("[DriveThru] weekly sales fetch failed", err));
   }, []);
 
@@ -511,7 +515,7 @@ function SalesTierTable({
     label: tier.label,
     branches: branches
       .filter(b => {
-        const sales = lookupSales(b, getMetrics(b), salesByStoreId);
+        const sales = lookupMetric(b, getMetrics(b), salesByStoreId);
         return sales != null && sales >= tier.min && sales < tier.max;
       })
       .sort((a, b) => {
@@ -528,7 +532,7 @@ function SalesTierTable({
     <div className="mt-8">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         {tiered.map(tier => (
-          <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} />
+          <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} />
         ))}
       </div>
     </div>
@@ -539,10 +543,12 @@ function SalesTierCard({
   tier,
   getMetrics,
   salesByStoreId,
+  productivityByStoreId,
 }: {
   tier: { label: string; branches: BranchStore[] };
   getMetrics: (b: BranchStore) => StoreMetrics | null;
   salesByStoreId: Record<string, number>;
+  productivityByStoreId: Record<string, number | null>;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   return (
@@ -553,14 +559,22 @@ function SalesTierCard({
       <div className="divide-y divide-gray-50">
         {tier.branches.map(branch => {
           const m = getMetrics(branch);
-          const sales = lookupSales(branch, m, salesByStoreId);
+          const sales = lookupMetric(branch, m, salesByStoreId);
+          const productivity = lookupMetric(branch, m, productivityByStoreId);
           return (
             <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
               <div>
                 <p className="text-[13px] font-medium text-gray-900 leading-tight">{getStoreLabel(branch)}</p>
-                <p className="text-[11px] text-gray-600 tabular-nums">
-                  {sales != null ? `$${Math.round(sales).toLocaleString()}` : ""}
-                </p>
+                {sales != null && (
+                  <p className="text-[11px] text-gray-600 tabular-nums">
+                    Net Sales: ${Math.round(sales).toLocaleString()}
+                  </p>
+                )}
+                {productivity != null && (
+                  <p className="text-[11px] text-gray-600 tabular-nums">
+                    Productivity: ${productivity.toFixed(2)}
+                  </p>
+                )}
               </div>
               <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
                 {m?.overall.lane_total ?? "—"}
