@@ -1,3 +1,5 @@
+import { unstable_cache } from "next/cache";
+
 const ACCESS_TOKEN = process.env.PAR_ACCESS_TOKEN ?? "";
 const BASE_URL     = process.env.PAR_BASE_URL ?? "https://api-apiint.brinkpos.net";
 
@@ -47,19 +49,12 @@ class Semaphore {
 const sem = new Semaphore(5);
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
+// Wrapped with unstable_cache (below) instead of an in-memory Map: on Vercel each
+// serverless invocation can land on a different instance, so a module-level Map
+// doesn't actually survive between requests in production — unstable_cache is
+// backed by Next's durable Data Cache, which does.
 
-const CACHE_TTL_MS     = 60 * 60 * 1000;       // 1 hr for past dates
-const CACHE_TODAY_MS   = 15 * 60 * 1000;        // 15 min for today
-const DAYPART_CACHE_MS = 24 * 60 * 60 * 1000;  // 24 hr — dayparts rarely change
-
-const ordersCache   = new Map<string, { data: PAROrder[];   at: number }>();
-const shiftsCache   = new Map<string, { data: PARShift[];   at: number }>();
-const daypartsCache = new Map<string, { data: PARDayPart[]; at: number }>();
-
-function ttl(dateStr: string): number {
-  const today = new Date().toISOString().split("T")[0];
-  return dateStr >= today ? CACHE_TODAY_MS : CACHE_TTL_MS;
-}
+const CACHE_REVALIDATE_SECONDS = 60 * 60; // 1 hr
 
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
@@ -148,89 +143,80 @@ export type PARDayPart = {
 
 // ── Fetch functions ───────────────────────────────────────────────────────────
 
-export async function getOrders(storeId: string, businessDate: string): Promise<PAROrder[]> {
-  const token = getLocationToken(storeId);
-  const key   = `orders:${storeId}:${businessDate}`;
-  const hit   = ordersCache.get(key);
-  if (hit && Date.now() - hit.at < ttl(businessDate)) return hit.data;
+export const getOrders = unstable_cache(
+  async (storeId: string, businessDate: string): Promise<PAROrder[]> => {
+    const token = getLocationToken(storeId);
+    const xml = await soapPost(
+      "Sales2.svc",
+      "http://www.brinksoftware.com/webservices/sales/v2/ISalesWebService2/GetOrders",
+      `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
+      token,
+    );
 
-  const xml = await soapPost(
-    "Sales2.svc",
-    "http://www.brinksoftware.com/webservices/sales/v2/ISalesWebService2/GetOrders",
-    `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
-    token,
-  );
+    return allTags(xml, "Order").map(o => {
+      const top           = stripTag(o, "Entries"); // line items carry their own NetSales
+      const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
+      const isRefund      = tagVal(top, "IsRefund") === "true";
+      const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
+      const dtStr         = tagVal(closedTimeXml, "DateTime");
+      const closedHour    = dtStr ? new Date(dtStr).getHours() : null;
+      return { netSales, closedHour, isRefund };
+    });
+  },
+  ["par-orders"],
+  { revalidate: CACHE_REVALIDATE_SECONDS },
+);
 
-  const data: PAROrder[] = allTags(xml, "Order").map(o => {
-    const top           = stripTag(o, "Entries"); // line items carry their own NetSales
-    const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
-    const isRefund      = tagVal(top, "IsRefund") === "true";
-    const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
-    const dtStr         = tagVal(closedTimeXml, "DateTime");
-    const closedHour    = dtStr ? new Date(dtStr).getHours() : null;
-    return { netSales, closedHour, isRefund };
-  });
+export const getShifts = unstable_cache(
+  async (storeId: string, businessDate: string): Promise<PARShift[]> => {
+    const token = getLocationToken(storeId);
+    const xml = await soapPost(
+      "Labor2.svc",
+      "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
+      `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
+      token,
+    );
 
-  ordersCache.set(key, { data, at: Date.now() });
-  return data;
-}
+    return allTags(xml, "Shift").map(s => {
+      const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
+      const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
+      const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
+      const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
+      const toMins  = (dt: string | null) => {
+        if (!dt) return null;
+        const d = new Date(dt);
+        return d.getHours() * 60 + d.getMinutes();
+      };
+      const startMinutes = toMins(startDt) ?? 0;
+      const endMinutes   = toMins(endDt)   ?? Math.min(startMinutes + minutesWorked, 1440);
+      return { startMinutes, endMinutes, minutesWorked };
+    });
+  },
+  ["par-shifts"],
+  { revalidate: CACHE_REVALIDATE_SECONDS },
+);
 
-export async function getShifts(storeId: string, businessDate: string): Promise<PARShift[]> {
-  const token = getLocationToken(storeId);
-  const key   = `shifts:${storeId}:${businessDate}`;
-  const hit   = shiftsCache.get(key);
-  if (hit && Date.now() - hit.at < ttl(businessDate)) return hit.data;
+export const getDayParts = unstable_cache(
+  async (storeId: string): Promise<PARDayPart[]> => {
+    const token = getLocationToken(storeId);
+    const xml = await settingsPost(
+      `<GetDayParts xmlns="http://tempuri.org/"><accessToken>${ACCESS_TOKEN}</accessToken><locationToken>${token}</locationToken></GetDayParts>`,
+    );
 
-  const xml = await soapPost(
-    "Labor2.svc",
-    "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
-    `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
-    token,
-  );
-
-  const data: PARShift[] = allTags(xml, "Shift").map(s => {
-    const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
-    const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
-    const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
-    const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
-    const toMins  = (dt: string | null) => {
-      if (!dt) return null;
-      const d = new Date(dt);
-      return d.getHours() * 60 + d.getMinutes();
-    };
-    const startMinutes = toMins(startDt) ?? 0;
-    const endMinutes   = toMins(endDt)   ?? Math.min(startMinutes + minutesWorked, 1440);
-    return { startMinutes, endMinutes, minutesWorked };
-  });
-
-  shiftsCache.set(key, { data, at: Date.now() });
-  return data;
-}
-
-export async function getDayParts(storeId: string): Promise<PARDayPart[]> {
-  const token = getLocationToken(storeId);
-  const key   = `dayparts:${storeId}`;
-  const hit   = daypartsCache.get(key);
-  if (hit && Date.now() - hit.at < DAYPART_CACHE_MS) return hit.data;
-
-  const xml = await settingsPost(
-    `<GetDayParts xmlns="http://tempuri.org/"><accessToken>${ACCESS_TOKEN}</accessToken><locationToken>${token}</locationToken></GetDayParts>`,
-  );
-
-  const data: PARDayPart[] = allTags(xml, "DayPart").map(d => {
-    const id   = parseInt(tagVal(d, "Id")   ?? "0") || 0;
-    const name = tagVal(d, "Name") ?? "";
-    const stStr = tagVal(d, "StartTime") ?? "";
-    const stDate = stStr ? new Date(stStr) : null;
-    const startMinutes = stDate ? stDate.getHours() * 60 + stDate.getMinutes() : 0;
-    const lname = name.toLowerCase();
-    const isPeak = lname.includes("lunch") || lname.includes("dinner");
-    return { id, name, startMinutes, isPeak };
-  }).sort((a, b) => a.startMinutes - b.startMinutes);
-
-  daypartsCache.set(key, { data, at: Date.now() });
-  return data;
-}
+    return allTags(xml, "DayPart").map(d => {
+      const id   = parseInt(tagVal(d, "Id")   ?? "0") || 0;
+      const name = tagVal(d, "Name") ?? "";
+      const stStr = tagVal(d, "StartTime") ?? "";
+      const stDate = stStr ? new Date(stStr) : null;
+      const startMinutes = stDate ? stDate.getHours() * 60 + stDate.getMinutes() : 0;
+      const lname = name.toLowerCase();
+      const isPeak = lname.includes("lunch") || lname.includes("dinner");
+      return { id, name, startMinutes, isPeak };
+    }).sort((a, b) => a.startMinutes - b.startMinutes);
+  },
+  ["par-dayparts"],
+  { revalidate: CACHE_REVALIDATE_SECONDS },
+);
 
 // ── Date utilities ────────────────────────────────────────────────────────────
 
