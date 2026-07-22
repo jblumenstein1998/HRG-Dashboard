@@ -196,6 +196,26 @@ export function getLastWeekRange(): { range: string; label: string } {
   };
 }
 
+/**
+ * Shifts a date back 52 weeks (364 days) to the same weekday in the prior
+ * fiscal year, for year-over-year comparisons — e.g. 2026-12-28 (a Monday)
+ * compares to 2025-12-29 (also a Monday), not the same calendar MM-DD.
+ *
+ * This assumes the fiscal year being shifted INTO is a normal 52-week year.
+ * HRG's calendar occasionally inserts a 53rd week (confirmed for FY2028) to
+ * stay aligned with the real calendar — comparisons that span that boundary
+ * need a 371-day shift instead, once FY2028's actual period dates are known.
+ * Update this (same as PERIODS) when that year's calendar is confirmed.
+ */
+export function getPriorYearDate(dateISO: string): string {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  return fmt(new Date(y, m - 1, d - 364));
+}
+
+export function getPriorYearRange(start: string, end: string): { start: string; end: string } {
+  return { start: getPriorYearDate(start), end: getPriorYearDate(end) };
+}
+
 export type RangeKey = "today" | "yesterday" | "wtd" | "last_week" | "mtd" | "last_period" | "qtd" | "ytd" | `p${number}`;
 
 export function resolveRange(key: RangeKey): { range: string; label: string } {

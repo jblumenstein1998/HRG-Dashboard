@@ -102,43 +102,24 @@ async function soapPost(service: string, action: string, body: string, locationT
   }
 }
 
-async function settingsPost(body: string): Promise<string> {
-  await sem.acquire();
-  try {
-    const res = await fetch(`${BASE_URL}/Settings.svc`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8",
-        "SOAPAction": `"http://tempuri.org/ISettingsWebService/GetDayParts"`,
-      },
-      body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`,
-      signal: AbortSignal.timeout(15_000),
-    });
-    return res.text();
-  } finally {
-    sem.release();
-  }
-}
-
 // ── Data types ────────────────────────────────────────────────────────────────
 
 export type PAROrder = {
   netSales:   number;
   closedHour: number | null; // local hour 0-23, null if ClosedTime missing
   isRefund:   boolean;
+  // PAR's own "does this count as a transaction" flag (Order.Count, always 0 or 1).
+  // Some closed $0 orders have Count=0 (not real transactions — duplicates/corrections)
+  // while others are legitimate $0 transactions (e.g. comps) with Count=1. Order array
+  // length overcounts vs PAR's own transaction count; always sum isCountedOrder instead
+  // of using orders.length for order/transaction counts or avg-ticket calculations.
+  isCountedOrder: boolean;
 };
 
 export type PARShift = {
   startMinutes: number; // minutes from midnight, local time
   endMinutes:   number;
   minutesWorked: number;
-};
-
-export type PARDayPart = {
-  id:           number;
-  name:         string;
-  startMinutes: number; // minutes from midnight
-  isPeak:       boolean; // Lunch or Dinner
 };
 
 // ── Fetch functions ───────────────────────────────────────────────────────────
@@ -157,10 +138,11 @@ export const getOrders = unstable_cache(
       const top           = stripTag(o, "Entries"); // line items carry their own NetSales
       const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
       const isRefund      = tagVal(top, "IsRefund") === "true";
+      const isCountedOrder = tagVal(top, "Count") === "1";
       const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
       const dtStr         = tagVal(closedTimeXml, "DateTime");
       const closedHour    = dtStr ? new Date(dtStr).getHours() : null;
-      return { netSales, closedHour, isRefund };
+      return { netSales, closedHour, isRefund, isCountedOrder };
     });
   },
   ["par-orders"],
@@ -196,28 +178,6 @@ export const getShifts = unstable_cache(
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
-export const getDayParts = unstable_cache(
-  async (storeId: string): Promise<PARDayPart[]> => {
-    const token = getLocationToken(storeId);
-    const xml = await settingsPost(
-      `<GetDayParts xmlns="http://tempuri.org/"><accessToken>${ACCESS_TOKEN}</accessToken><locationToken>${token}</locationToken></GetDayParts>`,
-    );
-
-    return allTags(xml, "DayPart").map(d => {
-      const id   = parseInt(tagVal(d, "Id")   ?? "0") || 0;
-      const name = tagVal(d, "Name") ?? "";
-      const stStr = tagVal(d, "StartTime") ?? "";
-      const stDate = stStr ? new Date(stStr) : null;
-      const startMinutes = stDate ? stDate.getHours() * 60 + stDate.getMinutes() : 0;
-      const lname = name.toLowerCase();
-      const isPeak = lname.includes("lunch") || lname.includes("dinner");
-      return { id, name, startMinutes, isPeak };
-    }).sort((a, b) => a.startMinutes - b.startMinutes);
-  },
-  ["par-dayparts"],
-  { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
-);
-
 // ── Date utilities ────────────────────────────────────────────────────────────
 
 export function dateRange(start: string, end: string): string[] {
@@ -230,46 +190,3 @@ export function dateRange(start: string, end: string): string[] {
   return dates;
 }
 
-// ── Weekly sales helper (feeds the manual-entry replacements on Drive-Thru/Food Cost tabs) ──
-
-export async function getWeeklyNetSales(storeId: string, weekStart: string, weekEnd: string): Promise<number> {
-  const dates = dateRange(weekStart, weekEnd);
-  const daily = await Promise.all(dates.map(d => getOrders(storeId, d).catch(() => [])));
-  const total = daily.flat().reduce((sum, o) => sum + o.netSales, 0);
-  return Math.round(total * 100) / 100;
-}
-
-export async function getWeeklyLaborHours(storeId: string, weekStart: string, weekEnd: string): Promise<number> {
-  const dates = dateRange(weekStart, weekEnd);
-  const daily = await Promise.all(dates.map(d => getShifts(storeId, d).catch(() => [])));
-  const totalMinutes = daily.flat().reduce((sum, s) => sum + s.minutesWorked, 0);
-  return Math.round((totalMinutes / 60) * 100) / 100;
-}
-
-// ── Labor distribution helpers ────────────────────────────────────────────────
-
-export function shiftByHour(shift: PARShift): number[] {
-  const hours = new Array(24).fill(0);
-  const start = Math.max(0,    shift.startMinutes);
-  const end   = Math.min(1440, shift.endMinutes);
-  for (let h = 0; h < 24; h++) {
-    const hStart = h * 60;
-    const hEnd   = hStart + 60;
-    const overlap = Math.max(0, Math.min(end, hEnd) - Math.max(start, hStart));
-    hours[h] += overlap;
-  }
-  return hours; // minutes per hour
-}
-
-export function shiftByDaypart(shift: PARShift, dayparts: PARDayPart[]): number[] {
-  const totals = new Array(dayparts.length).fill(0);
-  const start = Math.max(0,    shift.startMinutes);
-  const end   = Math.min(1440, shift.endMinutes);
-  for (let i = 0; i < dayparts.length; i++) {
-    const dpStart = dayparts[i].startMinutes;
-    const dpEnd   = i + 1 < dayparts.length ? dayparts[i + 1].startMinutes : 1440;
-    const overlap = Math.max(0, Math.min(end, dpEnd) - Math.max(start, dpStart));
-    totals[i] += overlap;
-  }
-  return totals; // minutes per daypart
-}

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { PAR_LOCATIONS, getWeeklyNetSales, getWeeklyLaborHours } from "@/lib/par";
+import { PAR_LOCATIONS } from "@/lib/par";
+import { getNetSalesForRange, getLaborHoursForRange } from "@/lib/parRollup";
 
 function toISO(d: Date): string {
   return d.toISOString().split("T")[0];
@@ -21,8 +22,8 @@ export async function GET() {
   const results = await Promise.all(
     PAR_LOCATIONS.map(async loc => {
       const [netSales, laborHours] = await Promise.all([
-        getWeeklyNetSales(loc.storeId, start, end),
-        getWeeklyLaborHours(loc.storeId, start, end),
+        getNetSalesForRange(loc.storeId, start, end),
+        getLaborHoursForRange(loc.storeId, start, end),
       ]);
       return {
         storeId: loc.storeId,
