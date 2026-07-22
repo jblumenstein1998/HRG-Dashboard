@@ -17,8 +17,12 @@ const DATASOURCE_ID = 18;
 // explicitly busted). A range still in progress (ends in "now", or ends today
 // or later) is ROLLING and needs a short-lived refresh instead.
 // ---------------------------------------------------------------------------
+// One uniform TTL for every rolling range — PTD, QTD, and YTD are all "the
+// total so far" and none is more tolerant of staleness than another, so there's
+// no good reason for YTD to sit fresh longer than PTD (that mismatch used to
+// make PTD feel slower than YTD, since PTD's shorter TTL made it refetch live
+// far more often).
 const ROLLING_TTL_MS = 5 * 60 * 1000;
-const ROLLING_TTL_MS_LONG_RANGE = 30 * 60 * 1000; // qtd/ytd-sized ranges — expensive to recompute, ok to be less fresh
 
 function todayCentralISO(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -37,14 +41,6 @@ function isClosedRange(timeRange: string): boolean {
   if (endRaw === "now") return false;
   const endDate = endRaw.split("T")[0];
   return endDate < todayCentralISO();
-}
-
-function rollingTTL(timeRange: string): number {
-  const [startRaw, endRaw] = timeRange.split(" : ").map(s => s.trim());
-  const startDate = startRaw.split("T")[0];
-  const endDate = endRaw === "now" ? todayCentralISO() : endRaw.split("T")[0];
-  const spanDays = (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000;
-  return spanDays > 60 ? ROLLING_TTL_MS_LONG_RANGE : ROLLING_TTL_MS;
 }
 
 async function getCachedPayload(timeRange: string): Promise<{ payload: DriveThruPayload; fetchedAt: Date } | null> {
@@ -193,7 +189,7 @@ export async function getDriveThruMetrics(
     const cached = await getCachedPayload(timeRange);
     if (cached) {
       if (closed) return cached.payload; // permanent — the period is over, numbers can't change
-      if (Date.now() - cached.fetchedAt.getTime() < rollingTTL(timeRange)) return cached.payload;
+      if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return cached.payload;
     }
   }
 
@@ -290,7 +286,7 @@ export async function getDriveThruMetrics(
 
   const chartData = await chartRes.json().catch(() => ({}));
   if (!chartRes.ok) {
-    if (chartRes.status === 401 || chartRes.status === 403) invalidateSession();
+    if (chartRes.status === 401 || chartRes.status === 403) await invalidateSession();
     throw new ChartFetchError(chartRes.status, chartData);
   }
 

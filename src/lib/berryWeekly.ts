@@ -201,7 +201,7 @@ async function fetchWeek(
     });
 
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) invalidateSession();
+      if (res.status === 401 || res.status === 403) await invalidateSession();
       return {};
     }
 
