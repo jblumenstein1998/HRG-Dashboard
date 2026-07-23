@@ -79,13 +79,14 @@ function periodsInQuarter(quarter: number): FiscalPeriod[] {
 }
 
 /**
- * "MTD" = start of current fiscal period through today
+ * "PTD" = start of current fiscal period through YESTERDAY (not today — see
+ * note on getWtdRange below for why every "to date" range stops at yesterday).
  * Returns Superset range string: "YYYY-MM-DD : YYYY-MM-DD"
  */
 export function getMtdRange(): { range: string; label: string } {
   const p = currentPeriod();
   return {
-    range: `${fmtDT(toDate(p.start))} : now`,
+    range: `${fmtDT(toDate(p.start))} : ${fmtDT(today())}`,
     label: `P${p.period} · MTD`,
   };
 }
@@ -104,24 +105,24 @@ export function getLastPeriodRange(): { range: string; label: string } {
 }
 
 /**
- * "QTD" = start of current fiscal quarter through today
+ * "QTD" = start of current fiscal quarter through yesterday
  */
 export function getQtdRange(): { range: string; label: string } {
   const cur = currentPeriod();
   const qPeriods = periodsInQuarter(cur.quarter);
   const firstInQ = qPeriods[0];
   return {
-    range: `${fmtDT(toDate(firstInQ.start))} : now`,
+    range: `${fmtDT(toDate(firstInQ.start))} : ${fmtDT(today())}`,
     label: `Q${cur.quarter} · QTD`,
   };
 }
 
 /**
- * "YTD" = fiscal year start through today
+ * "YTD" = fiscal year start through yesterday
  */
 export function getYtdRange(): { range: string; label: string } {
   return {
-    range: `${fmtDT(toDate(FISCAL_YEAR_START))} : now`,
+    range: `${fmtDT(toDate(FISCAL_YEAR_START))} : ${fmtDT(today())}`,
     label: "FY2026 · YTD",
   };
 }
@@ -139,7 +140,14 @@ export function getFullPeriodRange(periodNum: number): { range: string; label: s
 }
 
 /**
- * "WTD" = Monday of the current week through today (weeks start Monday)
+ * "WTD" = Monday of the current week through yesterday (weeks start Monday).
+ *
+ * Every "to date" range (WTD/PTD/QTD/YTD) stops at yesterday rather than
+ * today, on purpose: once a range's end date is in the past, it's "closed" —
+ * its numbers can't change anymore, so it caches permanently (see
+ * isClosedRange in berryData.ts) instead of needing a live check on every
+ * request. Only "Today" itself stays genuinely live. On a Monday, WTD's
+ * range is empty (no completed day yet this week) — that's expected, not a bug.
  */
 export function getWtdRange(): { range: string; label: string } {
   const t = today();
@@ -147,7 +155,7 @@ export function getWtdRange(): { range: string; label: string } {
   const diffToMonday = day === 0 ? 6 : day - 1;
   const monday = new Date(t.getFullYear(), t.getMonth(), t.getDate() - diffToMonday);
   return {
-    range: `${fmtDT(monday)} : now`,
+    range: `${fmtDT(monday)} : ${fmtDT(t)}`,
     label: "Week to Date",
   };
 }
@@ -197,6 +205,20 @@ export function getLastWeekRange(): { range: string; label: string } {
 }
 
 /**
+ * "T7" = trailing 7 days ending yesterday (today isn't a closed business day
+ * yet) — e.g. if today is 7/22, T7 is 7/15–7/21.
+ */
+export function getT7Range(): { range: string; label: string } {
+  const t = today();
+  const yesterday = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
+  const sevenDaysAgo = new Date(t.getFullYear(), t.getMonth(), t.getDate() - 7);
+  return {
+    range: `${fmtDT(sevenDaysAgo)} : ${fmtDT(yesterday, true)}`,
+    label: "T7",
+  };
+}
+
+/**
  * Shifts a date back 52 weeks (364 days) to the same weekday in the prior
  * fiscal year, for year-over-year comparisons — e.g. 2026-12-28 (a Monday)
  * compares to 2025-12-29 (also a Monday), not the same calendar MM-DD.
@@ -216,12 +238,13 @@ export function getPriorYearRange(start: string, end: string): { start: string; 
   return { start: getPriorYearDate(start), end: getPriorYearDate(end) };
 }
 
-export type RangeKey = "today" | "yesterday" | "wtd" | "last_week" | "mtd" | "last_period" | "qtd" | "ytd" | `p${number}`;
+export type RangeKey = "today" | "yesterday" | "wtd" | "last_week" | "t7" | "mtd" | "last_period" | "qtd" | "ytd" | `p${number}`;
 
 export function resolveRange(key: RangeKey): { range: string; label: string } {
   if (key === "today") return getTodayRange();
   if (key === "yesterday") return getYesterdayRange();
   if (key === "last_week") return getLastWeekRange();
+  if (key === "t7") return getT7Range();
   if (key === "wtd") return getWtdRange();
   if (key === "mtd") return getMtdRange();
   if (key === "last_period") return getLastPeriodRange();

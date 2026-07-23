@@ -34,6 +34,12 @@ import { NextRequest, NextResponse } from "next/server";
 // cookie — those routes protect themselves individually via CRON_SECRET.
 // /api/cron/ is invoked by Vercel Cron, which never sends the berry_token
 // cookie — those routes protect themselves individually via CRON_SECRET.
+// /api/cron/ is invoked by Vercel Cron, which never sends the berry_token
+// cookie — those routes protect themselves individually via CRON_SECRET.
+// /api/cron/ is invoked by Vercel Cron, which never sends the berry_token
+// cookie — those routes protect themselves individually via CRON_SECRET.
+// /api/cron/ is invoked by Vercel Cron, which never sends the berry_token
+// cookie — those routes protect themselves individually via CRON_SECRET.
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/smg/", "/api/cron/"];
 
 export function proxy(request: NextRequest) {

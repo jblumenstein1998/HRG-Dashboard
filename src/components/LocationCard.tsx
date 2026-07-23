@@ -1,6 +1,7 @@
 "use client";
 
-import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
+import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
+import { salesTierColor } from "@/lib/salesTierGoals";
 import { getStoreLabel } from "@/lib/stores";
 
 type Props = {
@@ -9,44 +10,30 @@ type Props = {
   loading: boolean;
   rangeLabel: string;
   viewMode: "summary" | "daypart";
+  salesForTier: number | null;
 };
-
-function badge(secs: number | null) {
-  if (secs == null) return { label: "No data", cls: "bg-gray-100 text-gray-400" };
-  if (secs <= 210) return { label: "On Target", cls: "bg-green-50 text-green-700" };
-  if (secs <= 240) return { label: "Near Target", cls: "bg-yellow-50 text-yellow-700" };
-  return { label: "Over Target", cls: "bg-red-50 text-red-700" };
-}
 
 function Skeleton({ w = "w-10", h = "h-4" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-gray-100 rounded animate-pulse`} />;
 }
 
-export default function LocationCard({ branch, metrics, loading, rangeLabel, viewMode }: Props) {
-  const overallSecs = parseMMSS(metrics?.overall.lane_total);
-  const b = badge(overallSecs);
+export default function LocationCard({ branch, metrics, loading, rangeLabel, viewMode, salesForTier }: Props) {
   const label = getStoreLabel(branch);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
       {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-gray-900 truncate">{label}</h3>
-          {branch.location && (
-            <p className="text-xs text-gray-400 mt-0.5 truncate">{branch.location}</p>
-          )}
-        </div>
-        {loading
-          ? <Skeleton w="w-20" h="h-5" />
-          : <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${b.cls}`}>{b.label}</span>
-        }
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-gray-900 truncate">{label}</h3>
+        {branch.location && (
+          <p className="text-xs text-gray-400 mt-0.5 truncate">{branch.location}</p>
+        )}
       </div>
 
       {viewMode === "summary" ? (
-        <SummaryView metrics={metrics} loading={loading} overallSecs={overallSecs} />
+        <SummaryView metrics={metrics} loading={loading} salesForTier={salesForTier} />
       ) : (
-        <DaypartView metrics={metrics} loading={loading} />
+        <DaypartView metrics={metrics} loading={loading} salesForTier={salesForTier} />
       )}
     </div>
   );
@@ -55,12 +42,15 @@ export default function LocationCard({ branch, metrics, loading, rangeLabel, vie
 function SummaryView({
   metrics,
   loading,
-  overallSecs,
+  salesForTier,
 }: {
   metrics: StoreMetrics | null;
   loading: boolean;
-  overallSecs: number | null;
+  salesForTier: number | null;
 }) {
+  const overallSecs = parseMMSS(metrics?.overall.lane_total);
+  const windowSecs = parseMMSS(metrics?.overall.window_service);
+
   return (
     <>
       {/* Overall hero */}
@@ -69,7 +59,7 @@ function SummaryView({
           <p className="text-xs text-gray-400 mb-0.5">Lane Total</p>
           {loading
             ? <Skeleton w="w-20" h="h-8" />
-            : <span className={`text-2xl font-bold tabular-nums ${laneColor(overallSecs)}`}>
+            : <span className={`text-2xl font-bold tabular-nums ${salesTierColor(salesForTier, overallSecs, "lane_total")}`}>
                 {metrics?.overall.lane_total ?? "—"}
               </span>
           }
@@ -78,7 +68,7 @@ function SummaryView({
           <p className="text-xs text-gray-400 mb-0.5">Window</p>
           {loading
             ? <Skeleton w="w-16" h="h-8" />
-            : <span className={`text-2xl font-bold tabular-nums ${windowColor(parseMMSS(metrics?.overall.window_service))}`}>
+            : <span className={`text-2xl font-bold tabular-nums ${salesTierColor(salesForTier, windowSecs, "window_service")}`}>
                 {metrics?.overall.window_service ?? "—"}
               </span>
           }
@@ -105,6 +95,15 @@ function SummaryView({
               </span>
           }
         </div>
+        <div className="pb-0.5">
+          <p className="text-xs text-gray-400 mb-0.5">Net Sales</p>
+          {loading
+            ? <Skeleton w="w-14" h="h-5" />
+            : <span className="text-base font-semibold text-gray-700 tabular-nums">
+                {salesForTier != null ? `$${Math.round(salesForTier).toLocaleString()}` : "—"}
+              </span>
+          }
+        </div>
       </div>
 
       {/* Peak / Non-peak breakdown */}
@@ -121,15 +120,13 @@ function SummaryView({
                 <MetricRow
                   label="Lane"
                   val={data?.lane_total}
-                  colorFn={laneColor}
-                  secs={parseMMSS(data?.lane_total)}
+                  color={salesTierColor(salesForTier, parseMMSS(data?.lane_total), "lane_total")}
                   loading={loading}
                 />
                 <MetricRow
                   label="Window"
                   val={data?.window_service}
-                  colorFn={windowColor}
-                  secs={parseMMSS(data?.window_service)}
+                  color={salesTierColor(salesForTier, parseMMSS(data?.window_service), "window_service")}
                   loading={loading}
                 />
               </div>
@@ -144,9 +141,11 @@ function SummaryView({
 function DaypartView({
   metrics,
   loading,
+  salesForTier,
 }: {
   metrics: StoreMetrics | null;
   loading: boolean;
+  salesForTier: number | null;
 }) {
   // Use whatever dayparts Superset returned, sorted ascending
   const dayparts = [...(metrics?.dayparts ?? [])].sort((a, b) => a.index - b.index);
@@ -179,13 +178,13 @@ function DaypartView({
                 ))
               ) : (
                 <>
-                  <p className={`text-xs font-semibold tabular-nums text-right ${laneColor(parseMMSS(row?.lane_total))}`}>
+                  <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.lane_total), "lane_total")}`}>
                     {row?.lane_total ?? "—"}
                   </p>
                   <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
                     {row?.total_cars != null ? Math.round(row.total_cars).toLocaleString() : "—"}
                   </p>
-                  <p className={`text-xs font-semibold tabular-nums text-right ${windowColor(parseMMSS(row?.window_service))}`}>
+                  <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.window_service), "window_service")}`}>
                     {row?.window_service ?? "—"}
                   </p>
                   <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
@@ -204,14 +203,12 @@ function DaypartView({
 function MetricRow({
   label,
   val,
-  secs,
-  colorFn,
+  color,
   loading,
 }: {
   label: string;
   val: string | null | undefined;
-  secs: number | null;
-  colorFn: (secs: number | null) => string;
+  color: string;
   loading: boolean;
 }) {
   return (
@@ -219,7 +216,7 @@ function MetricRow({
       <p className="text-xs text-gray-400">{label}</p>
       {loading
         ? <Skeleton w="w-10" />
-        : <p className={`text-xs font-semibold tabular-nums ${colorFn(secs)}`}>{val ?? "—"}</p>
+        : <p className={`text-xs font-semibold tabular-nums ${color}`}>{val ?? "—"}</p>
       }
     </div>
   );

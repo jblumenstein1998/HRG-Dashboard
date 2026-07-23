@@ -3,18 +3,19 @@
 import { useEffect, useState, useCallback, useRef, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
-import Leaderboard from "./Leaderboard";
 import DriveThruTrendCharts from "./DriveThruTrendCharts";
-import { BranchStore, StoreMetrics, parseMMSS, laneColor, windowColor } from "@/lib/berry";
-import { RangeKey, PERIODS, currentPeriod, resolveRange, formatRangeDates } from "@/lib/fiscal";
+import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
+import { RangeKey, PERIODS } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import { TOTAL_TIME_TIERS, WINDOW_TIME_TIERS, fmtGoalSecs, goalColor, lookupMetric } from "@/lib/salesTierGoals";
 
 const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
   { key: "today",     label: "Today" },
   { key: "yesterday", label: "Yesterday" },
   { key: "wtd",       label: "WTD" },
   { key: "last_week", label: "Last Week" },
+  { key: "t7",        label: "T7" },
   { key: "mtd",       label: "PTD" },
   { key: "ytd",       label: "YTD" },
 ];
@@ -29,19 +30,20 @@ export default function DashboardClient() {
   const router = useRouter();
   const latestFetchId = useRef(0);
   const branchesLoaded = useRef(false);
-  const [rangeKey, setRangeKey] = useState<RangeKey>("mtd");
+  const [rangeKey, setRangeKey] = useState<RangeKey>("yesterday");
   const [rangeLabel, setRangeLabel] = useState("");
   const [viewMode, setViewMode] = useState<"summary" | "daypart">("summary");
   const [branches, setBranches] = useState<BranchStore[]>([]);
   const [metricsMap, setMetricsMap] = useState<Map<string, StoreMetrics>>(new Map());
-  const [lastWeekStores, setLastWeekStores] = useState<StoreMetrics[] | undefined>(undefined);
   const [branchesLoading, setBranchesLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(true);
   const [revealedCount, setRevealedCount] = useState(0);
   const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [leaderboardRange, setLeaderboardRange] = useState<RangeKey>("last_week");
+  const [salesByStoreId, setSalesByStoreId] = useState<Record<string, number>>({});
+  const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
+  const [driveThruLabel, setDriveThruLabel] = useState("");
+  const [salesLabel, setSalesLabel] = useState("");
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -73,7 +75,6 @@ export default function DashboardClient() {
           setError(d.error ?? "Failed to load metrics");
         }
         setDataLoading(false);
-        setLastRefresh(new Date());
       }),
     ];
 
@@ -101,6 +102,20 @@ export default function DashboardClient() {
 
   useEffect(() => { fetchData(rangeKey); }, [rangeKey, fetchData]);
 
+  // Net sales / productivity per store, keyed to the selected range — feeds both
+  // the sales-tier cards and the sales-volume-based coloring on each location card.
+  useEffect(() => {
+    fetch(`/api/par/sales-tier?range=${rangeKey}`)
+      .then(r => r.json())
+      .then(d => {
+        setSalesByStoreId(d.salesByStoreId ?? {});
+        setProductivityByStoreId(d.productivityByStoreId ?? {});
+        setDriveThruLabel(d.driveThruLabel ?? "");
+        setSalesLabel(d.salesLabel ?? "");
+      })
+      .catch(err => console.error("[DriveThru] sales-tier fetch failed", err));
+  }, [rangeKey]);
+
   // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
   useEffect(() => {
     if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; }
@@ -113,16 +128,6 @@ export default function DashboardClient() {
     }, 60);
     return () => { if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; } };
   }, [dataLoading, branches.length]);
-
-  // Fetch last-week data once for leaderboards (independent of range selection)
-  useEffect(() => {
-    fetch("/api/berry/data?range=last_week")
-      .then((r) => r.json())
-      .then(({ stores }: { stores: StoreMetrics[] }) => {
-        if (Array.isArray(stores)) setLastWeekStores(stores);
-      })
-      .catch(() => {});
-  }, []);
 
   function handleRangeChange(key: RangeKey) {
     setRangeKey(key);
@@ -218,44 +223,6 @@ export default function DashboardClient() {
     URL.revokeObjectURL(url);
   }
 
-  const beatTarget = branches.filter(b => {
-    const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
-    return secs != null && secs <= 210;
-  }).length;
-  const onTarget = branches.filter(b => {
-    const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
-    return secs != null && secs > 210 && secs <= 240;
-  }).length;
-  const overTarget = branches.filter(b => {
-    const secs = parseMMSS(getMetrics(b)?.overall.lane_total);
-    return secs != null && secs > 240;
-  }).length;
-
-  const cp = currentPeriod();
-  const now = lastRefresh?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) ?? null;
-
-  const resolvedDates = (() => {
-    const range = resolveRange(rangeKey).range;
-    const parts = range.split(" : ").map(s => s.trim());
-    if (parts.length !== 2) return range;
-    const toMDY = (iso: string) => { const [y, m, d] = iso.split("-"); return `${m}/${d}/${y}`; };
-    const startMDY = toMDY(parts[0].split("T")[0]);
-    const endRaw = parts[1];
-    const endMDY = endRaw === "now"
-      ? toMDY(new Date().toLocaleDateString("en-CA"))
-      : (() => {
-          const endDateStr = endRaw.split("T")[0];
-          const endTime = endRaw.split("T")[1] ?? "";
-          if (endTime.startsWith("00:00:00")) {
-            const [y, m, d] = endDateStr.split("-").map(Number);
-            const prev = new Date(y, m - 1, d - 1);
-            return toMDY(prev.toLocaleDateString("en-CA"));
-          }
-          return toMDY(endDateStr);
-        })();
-    return startMDY === endMDY ? startMDY : `${startMDY} – ${endMDY}`;
-  })();
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="sticky top-0 z-10">
@@ -279,7 +246,6 @@ export default function DashboardClient() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
-              {(resolvedDates || now) && <p className="text-xs text-gray-400 leading-tight">{resolvedDates}{now ? ` · ${now}` : ""}</p>}
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
@@ -330,36 +296,10 @@ export default function DashboardClient() {
       {!branchesLoading && branches.length > 0 && (
         <div className="bg-gray-50 border-b border-gray-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-              <span className="text-gray-600"><strong className="text-gray-900">{branches.length}</strong> locations</span>
-              {!dataLoading && metricsMap.size > 0 && (
-                <>
-                  <span className="text-gray-300">·</span>
-                  <span className="text-green-600 font-medium">{beatTarget} beat</span>
-                  <span className="text-gray-300">·</span>
-                  <span className="text-yellow-600 font-medium">{onTarget} on target</span>
-                  <span className="text-gray-300">·</span>
-                  <span className="text-red-600 font-medium">{overTarget} over</span>
-                </>
-              )}
-              <span className="text-gray-300">·</span>
-              <span className="text-gray-500">
-                Lane&nbsp;
-                <span className="text-green-600 font-medium">≤3:30</span>
-                {" / "}
-                <span className="text-yellow-600 font-medium">≤4:00</span>
-                {" / "}
-                <span className="text-red-600 font-medium">&gt;4:00</span>
-              </span>
-              <span className="text-gray-300">·</span>
-              <span className="text-gray-500">
-                Window&nbsp;
-                <span className="text-green-600 font-medium">≤0:52.5</span>
-                {" / "}
-                <span className="text-yellow-600 font-medium">≤1:00</span>
-                {" / "}
-                <span className="text-red-600 font-medium">&gt;1:00</span>
-              </span>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-500">
+              {driveThruLabel && <span>Drive-thru / Productivity: <span className="font-medium text-gray-700">{driveThruLabel}</span></span>}
+              {driveThruLabel && salesLabel && <span className="text-gray-300">·</span>}
+              {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
             </div>
             <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
               {(["summary", "daypart"] as const).map((mode) => (
@@ -389,9 +329,17 @@ export default function DashboardClient() {
           </div>
         )}
 
-        <div className="flex flex-col lg:flex-row gap-6 items-start">
+        <SalesTierTable
+          branches={branches}
+          getMetrics={getMetrics}
+          loading={dataLoading || branchesLoading}
+          salesByStoreId={salesByStoreId}
+          productivityByStoreId={productivityByStoreId}
+        />
+
+        <div className="flex flex-col gap-6 items-start">
           {/* Cards grid */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 w-full">
             {branchesLoading && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {Array.from({ length: 12 }).map((_, i) => (
@@ -422,6 +370,7 @@ export default function DashboardClient() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                           {sectionBranches.map(branch => {
                             const visible = gIdx++ < revealedCount;
+                            const salesForTier = lookupMetric(branch, getMetrics(branch), salesByStoreId) ?? null;
                             return (
                               <LocationCard
                                 key={branch.id}
@@ -430,6 +379,7 @@ export default function DashboardClient() {
                                 loading={!visible}
                                 rangeLabel={rangeLabel}
                                 viewMode={viewMode}
+                                salesForTier={visible ? salesForTier : null}
                               />
                             );
                           })}
@@ -446,15 +396,6 @@ export default function DashboardClient() {
                 <p className="text-lg font-medium">No locations found</p>
               </div>
             )}
-
-            <RankingTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
-            <SalesTierTable branches={branches} getMetrics={getMetrics} loading={dataLoading || branchesLoading} />
-          </div>
-
-          {/* Leaderboard — sidebar on desktop, bottom section on mobile */}
-          <div className="flex flex-col gap-4 w-full lg:w-52 lg:shrink-0">
-            <Leaderboard branches={branches} metric="lane_total" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
-            <Leaderboard branches={branches} metric="window_service" stores={lastWeekStores} rangeKey={leaderboardRange} onRangeChange={setLeaderboardRange} />
           </div>
         </div>
 
@@ -465,78 +406,83 @@ export default function DashboardClient() {
 }
 
 // ── Sales tier table ──────────────────────────────────────────────────────────
-// Weekly sales are pulled live from PAR (see /api/par/weekly-sales) instead of the
-// hand-maintained SALES_BY_ID map this used to be.
-
-const TIERS = [
-  { label: "< $45k",      min: 0,     max: 45000    },
-  { label: "$45k – $65k", min: 45000, max: 65000    },
-  { label: "$65k – $85k", min: 65000, max: 85000    },
-  { label: "> $85k",      min: 85000, max: Infinity },
-];
-
-function lookupMetric<T>(branch: BranchStore, metrics: StoreMetrics | null, map: Record<string, T>): T | undefined {
-  if (branch.client_branch_id) {
-    const v = map[branch.client_branch_id];
-    if (v != null) return v;
-  }
-  const sni = metrics?.store_name_and_id ?? branch.name ?? "";
-  for (const [key, val] of Object.entries(map)) {
-    if (sni.includes(key)) return val;
-  }
-  return undefined;
-}
+// Sales/productivity are pulled live from PAR (see /api/par/sales-tier), keyed
+// to whichever range is selected at the top of the page — see getSalesTierData
+// for the weekly-equivalent sales rule and why productivity always uses the
+// raw drive-thru range instead. Tier thresholds live in @/lib/salesTierGoals so
+// LocationCard can reuse the same goals to color the overall lane/window times.
 
 function SalesTierTable({
   branches,
   getMetrics,
   loading,
+  salesByStoreId,
+  productivityByStoreId,
 }: {
   branches: BranchStore[];
   getMetrics: (b: BranchStore) => StoreMetrics | null;
   loading: boolean;
+  salesByStoreId: Record<string, number>;
+  productivityByStoreId: Record<string, number | null>;
 }) {
-  const [salesByStoreId, setSalesByStoreId] = useState<Record<string, number>>({});
-  const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
   const gridRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    fetch("/api/par/weekly-sales")
-      .then(r => r.json())
-      .then(d => {
-        setSalesByStoreId(d.salesByStoreId ?? {});
-        setProductivityByStoreId(d.productivityByStoreId ?? {});
-      })
-      .catch(err => console.error("[DriveThru] weekly sales fetch failed", err));
-  }, []);
 
   if (loading || branches.length === 0) return null;
 
-  const tiered = TIERS.map(tier => ({
-    label: tier.label,
-    branches: branches
-      .filter(b => {
-        const sales = lookupMetric(b, getMetrics(b), salesByStoreId);
-        return sales != null && sales >= tier.min && sales < tier.max;
-      })
-      .sort((a, b) => {
-        const ta = parseMMSS(getMetrics(a)?.overall.lane_total);
-        const tb = parseMMSS(getMetrics(b)?.overall.lane_total);
-        if (ta == null && tb == null) return 0;
-        if (ta == null) return 1;
-        if (tb == null) return -1;
-        return ta - tb;
-      }),
-  })).filter(t => t.branches.length > 0);
+  function buildTiers(
+    tiers: { label: string; test: (v: number) => boolean; greenMax: number; yellowMax: number }[],
+    metricField: "lane_total" | "window_service",
+  ) {
+    return tiers
+      .map(tier => ({
+        label: tier.label,
+        metricField,
+        greenMax: tier.greenMax,
+        yellowMax: tier.yellowMax,
+        branches: branches
+          .filter(b => {
+            const sales = lookupMetric(b, getMetrics(b), salesByStoreId);
+            return sales != null && tier.test(sales);
+          })
+          .sort((a, b) => {
+            const ta = parseMMSS(getMetrics(a)?.overall[metricField]);
+            const tb = parseMMSS(getMetrics(b)?.overall[metricField]);
+            if (ta == null && tb == null) return 0;
+            if (ta == null) return 1;
+            if (tb == null) return -1;
+            return ta - tb;
+          }),
+      }))
+      .filter(t => t.branches.length > 0);
+  }
+
+  const totalTimeTiered = buildTiers(TOTAL_TIME_TIERS, "lane_total");
+  const windowTimeTiered = buildTiers(WINDOW_TIME_TIERS, "window_service");
 
   return (
-    // flex-wrap with explicit item widths (not CSS grid) — same 2/4-column layout,
-    // but items-start means each card sizes to its own content instead of being
-    // stretched to match the tallest tier.
-    <div ref={gridRef} className="mt-8 flex flex-wrap items-start gap-4">
-      {tiered.map(tier => (
-        <SalesTierCard key={tier.label} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
-      ))}
+    <div className="mb-6">
+      <div ref={gridRef} className="flex flex-col sm:flex-row items-start gap-6">
+        {totalTimeTiered.length > 0 && (
+          <div className="flex-1 min-w-0 w-full">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2">Total Time</h3>
+            <div className="flex flex-wrap items-start gap-4">
+              {totalTimeTiered.map(tier => (
+                <SalesTierCard key={`lane_total-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
+              ))}
+            </div>
+          </div>
+        )}
+        {windowTimeTiered.length > 0 && (
+          <div className="flex-1 min-w-0 w-full">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2">Window Time</h3>
+            <div className="flex flex-wrap items-start gap-4">
+              {windowTimeTiered.map(tier => (
+                <SalesTierCard key={`window_service-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -548,22 +494,28 @@ function SalesTierCard({
   productivityByStoreId,
   copyTargetRef,
 }: {
-  tier: { label: string; branches: BranchStore[] };
+  tier: { label: string; metricField: "lane_total" | "window_service"; greenMax: number; yellowMax: number; branches: BranchStore[] };
   getMetrics: (b: BranchStore) => StoreMetrics | null;
   salesByStoreId: Record<string, number>;
   productivityByStoreId: Record<string, number | null>;
   copyTargetRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div className="w-[calc(50%-8px)] xl:w-[calc(25%-12px)] bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="w-[calc(50%-8px)] bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
-        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-[11px] font-semibold uppercase tracking-widest text-gray-900" heightBufferPx={40} />
+        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-sm font-bold uppercase tracking-widest text-gray-900" heightBufferPx={40} />
+        <p className="text-xs text-gray-600 mt-0.5">
+          Goal: <span className="text-green-600 font-semibold">≤{fmtGoalSecs(tier.greenMax)}</span>
+          {" · "}
+          <span className="text-yellow-600 font-semibold">≤{fmtGoalSecs(tier.yellowMax)}</span>
+        </p>
       </div>
       <div className="divide-y divide-gray-50">
         {tier.branches.map(branch => {
           const m = getMetrics(branch);
           const sales = lookupMetric(branch, m, salesByStoreId);
           const productivity = lookupMetric(branch, m, productivityByStoreId);
+          const metricValue = m?.overall[tier.metricField] ?? null;
           return (
             <div key={branch.id} className="flex items-center justify-between px-4 py-2 hover:bg-gray-50 transition-colors">
               <div>
@@ -579,8 +531,8 @@ function SalesTierCard({
                   </p>
                 )}
               </div>
-              <span className={`text-[15px] font-semibold tabular-nums ${laneColor(parseMMSS(m?.overall.lane_total))}`}>
-                {m?.overall.lane_total ?? "—"}
+              <span className={`text-[15px] font-semibold tabular-nums ${goalColor(parseMMSS(metricValue), tier.greenMax, tier.yellowMax)}`}>
+                {metricValue ?? "—"}
               </span>
             </div>
           );
@@ -590,143 +542,3 @@ function SalesTierCard({
   );
 }
 
-// ── Ranking table ─────────────────────────────────────────────────────────────
-
-type SortCol =
-  | "overall_lane" | "overall_window"
-  | "peak_lane" | "peak_window"
-  | "nonpeak_lane" | "nonpeak_window"
-  | "total_cars" | "pull_forward";
-
-function RankingTable({
-  branches,
-  getMetrics,
-  loading,
-}: {
-  branches: BranchStore[];
-  getMetrics: (b: BranchStore) => StoreMetrics | null;
-  loading: boolean;
-}) {
-  const [sortCol, setSortCol] = useState<SortCol>("overall_lane");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  const handleCol = (col: SortCol) => {
-    if (col === sortCol) {
-      setSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortCol(col);
-      setSortDir(col === "total_cars" || col === "pull_forward" ? "desc" : "asc");
-    }
-  };
-
-  const getVal = (m: StoreMetrics | null, col: SortCol): number | null => {
-    if (!m) return null;
-    switch (col) {
-      case "overall_lane":    return parseMMSS(m.overall.lane_total);
-      case "overall_window":  return parseMMSS(m.overall.window_service);
-      case "peak_lane":      return parseMMSS(m.peak.lane_total);
-      case "peak_window":    return parseMMSS(m.peak.window_service);
-      case "nonpeak_lane":   return parseMMSS(m.nonpeak.lane_total);
-      case "nonpeak_window": return parseMMSS(m.nonpeak.window_service);
-      case "total_cars":      return m.overall.total_cars;
-      case "pull_forward":    return m.overall.flagged_pull_forward;
-    }
-  };
-
-  const rows = [...branches]
-    .map(b => ({ branch: b, metrics: getMetrics(b) }))
-    .sort((a, b) => {
-      const va = getVal(a.metrics, sortCol);
-      const vb = getVal(b.metrics, sortCol);
-      if (va === null && vb === null) return 0;
-      if (va === null) return 1;
-      if (vb === null) return -1;
-      return sortDir === "asc" ? va - vb : vb - va;
-    });
-
-  const arrow = (col: SortCol) =>
-    sortCol !== col ? <span className="ml-0.5 text-gray-300">↕</span>
-      : sortDir === "asc" ? <span className="ml-0.5">↑</span>
-      : <span className="ml-0.5">↓</span>;
-
-  const th = (col: SortCol, label: string, extraCls = "") => (
-    <th
-      onClick={() => handleCol(col)}
-      className={`px-3 py-1 text-right text-xs font-semibold uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 transition-colors ${
-        sortCol === col ? "text-gray-800" : "text-gray-400"
-      } ${extraCls}`}
-    >
-      {label}{arrow(col)}
-    </th>
-  );
-
-  if (loading || branches.length === 0) return null;
-
-  return (
-    <div ref={cardRef} className="mt-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <CopyableTitle title="Rankings" targetRef={cardRef} className="text-xs font-semibold text-gray-800" />
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-gray-100">
-              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8 align-bottom">#</th>
-              <th rowSpan={2} className="text-left px-4 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide align-bottom">Location</th>
-              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200">Overall</th>
-              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200 bg-gray-50">Peak</th>
-              <th colSpan={2} className="px-3 py-1 text-xs font-semibold text-gray-600 uppercase tracking-wide text-center border-l border-gray-200 bg-blue-50">Non-Peak</th>
-              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 align-bottom whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 transition-colors" onClick={() => handleCol("total_cars")}>
-                Cars{arrow("total_cars")}
-              </th>
-              <th rowSpan={2} className="text-right px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 align-bottom whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 transition-colors" onClick={() => handleCol("pull_forward")}>
-                Flagged{arrow("pull_forward")}
-              </th>
-            </tr>
-            <tr className="border-b border-gray-100">
-              {th("overall_lane",   "Lane",     "border-l border-gray-200")}
-              {th("overall_window", "Window",   "")}
-              {th("peak_lane",   "Lane",   "border-l border-gray-200 bg-gray-50")}
-              {th("peak_window", "Window", "bg-gray-50")}
-              {th("nonpeak_lane",   "Lane",   "border-l border-gray-200 bg-blue-50")}
-              {th("nonpeak_window", "Window", "bg-blue-50")}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ branch, metrics }, i) => (
-              <tr key={branch.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                <td className="px-3 py-1.5 text-right text-[13px] text-gray-400 tabular-nums">{i + 1}.</td>
-                <td className="px-4 py-1.5 font-medium text-[13px] text-gray-900 whitespace-nowrap">{getStoreLabel(branch)}</td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.overall.lane_total))}`}>
-                  {metrics?.overall.lane_total ?? "—"}
-                </td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.overall.window_service))}`}>
-                  {metrics?.overall.window_service ?? "—"}
-                </td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.peak.lane_total))}`}>
-                  {metrics?.peak.lane_total ?? "—"}
-                </td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.peak.window_service))}`}>
-                  {metrics?.peak.window_service ?? "—"}
-                </td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold border-l border-gray-100 ${laneColor(parseMMSS(metrics?.nonpeak.lane_total))}`}>
-                  {metrics?.nonpeak.lane_total ?? "—"}
-                </td>
-                <td className={`px-3 py-1.5 text-right tabular-nums text-[13px] font-semibold ${windowColor(parseMMSS(metrics?.nonpeak.window_service))}`}>
-                  {metrics?.nonpeak.window_service ?? "—"}
-                </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-[13px] text-gray-700 border-l border-gray-100">
-                  {metrics?.overall.total_cars != null ? Math.round(metrics.overall.total_cars).toLocaleString() : "—"}
-                </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-[13px] text-gray-700 border-l border-gray-100">
-                  {metrics?.overall.flagged_pull_forward != null ? Math.round(metrics.overall.flagged_pull_forward).toLocaleString() : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}

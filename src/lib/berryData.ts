@@ -35,12 +35,26 @@ function todayCentralISO(): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-/** A range is "closed" (permanent, never changes again) once its end date is before today. */
+function dayBefore(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d - 1);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * A range is "closed" (permanent, never changes again) once its end date is
+ * before today. WTD/PTD/QTD/YTD end at an explicit midnight timestamp
+ * (exclusive — "through yesterday", not literally "now"), so the embedded
+ * end date is today's date even though the range itself is already closed;
+ * back it up a day before comparing, same convention as formatRangeDates.
+ */
 function isClosedRange(timeRange: string): boolean {
   const [, endRaw] = timeRange.split(" : ").map(s => s.trim());
   if (endRaw === "now") return false;
-  const endDate = endRaw.split("T")[0];
-  return endDate < todayCentralISO();
+  const endDateStr = endRaw.split("T")[0];
+  const endTime = endRaw.split("T")[1] ?? "";
+  const effectiveEndDate = endTime.startsWith("00:00:00") ? dayBefore(endDateStr) : endDateStr;
+  return effectiveEndDate < todayCentralISO();
 }
 
 async function getCachedPayload(timeRange: string): Promise<{ payload: DriveThruPayload; fetchedAt: Date } | null> {
@@ -327,7 +341,7 @@ export async function getDriveThruMetrics(
 // *next* request for any of them (from anyone) hits a warm cache instead of
 // waiting on a live Superset call. Call via next/server's after() so it runs
 // post-response and never slows down the request that triggered it.
-const STANDARD_RANGE_KEYS: RangeKey[] = ["today", "yesterday", "wtd", "last_week", "mtd", "ytd"];
+const STANDARD_RANGE_KEYS: RangeKey[] = ["today", "yesterday", "wtd", "last_week", "t7", "mtd", "qtd", "ytd"];
 
 export async function warmStandardRanges(token: string): Promise<void> {
   for (const rangeKey of STANDARD_RANGE_KEYS) {
