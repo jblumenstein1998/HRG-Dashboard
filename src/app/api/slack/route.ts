@@ -4,11 +4,7 @@ import crypto from "crypto";
 import type { ModelMessage } from "ai";
 import { dashboardAgent } from "@/lib/agents/dashboardAgent";
 import { getConversation, saveConversation } from "@/lib/slackConversation";
-
-// Slack hard-caps a single message at 40,000 chars but anything near that is
-// unreadable in a DM — the agent is already instructed to answer in a
-// sentence or two, this is just a hard backstop.
-const MAX_REPLY_CHARS = 3900;
+import { markdownToSlackBlocks, fallbackText, type SlackBlock } from "@/lib/slackFormat";
 
 // Requests older than this are rejected even with a valid signature — blocks
 // replay of a captured request (Slack's own recommended window).
@@ -41,46 +37,15 @@ function isValidSlackSignature(rawBody: string, timestamp: string | null, signat
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-async function sendMessage(channelId: string, text: string) {
+async function sendMessage(channelId: string, text: string, blocks?: SlackBlock[]) {
   const token = process.env.SLACK_BOT_TOKEN;
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ channel: channelId, text }),
+    body: JSON.stringify({ channel: channelId, text, ...(blocks?.length ? { blocks } : {}) }),
   });
   const data = await res.json().catch(() => ({}));
   if (!data.ok) console.error("[slack] chat.postMessage failed:", data.error);
-}
-
-// The agent writes standard Markdown (it's shared with the web chat UI, which
-// renders that fine), but Slack's "mrkdwn" format has no table syntax and no
-// double-asterisk bold — a raw markdown table shows up as literal pipes and
-// dashes. Converts **bold** to Slack's *bold*, and reflows any markdown table
-// into a fixed-width plain-text table inside a monospace code block, which is
-// the standard way to show tabular data in Slack.
-function toSlackMrkdwn(markdown: string): string {
-  let out = markdown.replace(/\*\*(.+?)\*\*/g, "*$1*");
-
-  const tableRegex = /^\|.*\|\r?\n\|[-:| ]+\|\r?\n(?:\|.*\|\r?\n?)+/gm;
-  out = out.replace(tableRegex, (block) => {
-    const rows = block
-      .trim()
-      .split("\n")
-      .filter((_, i) => i !== 1) // drop the header/body separator row
-      .map((line) =>
-        line
-          .trim()
-          .replace(/^\||\|$/g, "")
-          .split("|")
-          .map((cell) => cell.trim().replace(/\*/g, ""))
-      );
-    const colCount = rows[0].length;
-    const widths = Array.from({ length: colCount }, (_, i) => Math.max(...rows.map((r) => (r[i] ?? "").length)));
-    const formatted = rows.map((r) => r.map((cell, i) => (cell ?? "").padEnd(widths[i])).join("  ").trimEnd()).join("\n");
-    return "```\n" + formatted + "\n```\n";
-  });
-
-  return out;
 }
 
 async function handleMessage(channelId: string, text: string) {
@@ -93,15 +58,10 @@ async function handleMessage(channelId: string, text: string) {
 
     // Save the agent's original Markdown to history (not the Slack-reformatted
     // version) so a follow-up question feeds back clean, familiar formatting
-    // rather than teaching the agent to imitate its own code-block output.
+    // rather than teaching the agent to imitate its own reformatted output.
     await saveConversation(channelId, [...messages, { role: "assistant", content: reply }]);
 
-    let slackText = toSlackMrkdwn(reply);
-    if (slackText.length > MAX_REPLY_CHARS) {
-      slackText = slackText.slice(0, MAX_REPLY_CHARS - 4) + "…";
-      if ((slackText.match(/```/g) ?? []).length % 2 === 1) slackText += "\n```";
-    }
-    await sendMessage(channelId, slackText);
+    await sendMessage(channelId, fallbackText(reply), markdownToSlackBlocks(reply));
   } catch (err) {
     console.error("[slack] agent error:", err);
     await sendMessage(channelId, "Sorry, something went wrong answering that — try again in a bit.");
