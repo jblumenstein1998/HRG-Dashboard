@@ -200,6 +200,46 @@ export async function getDailyRowsForRange(storeId: string, start: string, end: 
   return daily;
 }
 
+// ── Intraday window totals ───────────────────────────────────────────────────
+// For hour-of-day / daypart questions ("Hampton's lunch sales today") — unlike
+// every other read path above, this always hits PAR live (no rollup table has
+// sub-day granularity) and filters/overlaps at the minute level rather than
+// summing the whole day. startMinutes/endMinutes are store-local wall-clock
+// minutes since midnight (PAR's own order/shift timestamps are already each
+// store's own local time, so no timezone conversion happens here).
+
+export type WindowTotals = { netSales: number; orderCount: number; laborMinutes: number };
+
+export async function getWindowTotals(
+  storeId: string,
+  businessDate: string,
+  startMinutes: number,
+  endMinutes: number,
+): Promise<WindowTotals> {
+  const [orders, shifts] = await Promise.all([
+    getOrders(storeId, businessDate).catch(() => []),
+    getShifts(storeId, businessDate).catch(() => []),
+  ]);
+
+  // Same isCountedOrder distinction computeDayTotals uses above — orders.length
+  // over/undercounts real transactions.
+  const windowOrders = orders.filter(
+    (o) => o.closedMinutes != null && o.closedMinutes >= startMinutes && o.closedMinutes < endMinutes
+  );
+  const netSales = windowOrders.reduce((sum, o) => sum + o.netSales, 0);
+  const orderCount = windowOrders.filter((o) => o.isCountedOrder).length;
+
+  // A shift doesn't need to fall entirely inside the window to count — only
+  // the portion of it that overlaps the window does (e.g. a 10am–3pm shift
+  // contributes 3 of its hours to an 11am–2pm window, not all 5 or none).
+  const laborMinutes = shifts.reduce((sum, s) => {
+    const overlap = Math.min(s.endMinutes, endMinutes) - Math.max(s.startMinutes, startMinutes);
+    return sum + Math.max(0, overlap);
+  }, 0);
+
+  return { netSales, orderCount, laborMinutes };
+}
+
 // Latest business_date already rolled up for a store (drives incremental backfill).
 export async function getLastRolledUpDate(storeId: string): Promise<string | null> {
   const rows = await sql`
