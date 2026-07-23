@@ -217,12 +217,27 @@ export async function getDailyRowsForRange(storeId: string, start: string, end: 
 // MinutesWorked field: shift span minus its breaks reproduces MinutesWorked
 // exactly, so the same subtraction has to happen per hour-bucket too, or a
 // break shows up as worked labor in whichever hour it happened to fall in.
+//
+// A shift/break's own minutes (par.ts) can legitimately exceed 1440 when it
+// runs past midnight into the next calendar day (a closing shift clocking
+// out at 2am), while windowStart/windowEnd here are always 0-1440 (one
+// hour-of-day bucket for THIS business date). Checking the window shifted by
+// +1440 as well as its normal position is what lets an overnight shift's
+// post-midnight portion still credit the early-hour buckets (0am, 1am, ...)
+// of the same business date, instead of falling outside every window checked.
+function overlapMinutes(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
+
 function shiftWorkedMinutesInWindow(shift: PARShift, windowStart: number, windowEnd: number): number {
-  const shiftOverlap = Math.max(0, Math.min(shift.endMinutes, windowEnd) - Math.max(shift.startMinutes, windowStart));
-  const breakOverlap = shift.breaks.reduce((sum, b) => {
-    return sum + Math.max(0, Math.min(b.endMinutes, windowEnd) - Math.max(b.startMinutes, windowStart));
-  }, 0);
-  return Math.max(0, shiftOverlap - breakOverlap);
+  const windowedOverlap = (offsetMinutes: number) => {
+    const wStart = windowStart + offsetMinutes;
+    const wEnd = windowEnd + offsetMinutes;
+    const shiftOverlap = overlapMinutes(shift.startMinutes, shift.endMinutes, wStart, wEnd);
+    const breakOverlap = shift.breaks.reduce((sum, b) => sum + overlapMinutes(b.startMinutes, b.endMinutes, wStart, wEnd), 0);
+    return Math.max(0, shiftOverlap - breakOverlap);
+  };
+  return windowedOverlap(0) + windowedOverlap(1440);
 }
 
 export type WindowTotals = { netSales: number; orderCount: number; laborMinutes: number };

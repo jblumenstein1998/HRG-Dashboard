@@ -189,17 +189,10 @@ function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
 
 function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
   return allTags(xml, "Shift").map(s => {
-    const toMins = (dt: string | null) => (dt ? zonedMinutesOfDay(new Date(dt), timeZone) : null);
-
     // Break StartTime/EndTime must be read from the raw (unstripped) shift —
     // stripTag below removes this block before extracting the shift's own
     // scalar fields, same nested-array reasoning as Order.Entries above.
     const breaksXml = tagVal(s, "Breaks") ?? "";
-    const breaks = allTags(breaksXml, "Break").flatMap(b => {
-      const bStart = toMins(tagVal(tagVal(b, "StartTime") ?? "", "DateTime"));
-      const bEnd = toMins(tagVal(tagVal(b, "EndTime") ?? "", "DateTime"));
-      return bStart != null && bEnd != null ? [{ startMinutes: bStart, endMinutes: bEnd }] : [];
-    });
 
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
@@ -207,8 +200,33 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
     // Sentinel "no value" date PAR uses for an EndTime that hasn't happened yet.
     const isOpen  = !endDt || endDt.startsWith("0001-01-01");
-    const startMinutes = toMins(startDt) ?? 0;
-    const endMinutes   = isOpen ? Math.min(startMinutes + minutesWorked, 1440) : (toMins(endDt) ?? Math.min(startMinutes + minutesWorked, 1440));
+
+    const startDate = startDt ? new Date(startDt) : null;
+    const startMinutes = startDate ? zonedMinutesOfDay(startDate, timeZone) : 0;
+
+    // Every other minute-of-day value on this shift (break times, end time) is
+    // derived as startMinutes + elapsed real minutes since start, NOT by
+    // independently re-deriving wall-clock hour/minute from each timestamp.
+    // A closing shift routinely ends after midnight (e.g. clocks out 2:15 AM
+    // the next calendar day) — re-parsing that end timestamp's hour/minute in
+    // isolation gives "2:15" = 135 minutes, which is *less* than a startMinutes
+    // like 785 (1:05 PM), silently producing a negative/zero overlap against
+    // every hour bucket for the rest of that shift. Anchoring everything to
+    // elapsed time from the (correctly zoned) start avoids that entirely —
+    // the result can legitimately exceed 1440 for a post-midnight end/break,
+    // which shiftWorkedMinutesInWindow (parRollup.ts) accounts for.
+    const elapsedMinutesSinceStart = (dt: string | null): number | null => {
+      if (!dt || !startDate) return null;
+      return startMinutes + (new Date(dt).getTime() - startDate.getTime()) / 60000;
+    };
+
+    const breaks = allTags(breaksXml, "Break").flatMap(b => {
+      const bStart = elapsedMinutesSinceStart(tagVal(tagVal(b, "StartTime") ?? "", "DateTime"));
+      const bEnd = elapsedMinutesSinceStart(tagVal(tagVal(b, "EndTime") ?? "", "DateTime"));
+      return bStart != null && bEnd != null ? [{ startMinutes: bStart, endMinutes: bEnd }] : [];
+    });
+
+    const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
     return { startMinutes, endMinutes, minutesWorked, isOpen, breaks };
   });
 }
