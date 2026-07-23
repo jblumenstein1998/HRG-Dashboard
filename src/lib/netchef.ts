@@ -241,11 +241,12 @@ const locationReportCache = new Map<string, { report: LocationReport; fetchedAt:
 export async function fetchLocationReport(
   locationId: number,
   startDate: string,
-  endDate: string
+  endDate: string,
+  opts: { bust?: boolean } = {}
 ): Promise<LocationReport> {
   const cKey = `${locationId}__${startDate}__${endDate}`;
   const cached = locationReportCache.get(cKey);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.report;
+  if (!opts.bust && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.report;
 
   // Convert YYYY-MM-DD → MM/DD/YYYY
   const toMMDDYYYY = (iso: string) => {

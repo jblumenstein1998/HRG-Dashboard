@@ -700,7 +700,8 @@ function useTodayVsLastYear() {
   const [stores, setStores] = useState<TodayRaw[]>([]);
   const [todayDate, setTodayDate] = useState("");
   const [lastYearDate, setLastYearDate] = useState("");
-  const [asOfLabel, setAsOfLabel] = useState("");
+  const [asOfLabelCT, setAsOfLabelCT] = useState("");
+  const [asOfLabelET, setAsOfLabelET] = useState("");
   const [loading, setLoading] = useState(true);
 
   const refetch = useCallback(() => {
@@ -711,7 +712,8 @@ function useTodayVsLastYear() {
         setStores(d.stores ?? []);
         setTodayDate(d.todayDate ?? "");
         setLastYearDate(d.lastYearDate ?? "");
-        setAsOfLabel(d.asOfLabel ?? "");
+        setAsOfLabelCT(d.asOfLabelCT ?? "");
+        setAsOfLabelET(d.asOfLabelET ?? "");
       })
       .catch(err => console.error("[PAR] today-vs-last-year fetch failed", err))
       .finally(() => setLoading(false));
@@ -719,11 +721,11 @@ function useTodayVsLastYear() {
 
   useEffect(() => { refetch(); }, [refetch]);
 
-  return { stores, todayDate, lastYearDate, asOfLabel, loading, refetch };
+  return { stores, todayDate, lastYearDate, asOfLabelCT, asOfLabelET, loading, refetch };
 }
 
 function TodayVsLastYearTable({
-  stores, loading, showVA, showTN, todayDate, lastYearDate, asOfLabel,
+  stores, loading, showVA, showTN, todayDate, lastYearDate, asOfLabelCT, asOfLabelET,
 }: {
   stores: TodayRaw[];
   loading: boolean;
@@ -731,7 +733,8 @@ function TodayVsLastYearTable({
   showTN: boolean;
   todayDate: string;
   lastYearDate: string;
-  asOfLabel: string;
+  asOfLabelCT: string;
+  asOfLabelET: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -743,6 +746,15 @@ function TodayVsLastYearTable({
   ];
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
+  // TN and VA are in different time zones, so each has its own "as of" cutoff
+  // (last year's comparison is sliced to the same local time-of-day, not a
+  // single blanket time for every store) — only show the labels for whichever
+  // group(s) are actually visible.
+  const asOfParts = [
+    ...(showTN ? [asOfLabelCT] : []),
+    ...(showVA ? [asOfLabelET] : []),
+  ].filter(Boolean);
+
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
@@ -751,7 +763,7 @@ function TodayVsLastYearTable({
           ? <span className="text-xs text-gray-400 animate-pulse">Loading (live PAR pull, may take a bit)…</span>
           : (todayDate && lastYearDate) && (
               <span className="text-xs text-gray-500">
-                {todayDate} vs {lastYearDate}, both through {asOfLabel}
+                {todayDate} vs {lastYearDate}, each through {asOfParts.join(" / ")}
               </span>
             )
         }
@@ -933,7 +945,8 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
           showTN={showTN}
           todayDate={todayVsLastYear.todayDate}
           lastYearDate={todayVsLastYear.lastYearDate}
-          asOfLabel={todayVsLastYear.asOfLabel}
+          asOfLabelCT={todayVsLastYear.asOfLabelCT}
+          asOfLabelET={todayVsLastYear.asOfLabelET}
         />
         <div className="mt-6">
           <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} showVA={showVA} showTN={showTN} fmt={fmtDollars} />

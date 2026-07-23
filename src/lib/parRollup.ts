@@ -2,15 +2,18 @@ import { sql } from "@/lib/db";
 import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange } from "@/lib/par";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
-// Used both to write the rollup (backfillStoreDay) and to compute today's
-// not-yet-rolled-up totals live at read time (see "Live today merge" below).
+// Used both to write the rollup (backfillStoreDay, always cached — a settled
+// past day never changes) and to compute today's not-yet-rolled-up totals at
+// read time (see "Live today merge" below, always live=true — a stale cache
+// entry from earlier today would silently under-report everything that's
+// happened since it was fetched).
 
 type DayTotals = { netSales: number; orderCount: number; laborMinutes: number };
 
-async function computeDayTotals(storeId: string, businessDate: string): Promise<DayTotals> {
+async function computeDayTotals(storeId: string, businessDate: string, live = false): Promise<DayTotals> {
   const [orders, shifts] = await Promise.all([
-    getOrders(storeId, businessDate).catch(() => []),
-    getShifts(storeId, businessDate).catch(() => []),
+    (live ? getOrdersLive(storeId, businessDate) : getOrders(storeId, businessDate)).catch(() => []),
+    (live ? getShiftsLive(storeId, businessDate) : getShifts(storeId, businessDate)).catch(() => []),
   ]);
 
   // Net sales sums every order (refunds included — they're already negative).
@@ -117,7 +120,7 @@ async function getTotalsForRange(storeId: string, start: string, end: string): P
 
   const [historical, live] = await Promise.all([
     start <= historicalEnd ? getRollupTotals(storeId, start, historicalEnd) : Promise.resolve({ netSales: 0, orderCount: 0, laborMinutes: 0 }),
-    includesToday ? computeDayTotals(storeId, today) : Promise.resolve({ netSales: 0, orderCount: 0, laborMinutes: 0 }),
+    includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve({ netSales: 0, orderCount: 0, laborMinutes: 0 }),
   ]);
 
   return {
@@ -181,7 +184,7 @@ export async function getDailyRowsForRange(storeId: string, start: string, end: 
           ORDER BY business_date ASC
         `
       : Promise.resolve([]),
-    includesToday ? computeDayTotals(storeId, today) : Promise.resolve(null),
+    includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve(null),
   ]);
 
   const daily = (rows as { business_date: string | Date; net_sales: string; order_count: string; labor_minutes: string }[]).map(r =>

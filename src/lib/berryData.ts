@@ -48,7 +48,7 @@ function dayBefore(iso: string): string {
  * end date is today's date even though the range itself is already closed;
  * back it up a day before comparing, same convention as formatRangeDates.
  */
-function isClosedRange(timeRange: string): boolean {
+export function isClosedRange(timeRange: string): boolean {
   const [, endRaw] = timeRange.split(" : ").map(s => s.trim());
   if (endRaw === "now") return false;
   const endDateStr = endRaw.split("T")[0];

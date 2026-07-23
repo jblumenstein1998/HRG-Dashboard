@@ -12,7 +12,7 @@ import {
 } from "@/lib/parRollup";
 import { getShiftsLive } from "@/lib/par";
 import { fetchLocationReport } from "@/lib/netchef";
-import { getDriveThruMetrics, warmStandardRanges, ChartFetchError } from "@/lib/berryData";
+import { getDriveThruMetrics, warmStandardRanges, ChartFetchError, isClosedRange } from "@/lib/berryData";
 import { getBerryAuth } from "@/lib/auth";
 import { loginBerryService } from "@/lib/berryAuth";
 import { resolveDaypart, daypartLabel } from "@/lib/dayparts";
@@ -239,7 +239,13 @@ export const getDriveThru = tool({
 
     let payload;
     try {
-      payload = await getDriveThruMetrics(token, timeRange, label);
+      // An open range (includes today) gets a forced-fresh fetch rather than
+      // relying on the dashboard's normal 5-minute rolling cache — a chat
+      // query about "today" should reflect what's happened right up to the
+      // moment it's asked, not whatever was cached a few minutes ago. Closed
+      // (fully historical) ranges skip this — they're cached permanently
+      // since the numbers can't change anymore, so busting would be pure cost.
+      payload = await getDriveThruMetrics(token, timeRange, label, { bust: !isClosedRange(timeRange) });
     } catch (err) {
       if (err instanceof ChartFetchError) return { error: `Drive-thru data fetch failed (${err.status}).` };
       return { error: "Failed to establish drive-thru data session." };
@@ -278,7 +284,9 @@ export const getFoodCostMetrics = tool({
     const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
     if ("error" in bounds) return bounds;
     const { start, end, label } = bounds;
-    const report = await fetchLocationReport(store.ncLocationId, start, end);
+    // A range that includes today gets a forced-fresh fetch instead of the
+    // normal 1hr cache — same reasoning as getDriveThru's bust flag above.
+    const report = await fetchLocationReport(store.ncLocationId, start, end, { bust: end >= todayCentralISO() });
 
     if (!compareToPriorYear) return { store: store.name, range: label, start, end, ...report };
 

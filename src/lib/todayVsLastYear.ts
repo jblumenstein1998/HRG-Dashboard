@@ -9,9 +9,20 @@ import { getPriorYearDate } from "@/lib/fiscal";
 // but last year's date already fully happened, so its orders are filtered
 // down to the same time-of-day cutoff for an apples-to-apples comparison.
 
-function centralParts(): { y: number; m: number; d: number; hh: number; mm: number } {
+// PAR's own order/shift timestamps are each store's own local wall-clock time
+// (see par.ts) — TN stores are Central, VA stores are Eastern, so "now" must
+// be computed per state, not once for the whole company. Using a single
+// Central "now" for every store (the original implementation) cut VA stores'
+// last-year comparison off an hour early: if it's 2pm Eastern at Hampton,
+// Central "now" is only 1pm.
+const STATE_TIMEZONE: Record<PARLocation["state"], string> = {
+  TN: "America/Chicago",
+  VA: "America/New_York",
+};
+
+function zonedParts(timeZone: string): { y: number; m: number; d: number; hh: number; mm: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -23,21 +34,26 @@ function centralParts(): { y: number; m: number; d: number; hh: number; mm: numb
   return { y: get("year"), m: get("month"), d: get("day"), hh: get("hour"), mm: get("minute") };
 }
 
+// The business-date boundary (which calendar day counts as "today") stays a
+// single Central reference, same convention as the rest of the app (e.g.
+// todayCentralISO in parRollup.ts) — only the intraday minute-of-day cutoff
+// used to slice last year's comparison needs to be state-aware.
 function todayISOCentral(): string {
-  const { y, m, d } = centralParts();
+  const { y, m, d } = zonedParts("America/Chicago");
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-function nowMinutesCentral(): number {
-  const { hh, mm } = centralParts();
+function nowMinutesForState(state: PARLocation["state"]): number {
+  const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
   return hh * 60 + mm;
 }
 
-function nowLabelCentral(): string {
-  const { hh, mm } = centralParts();
+function nowLabelForState(state: PARLocation["state"]): string {
+  const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
   const period = hh < 12 ? "AM" : "PM";
   const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  return `${h12}:${String(mm).padStart(2, "0")} ${period} CT`;
+  const tzAbbr = state === "TN" ? "CT" : "ET";
+  return `${h12}:${String(mm).padStart(2, "0")} ${period} ${tzAbbr}`;
 }
 
 // Net sales sums every order (refunds/corrections included — already negative),
@@ -73,13 +89,13 @@ export type TodayVsLastYearResult = {
   stores: StoreTodayRaw[];
   todayDate: string;
   lastYearDate: string;
-  asOfLabel: string;
+  asOfLabelCT: string; // TN stores' local cutoff time
+  asOfLabelET: string; // VA stores' local cutoff time
 };
 
 export async function getTodayVsLastYear(): Promise<TodayVsLastYearResult> {
   const todayDate = todayISOCentral();
   const lastYearDate = getPriorYearDate(todayDate);
-  const nowMin = nowMinutesCentral();
 
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc) => {
@@ -95,7 +111,10 @@ export async function getTodayVsLastYear(): Promise<TodayVsLastYearResult> {
         getShiftsLive(loc.storeId, todayDate),
       ]);
       const ty = summarize(todayOrders, null);
-      const ly = summarize(lastYearOrders, nowMin);
+      // Cut last year's same-weekday orders off at the same time-of-day as
+      // "now" — but "now" in this store's own local time, not blanket Central
+      // (see nowMinutesForState's doc comment above).
+      const ly = summarize(lastYearOrders, nowMinutesForState(loc.state));
       const laborHoursTY = Math.round((todayShifts.reduce((s, sh) => s + sh.minutesWorked, 0) / 60) * 100) / 100;
       const clockedInTY = todayShifts.filter(sh => sh.isOpen).length;
       return {
@@ -112,5 +131,11 @@ export async function getTodayVsLastYear(): Promise<TodayVsLastYearResult> {
     })
   );
 
-  return { stores, todayDate, lastYearDate, asOfLabel: nowLabelCentral() };
+  return {
+    stores,
+    todayDate,
+    lastYearDate,
+    asOfLabelCT: nowLabelForState("TN"),
+    asOfLabelET: nowLabelForState("VA"),
+  };
 }
