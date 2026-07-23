@@ -13,6 +13,7 @@ import { getShiftsLive } from "@/lib/par";
 import { fetchLocationReport } from "@/lib/netchef";
 import { getDriveThruMetrics, warmStandardRanges, ChartFetchError } from "@/lib/berryData";
 import { getBerryAuth } from "@/lib/auth";
+import { loginBerryService } from "@/lib/berryAuth";
 import { after } from "next/server";
 
 const rangeKeyDescription =
@@ -218,8 +219,18 @@ export const getDriveThru = tool({
     if ("error" in resolved) return resolved;
     const { timeRange, label } = resolved;
 
-    const { token } = await getBerryAuth();
-    if (!token) return { error: "Not logged in to the BerryAI drive-thru dashboard — please log in and try again." };
+    // A browser session (berry_token cookie) is only present when this tool is
+    // called from the logged-in web dashboard's chat. Callers with no browser
+    // session at all — the Slack/Telegram bot, or any other server-to-server
+    // caller — fall back to the same service-level login the daily cron uses.
+    let { token } = await getBerryAuth();
+    if (!token) {
+      try {
+        token = await loginBerryService();
+      } catch {
+        return { error: "Could not connect to the BerryAI drive-thru dashboard." };
+      }
+    }
 
     let payload;
     try {
