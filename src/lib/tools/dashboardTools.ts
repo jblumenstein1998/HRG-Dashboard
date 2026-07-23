@@ -110,7 +110,8 @@ export const getLaborHours = tool({
 export const getAvgOrderValue = tool({
   description:
     "Gets the average order value (average ticket) for a store over a given time range, computed as total " +
-    "net sales divided by order count. Supports either a preset rangeKey (ytd, p4, last_week, ...) or a " +
+    "net sales divided by order count. Also returns the order count itself, so this can answer \"how many " +
+    "orders/transactions\" questions too. Supports either a preset rangeKey (ytd, p4, last_week, ...) or a " +
     "custom startDate/endDate for arbitrary date ranges. Set compareToPriorYear for year-over-year comparisons.",
   inputSchema: z.object({ storeName: storeNameSchema, ...dateRangeSchema }),
   execute: async ({ storeName, rangeKey, startDate, endDate, compareToPriorYear }) => {
@@ -145,9 +146,10 @@ export const getProductivity = tool({
   description:
     "Gets labor productivity for a store over a given time range: SPLH (sales per labor hour, i.e. net sales " +
     "divided by labor hours) and TPLH (transactions per labor hour, i.e. order count divided by labor hours). " +
-    "Use this for questions about \"productivity\", \"SPLH\", or \"TPLH\". Supports either a preset rangeKey " +
-    "(ytd, p4, last_week, ...) or a custom startDate/endDate for arbitrary date ranges. Set compareToPriorYear " +
-    "for year-over-year comparisons.",
+    "Also returns the underlying net sales, order count, and labor hours it computed those from, so this can " +
+    "answer questions about any of those three individually too. Use this for questions about \"productivity\", " +
+    "\"SPLH\", or \"TPLH\". Supports either a preset rangeKey (ytd, p4, last_week, ...) or a custom " +
+    "startDate/endDate for arbitrary date ranges. Set compareToPriorYear for year-over-year comparisons.",
   inputSchema: z.object({ storeName: storeNameSchema, ...dateRangeSchema }),
   execute: async ({ storeName, rangeKey, startDate, endDate, compareToPriorYear }) => {
     const store = resolveStore(storeName);
