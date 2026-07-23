@@ -1,4 +1,4 @@
-import { PAR_LOCATIONS, getOrders, getOrdersLive, getShiftsLive, type PARLocation, type PAROrder } from "@/lib/par";
+import { PAR_LOCATIONS, getOrders, getOrdersLive, getShiftsLive, STATE_TIMEZONE, type PARLocation, type PAROrder } from "@/lib/par";
 import { getPriorYearDate } from "@/lib/fiscal";
 
 // Live intraday comparison: today's sales-so-far vs the same clock time on
@@ -9,16 +9,12 @@ import { getPriorYearDate } from "@/lib/fiscal";
 // but last year's date already fully happened, so its orders are filtered
 // down to the same time-of-day cutoff for an apples-to-apples comparison.
 
-// PAR's own order/shift timestamps are each store's own local wall-clock time
-// (see par.ts) — TN stores are Central, VA stores are Eastern, so "now" must
-// be computed per state, not once for the whole company. Using a single
-// Central "now" for every store (the original implementation) cut VA stores'
-// last-year comparison off an hour early: if it's 2pm Eastern at Hampton,
-// Central "now" is only 1pm.
-const STATE_TIMEZONE: Record<PARLocation["state"], string> = {
-  TN: "America/Chicago",
-  VA: "America/New_York",
-};
+// PAR's own order/shift timestamps are converted to each store's own local
+// timezone in par.ts (STATE_TIMEZONE, reused here) — TN stores are Central,
+// VA stores are Eastern, so "now" must be computed per state, not once for
+// the whole company. Using a single Central "now" for every store (the
+// original implementation) cut VA stores' last-year comparison off an hour
+// early: if it's 2pm Eastern at Hampton, Central "now" is only 1pm.
 
 function zonedParts(timeZone: string): { y: number; m: number; d: number; hh: number; mm: number } {
   const parts = new Intl.DateTimeFormat("en-US", {

@@ -127,9 +127,40 @@ export type PARShift = {
   isOpen: boolean;
 };
 
+// ── Timezone conversion ──────────────────────────────────────────────────────
+// PAR's ClosedTime/StartTime/EndTime DateTime values are explicit UTC (they
+// carry a trailing "Z", e.g. "2026-07-22T15:17:49.7053991Z") — NOT naive
+// store-local timestamps as previously assumed here. Using Date.getHours()
+// on them returns the hour in whatever timezone the *server process* happens
+// to be running in (Eastern on a dev machine, UTC on Vercel), which is wrong
+// unless that machine's timezone happens to coincidentally match the store's
+// own timezone. TN stores are Central, VA stores are Eastern, so this must be
+// computed per store, not read off the ambient runtime timezone.
+
+export const STATE_TIMEZONE: Record<PARLocation["state"], string> = {
+  TN: "America/Chicago",
+  VA: "America/New_York",
+};
+
+export function getStoreTimeZone(storeId: string): string {
+  const loc = PAR_LOCATIONS.find(l => l.storeId === storeId);
+  return STATE_TIMEZONE[loc?.state ?? "TN"];
+}
+
+function zonedMinutesOfDay(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+  return get("hour") * 60 + get("minute");
+}
+
 // ── XML parsing (shared between cached and always-live fetchers) ────────────
 
-function parseOrdersXml(xml: string): PAROrder[] {
+function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
   return allTags(xml, "Order").map(o => {
     const top           = stripTag(o, "Entries"); // line items carry their own NetSales
     const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
@@ -137,14 +168,13 @@ function parseOrdersXml(xml: string): PAROrder[] {
     const isCountedOrder = tagVal(top, "Count") === "1";
     const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
     const dtStr         = tagVal(closedTimeXml, "DateTime");
-    const closedDate    = dtStr ? new Date(dtStr) : null;
-    const closedHour    = closedDate ? closedDate.getHours() : null;
-    const closedMinutes = closedDate ? closedDate.getHours() * 60 + closedDate.getMinutes() : null;
+    const closedMinutes = dtStr ? zonedMinutesOfDay(new Date(dtStr), timeZone) : null;
+    const closedHour    = closedMinutes != null ? Math.floor(closedMinutes / 60) : null;
     return { netSales, closedHour, closedMinutes, isRefund, isCountedOrder };
   });
 }
 
-function parseShiftsXml(xml: string): PARShift[] {
+function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
   return allTags(xml, "Shift").map(s => {
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
@@ -154,8 +184,7 @@ function parseShiftsXml(xml: string): PARShift[] {
     const isOpen  = !endDt || endDt.startsWith("0001-01-01");
     const toMins  = (dt: string | null) => {
       if (!dt) return null;
-      const d = new Date(dt);
-      return d.getHours() * 60 + d.getMinutes();
+      return zonedMinutesOfDay(new Date(dt), timeZone);
     };
     const startMinutes = toMins(startDt) ?? 0;
     const endMinutes   = isOpen ? Math.min(startMinutes + minutesWorked, 1440) : (toMins(endDt) ?? Math.min(startMinutes + minutesWorked, 1440));
@@ -174,7 +203,7 @@ export const getOrders = unstable_cache(
       `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
       token,
     );
-    return parseOrdersXml(xml);
+    return parseOrdersXml(xml, getStoreTimeZone(storeId));
   },
   ["par-orders"],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
@@ -189,7 +218,7 @@ export const getShifts = unstable_cache(
       `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
       token,
     );
-    return parseShiftsXml(xml);
+    return parseShiftsXml(xml, getStoreTimeZone(storeId));
   },
   ["par-shifts"],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
@@ -207,7 +236,7 @@ export async function getOrdersLive(storeId: string, businessDate: string): Prom
     `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
     token,
   );
-  return parseOrdersXml(xml);
+  return parseOrdersXml(xml, getStoreTimeZone(storeId));
 }
 
 export async function getShiftsLive(storeId: string, businessDate: string): Promise<PARShift[]> {
@@ -218,7 +247,7 @@ export async function getShiftsLive(storeId: string, businessDate: string): Prom
     `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
     token,
   );
-  return parseShiftsXml(xml);
+  return parseShiftsXml(xml, getStoreTimeZone(storeId));
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────
