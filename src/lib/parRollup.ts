@@ -1,5 +1,5 @@
 import { sql } from "@/lib/db";
-import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange } from "@/lib/par";
+import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange, type PARShift } from "@/lib/par";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
 // Used both to write the rollup (backfillStoreDay, always cached — a settled
@@ -211,6 +211,20 @@ export async function getDailyRowsForRange(storeId: string, start: string, end: 
 // minutes since midnight (PAR's own order/shift timestamps are already each
 // store's own local time, so no timezone conversion happens here).
 
+// Minutes of a shift that fall inside [windowStart, windowEnd) and count as
+// actually worked — i.e. the shift/window overlap minus whatever portion of
+// any break also falls in that same window. Verified against PAR's own
+// MinutesWorked field: shift span minus its breaks reproduces MinutesWorked
+// exactly, so the same subtraction has to happen per hour-bucket too, or a
+// break shows up as worked labor in whichever hour it happened to fall in.
+function shiftWorkedMinutesInWindow(shift: PARShift, windowStart: number, windowEnd: number): number {
+  const shiftOverlap = Math.max(0, Math.min(shift.endMinutes, windowEnd) - Math.max(shift.startMinutes, windowStart));
+  const breakOverlap = shift.breaks.reduce((sum, b) => {
+    return sum + Math.max(0, Math.min(b.endMinutes, windowEnd) - Math.max(b.startMinutes, windowStart));
+  }, 0);
+  return Math.max(0, shiftOverlap - breakOverlap);
+}
+
 export type WindowTotals = { netSales: number; orderCount: number; laborMinutes: number };
 
 export async function getWindowTotals(
@@ -242,11 +256,9 @@ export async function getWindowTotals(
 
   // A shift doesn't need to fall entirely inside the window to count — only
   // the portion of it that overlaps the window does (e.g. a 10am–3pm shift
-  // contributes 3 of its hours to an 11am–2pm window, not all 5 or none).
-  const laborMinutes = shifts.reduce((sum, s) => {
-    const overlap = Math.min(s.endMinutes, endMinutes) - Math.max(s.startMinutes, startMinutes);
-    return sum + Math.max(0, overlap);
-  }, 0);
+  // contributes 3 of its hours to an 11am–2pm window, not all 5 or none) —
+  // minus any break time that also overlaps the window.
+  const laborMinutes = shifts.reduce((sum, s) => sum + shiftWorkedMinutesInWindow(s, startMinutes, endMinutes), 0);
 
   return { netSales, orderCount, laborMinutes };
 }
@@ -290,10 +302,7 @@ export async function getHourlyBreakdown(storeId: string, businessDate: string):
     const netSales = hourOrders.reduce((sum, o) => sum + o.netSales, 0);
     const orderCount = hourOrders.filter((o) => o.isCountedOrder).length;
 
-    const laborMinutes = shifts.reduce((sum, s) => {
-      const overlap = Math.min(s.endMinutes, endMinutes) - Math.max(s.startMinutes, startMinutes);
-      return sum + Math.max(0, overlap);
-    }, 0);
+    const laborMinutes = shifts.reduce((sum, s) => sum + shiftWorkedMinutesInWindow(s, startMinutes, endMinutes), 0);
 
     return {
       hour,

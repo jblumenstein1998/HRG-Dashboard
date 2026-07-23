@@ -125,6 +125,12 @@ export type PARShift = {
   // yet" as an EndTime whose DateTime is the sentinel 0001-01-01 — NOT a missing
   // tag — so this can't be inferred from endDt being null.
   isOpen: boolean;
+  // Unpaid/paid break windows within [startMinutes, endMinutes) — needed to
+  // correctly attribute labor across hour buckets (see getWindowTotals):
+  // MinutesWorked already excludes these for the whole-shift total, but an
+  // hour-bucket overlap against the raw start/end span would otherwise count
+  // break time as worked in whichever hour(s) the break happened to fall in.
+  breaks: { startMinutes: number; endMinutes: number }[];
 };
 
 // ── Timezone conversion ──────────────────────────────────────────────────────
@@ -176,19 +182,27 @@ function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
 
 function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
   return allTags(xml, "Shift").map(s => {
+    const toMins = (dt: string | null) => (dt ? zonedMinutesOfDay(new Date(dt), timeZone) : null);
+
+    // Break StartTime/EndTime must be read from the raw (unstripped) shift —
+    // stripTag below removes this block before extracting the shift's own
+    // scalar fields, same nested-array reasoning as Order.Entries above.
+    const breaksXml = tagVal(s, "Breaks") ?? "";
+    const breaks = allTags(breaksXml, "Break").flatMap(b => {
+      const bStart = toMins(tagVal(tagVal(b, "StartTime") ?? "", "DateTime"));
+      const bEnd = toMins(tagVal(tagVal(b, "EndTime") ?? "", "DateTime"));
+      return bStart != null && bEnd != null ? [{ startMinutes: bStart, endMinutes: bEnd }] : [];
+    });
+
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
     const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
     const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
     // Sentinel "no value" date PAR uses for an EndTime that hasn't happened yet.
     const isOpen  = !endDt || endDt.startsWith("0001-01-01");
-    const toMins  = (dt: string | null) => {
-      if (!dt) return null;
-      return zonedMinutesOfDay(new Date(dt), timeZone);
-    };
     const startMinutes = toMins(startDt) ?? 0;
     const endMinutes   = isOpen ? Math.min(startMinutes + minutesWorked, 1440) : (toMins(endDt) ?? Math.min(startMinutes + minutesWorked, 1440));
-    return { startMinutes, endMinutes, minutesWorked, isOpen };
+    return { startMinutes, endMinutes, minutesWorked, isOpen, breaks };
   });
 }
 
