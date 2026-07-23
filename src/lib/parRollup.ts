@@ -249,7 +249,7 @@ export async function getWindowTotals(
   // Same isCountedOrder distinction computeDayTotals uses above — orders.length
   // over/undercounts real transactions.
   const windowOrders = orders.filter(
-    (o) => o.closedMinutes != null && o.closedMinutes >= startMinutes && o.closedMinutes < endMinutes
+    (o) => o.openedMinutes != null && o.openedMinutes >= startMinutes && o.openedMinutes < endMinutes
   );
   const netSales = windowOrders.reduce((sum, o) => sum + o.netSales, 0);
   const orderCount = windowOrders.filter((o) => o.isCountedOrder).length;
@@ -297,7 +297,7 @@ export async function getHourlyBreakdown(storeId: string, businessDate: string):
     const endMinutes = startMinutes + 60;
 
     const hourOrders = orders.filter(
-      (o) => o.closedMinutes != null && o.closedMinutes >= startMinutes && o.closedMinutes < endMinutes
+      (o) => o.openedMinutes != null && o.openedMinutes >= startMinutes && o.openedMinutes < endMinutes
     );
     const netSales = hourOrders.reduce((sum, o) => sum + o.netSales, 0);
     const orderCount = hourOrders.filter((o) => o.isCountedOrder).length;

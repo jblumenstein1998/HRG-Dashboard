@@ -62,7 +62,7 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   let netSales = 0;
   let transactions = 0;
   for (const o of orders) {
-    if (cutoffMinutes != null && (o.closedMinutes == null || o.closedMinutes > cutoffMinutes)) continue;
+    if (cutoffMinutes != null && (o.openedMinutes == null || o.openedMinutes > cutoffMinutes)) continue;
     netSales += o.netSales;
     if (o.isCountedOrder) transactions += 1;
   }

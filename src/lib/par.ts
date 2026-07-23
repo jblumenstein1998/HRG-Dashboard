@@ -106,8 +106,15 @@ async function soapPost(service: string, action: string, body: string, locationT
 
 export type PAROrder = {
   netSales:   number;
-  closedHour: number | null; // local hour 0-23, null if ClosedTime missing
-  closedMinutes: number | null; // minutes since local midnight, null if ClosedTime missing
+  // Hour/minute-of-day this order was OPENED, not closed — verified against
+  // PAR's own back-office "Sales and Labor Report by Hour": it buckets orders
+  // by OpenedTime, and an order that opens right before an hour boundary but
+  // doesn't close/pay until just after it (routine for anything that takes
+  // more than a few seconds to ring up) lands in the earlier hour there, not
+  // the later one ClosedTime would suggest. Matching that convention here is
+  // what makes our hourly numbers reconcile with PAR's own report.
+  openedHour: number | null; // local hour 0-23, null if OpenedTime missing
+  openedMinutes: number | null; // minutes since local midnight, null if OpenedTime missing
   isRefund:   boolean;
   // PAR's own "does this count as a transaction" flag (Order.Count, always 0 or 1).
   // Some closed $0 orders have Count=0 (not real transactions — duplicates/corrections)
@@ -172,11 +179,11 @@ function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
     const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
     const isRefund      = tagVal(top, "IsRefund") === "true";
     const isCountedOrder = tagVal(top, "Count") === "1";
-    const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
-    const dtStr         = tagVal(closedTimeXml, "DateTime");
-    const closedMinutes = dtStr ? zonedMinutesOfDay(new Date(dtStr), timeZone) : null;
-    const closedHour    = closedMinutes != null ? Math.floor(closedMinutes / 60) : null;
-    return { netSales, closedHour, closedMinutes, isRefund, isCountedOrder };
+    const openedTimeXml = tagVal(top, "OpenedTime") ?? "";
+    const dtStr         = tagVal(openedTimeXml, "DateTime");
+    const openedMinutes = dtStr ? zonedMinutesOfDay(new Date(dtStr), timeZone) : null;
+    const openedHour    = openedMinutes != null ? Math.floor(openedMinutes / 60) : null;
+    return { netSales, openedHour, openedMinutes, isRefund, isCountedOrder };
   });
 }
 
