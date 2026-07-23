@@ -207,9 +207,10 @@ export const getClockedIn = tool({
 export const getDriveThru = tool({
   description:
     "Gets drive-thru lane performance for a store over a given time range: overall lane total time " +
-    "(order to pickup), pre-menu queue time, window service time (all as MM:SS), total cars, and a " +
-    "peak vs. non-peak breakdown. Use this for questions about drive-thru, lane times, or speed of service. " +
-    "Supports either a preset rangeKey (ytd, p4, last_week, ...) or a custom startDate/endDate for arbitrary date ranges.",
+    "(order to pickup), pre-menu queue time, window service time (all as MM:SS), total cars, flagged " +
+    "pull-forward car count, and a peak vs. non-peak breakdown. Use this for questions about drive-thru, " +
+    "lane times, speed of service, or flagged/pulled-forward cars. Supports either a preset rangeKey " +
+    "(ytd, p4, last_week, ...) or a custom startDate/endDate for arbitrary date ranges.",
   inputSchema: z.object({ storeName: storeNameSchema, ...dateRangeSchema }),
   execute: async ({ storeName, rangeKey, startDate, endDate }) => {
     const store = resolveStore(storeName);
