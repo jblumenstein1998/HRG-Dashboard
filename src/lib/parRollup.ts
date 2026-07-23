@@ -251,6 +251,60 @@ export async function getWindowTotals(
   return { netSales, orderCount, laborMinutes };
 }
 
+export type HourBucket = {
+  hour: number; // 0-23, local to the store
+  label: string; // e.g. "11:00 AM–12:00 PM"
+  netSales: number;
+  orderCount: number;
+  laborHours: number;
+};
+
+function fmtHourRange(h: number): string {
+  const fmt = (hh: number) => {
+    const h12 = hh % 12 === 0 ? 12 : hh % 12;
+    return `${h12}:00 ${hh < 12 ? "AM" : "PM"}`;
+  };
+  return `${fmt(h)}–${fmt((h + 1) % 24)}`;
+}
+
+// All 24 one-hour buckets for a single store/day in one order+shift fetch —
+// for reconciling against Brink's own hourly sales report (PAR's back-office
+// portal), which is what this exists for: getWindowTotals fetches fresh on
+// every call, so computing 24 buckets by calling it 24 times would mean 24
+// separate live PAR round-trips for "today". This fetches once and buckets
+// in memory instead.
+export async function getHourlyBreakdown(storeId: string, businessDate: string): Promise<HourBucket[]> {
+  const isToday = businessDate === todayCentralISO();
+  const [orders, shifts] = await Promise.all([
+    (isToday ? getOrdersLive(storeId, businessDate) : getOrders(storeId, businessDate)).catch(() => []),
+    (isToday ? getShiftsLive(storeId, businessDate) : getShifts(storeId, businessDate)).catch(() => []),
+  ]);
+
+  return Array.from({ length: 24 }, (_, hour) => {
+    const startMinutes = hour * 60;
+    const endMinutes = startMinutes + 60;
+
+    const hourOrders = orders.filter(
+      (o) => o.closedMinutes != null && o.closedMinutes >= startMinutes && o.closedMinutes < endMinutes
+    );
+    const netSales = hourOrders.reduce((sum, o) => sum + o.netSales, 0);
+    const orderCount = hourOrders.filter((o) => o.isCountedOrder).length;
+
+    const laborMinutes = shifts.reduce((sum, s) => {
+      const overlap = Math.min(s.endMinutes, endMinutes) - Math.max(s.startMinutes, startMinutes);
+      return sum + Math.max(0, overlap);
+    }, 0);
+
+    return {
+      hour,
+      label: fmtHourRange(hour),
+      netSales: Math.round(netSales * 100) / 100,
+      orderCount,
+      laborHours: Math.round((laborMinutes / 60) * 100) / 100,
+    };
+  });
+}
+
 // Latest business_date already rolled up for a store (drives incremental backfill).
 export async function getLastRolledUpDate(storeId: string): Promise<string | null> {
   const rows = await sql`
