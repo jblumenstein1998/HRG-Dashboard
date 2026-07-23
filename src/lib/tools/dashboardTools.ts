@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { listResolvedStores, resolveStore } from "./storeResolver";
-import { resolveToolDateRange, resolveSupersetTimeRange } from "./dateRange";
+import { resolveToolDateRange, resolveSupersetTimeRange, todayCentralISO } from "./dateRange";
 import { getPriorYearRange } from "@/lib/fiscal";
 import {
   getNetSalesForRange,
@@ -9,6 +9,7 @@ import {
   getLaborHoursForRange,
   getAvgOrderValueForRange,
 } from "@/lib/parRollup";
+import { getShiftsLive } from "@/lib/par";
 import { fetchLocationReport } from "@/lib/netchef";
 import { getDriveThruMetrics, warmStandardRanges, ChartFetchError } from "@/lib/berryData";
 import { getBerryAuth } from "@/lib/auth";
@@ -182,6 +183,26 @@ export const getProductivity = tool({
   },
 });
 
+export const getClockedIn = tool({
+  description:
+    "Gets how many employees are currently clocked in (still working, not yet clocked out) at a store " +
+    "right now, along with today's labor hours so far. This is live data as of the moment it's called, " +
+    "not a historical range — use this for \"how many people are clocked in\", \"who's working right now\", " +
+    "or \"current staffing\" questions. Not available for past dates.",
+  inputSchema: z.object({ storeName: storeNameSchema }),
+  execute: async ({ storeName }) => {
+    const store = resolveStore(storeName);
+    if (!store) return storeNotFound(storeName);
+
+    const today = todayCentralISO();
+    const shifts = await getShiftsLive(store.storeId, today);
+    const clockedIn = shifts.filter(s => s.isOpen).length;
+    const laborHours = Math.round((shifts.reduce((sum, s) => sum + s.minutesWorked, 0) / 60) * 100) / 100;
+
+    return { store: store.name, clockedIn, laborHoursToday: laborHours, asOf: new Date().toISOString() };
+  },
+});
+
 export const getDriveThru = tool({
   description:
     "Gets drive-thru lane performance for a store over a given time range: overall lane total time " +
@@ -265,6 +286,7 @@ export const dashboardTools = {
   getLaborHours,
   getAvgOrderValue,
   getProductivity,
+  getClockedIn,
   getFoodCostMetrics,
   getDriveThru,
 };

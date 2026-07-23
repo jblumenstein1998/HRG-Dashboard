@@ -392,6 +392,434 @@ function WeeklyBreakdown({ daily, rangeStart, rangeEnd, metric }: { daily: PARDa
   );
 }
 
+// ── Net sales / transactions / average check comp tables ──────────────────────
+// Yesterday, WTD, PTD, YTD figures per store, each with a same-weekday
+// prior-year comparison — see @/lib/netSalesComp for the range/shift logic.
+// All "to date" ranges resolve through yesterday (no live today data), same
+// convention as the Drive-Thru page. Types are duplicated (not imported) from
+// @/lib/netSalesComp on purpose: that module pulls in the Postgres client at
+// module scope, which must never end up in a client bundle.
+
+type RangeField = "yesterday" | "wtd" | "ptd" | "ytd";
+type MetricFigure = { value: number; prior: number; compPct: number | null };
+type StoreMetricComp = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, MetricFigure>;
+
+const COMP_RANGE_COLS: { field: RangeField; label: string }[] = [
+  { field: "yesterday", label: "Yesterday" },
+  { field: "wtd", label: "WTD" },
+  { field: "ptd", label: "PTD" },
+  { field: "ytd", label: "YTD" },
+];
+
+function derivedCompPct(value: number, prior: number): number | null {
+  return prior === 0 ? null : ((value - prior) / prior) * 100;
+}
+
+function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure {
+  const value = stores.reduce((s, r) => s + r[field].value, 0);
+  const prior = stores.reduce((s, r) => s + r[field].prior, 0);
+  return { value, prior, compPct: derivedCompPct(value, prior) };
+}
+
+function fmtCompPct(pct: number | null): string {
+  if (pct == null) return "—";
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+}
+function compColor(pct: number | null): string {
+  if (pct == null) return "text-gray-400";
+  return pct >= 0 ? "text-green-600" : "text-red-600";
+}
+
+function useMetricComp(endpoint: string) {
+  const [stores, setStores] = useState<StoreMetricComp[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(() => {
+    setLoading(true);
+    fetch(endpoint)
+      .then(r => r.json())
+      .then(d => setStores(d.stores ?? []))
+      .catch(err => console.error(`[PAR] ${endpoint} fetch failed`, err))
+      .finally(() => setLoading(false));
+  }, [endpoint]);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { stores, loading, refetch };
+}
+
+function MetricFigureCell({ figure, fmt }: { figure: MetricFigure; fmt: (v: number) => string }) {
+  return (
+    <td className="px-2 py-1 text-right tabular-nums text-xs whitespace-nowrap">
+      <span className="font-semibold text-gray-900">{fmt(figure.value)}</span>
+      <span className="text-gray-400"> / </span>
+      <span className="text-gray-500">{fmt(figure.prior)}</span>
+      <span className={`ml-1.5 font-medium ${compColor(figure.compPct)}`}>{fmtCompPct(figure.compPct)}</span>
+    </td>
+  );
+}
+
+function MetricCompTable({
+  title, stores, loading, showVA, showTN, fmt,
+}: {
+  title: string;
+  stores: StoreMetricComp[];
+  loading: boolean;
+  showVA: boolean;
+  showTN: boolean;
+  fmt: (v: number) => string;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const tnStores = stores.filter(s => s.state === "TN");
+  const vaStores = stores.filter(s => s.state === "VA");
+  const groups = [
+    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+  ];
+  const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+        <CopyableTitle title={title} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            {COMP_RANGE_COLS.map(c => (
+              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {stores.length === 0 && loading ? (
+            <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+          ) : (
+            <>
+              {groups.map(group => (
+                <Fragment key={group.label}>
+                  {group.stores.map(s => (
+                    <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
+                        {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
+                      </td>
+                      {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={s[c.field]} fmt={fmt} />)}
+                    </tr>
+                  ))}
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
+                    {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={sumFigures(group.stores, c.field)} fmt={fmt} />)}
+                  </tr>
+                </Fragment>
+              ))}
+              <tr className="bg-gray-100 border-t-2 border-gray-200">
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={sumFigures(hrgStores, c.field)} fmt={fmt} />)}
+              </tr>
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Average check comp table ──────────────────────────────────────────────────
+// Average check can't be summed like net sales/transactions — a group's
+// average check is (group net sales / group transactions), not the average of
+// its stores' individual average checks — so this fetches the raw net-sales
+// and transaction components and derives a correctly-weighted average check at
+// whatever grouping level is being rendered (store, state, or company-wide).
+
+type AvgCheckRaw = { netSalesTY: number; netSalesLY: number; txTY: number; txLY: number };
+type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, AvgCheckRaw>;
+
+function deriveAvgCheckFigure(raw: AvgCheckRaw): MetricFigure {
+  const value = raw.txTY > 0 ? raw.netSalesTY / raw.txTY : 0;
+  const prior = raw.txLY > 0 ? raw.netSalesLY / raw.txLY : 0;
+  return { value, prior, compPct: derivedCompPct(value, prior) };
+}
+
+function sumAvgCheckRaw(stores: StoreAvgCheckRaw[], field: RangeField): AvgCheckRaw {
+  return {
+    netSalesTY: stores.reduce((s, r) => s + r[field].netSalesTY, 0),
+    netSalesLY: stores.reduce((s, r) => s + r[field].netSalesLY, 0),
+    txTY: stores.reduce((s, r) => s + r[field].txTY, 0),
+    txLY: stores.reduce((s, r) => s + r[field].txLY, 0),
+  };
+}
+
+function useAvgCheckComp() {
+  const [stores, setStores] = useState<StoreAvgCheckRaw[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(() => {
+    setLoading(true);
+    fetch("/api/par/avg-check-comp")
+      .then(r => r.json())
+      .then(d => setStores(d.stores ?? []))
+      .catch(err => console.error("[PAR] avg-check-comp fetch failed", err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { stores, loading, refetch };
+}
+
+function AvgCheckCompTable({
+  stores, loading, showVA, showTN,
+}: {
+  stores: StoreAvgCheckRaw[];
+  loading: boolean;
+  showVA: boolean;
+  showTN: boolean;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const tnStores = stores.filter(s => s.state === "TN");
+  const vaStores = stores.filter(s => s.state === "VA");
+  const groups = [
+    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+  ];
+  const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+        <CopyableTitle title="Average Check" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            {COMP_RANGE_COLS.map(c => (
+              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {stores.length === 0 && loading ? (
+            <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+          ) : (
+            <>
+              {groups.map(group => (
+                <Fragment key={group.label}>
+                  {group.stores.map(s => (
+                    <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
+                        {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
+                      </td>
+                      {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={deriveAvgCheckFigure(s[c.field])} fmt={fmtProductivity} />)}
+                    </tr>
+                  ))}
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
+                    {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={deriveAvgCheckFigure(sumAvgCheckRaw(group.stores, c.field))} fmt={fmtProductivity} />)}
+                  </tr>
+                </Fragment>
+              ))}
+              <tr className="bg-gray-100 border-t-2 border-gray-200">
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={deriveAvgCheckFigure(sumAvgCheckRaw(hrgStores, c.field))} fmt={fmtProductivity} />)}
+              </tr>
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Today vs. same-time-last-year (live) ───────────────────────────────────────
+// Unlike the tables above (which read the Postgres daily rollup and stop at
+// yesterday), this one hits PAR's live order API directly on every load/refresh
+// for both today and the corresponding date last year — so it's slower, but it
+// reflects sales-so-far vs. last year's sales through that exact same clock
+// time (not last year's full day). See @/lib/todayVsLastYear for the cutoff
+// logic. Types are duplicated (not imported) from that module for the same
+// reason as the tables above: it pulls in server-only PAR/cache internals that
+// must never end up in a client bundle.
+
+type TodayRaw = {
+  storeId: string; name: string; state: "TN" | "VA";
+  netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number; clockedInTY: number;
+};
+
+function deriveNetSalesFigure(r: TodayRaw): MetricFigure {
+  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.netSalesTY, r.netSalesLY) };
+}
+function deriveTxFigure(r: TodayRaw): MetricFigure {
+  return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.txTY, r.txLY) };
+}
+function deriveTodayAvgCheckFigure(r: TodayRaw): MetricFigure {
+  const value = r.txTY > 0 ? r.netSalesTY / r.txTY : 0;
+  const prior = r.txLY > 0 ? r.netSalesLY / r.txLY : 0;
+  return { value, prior, compPct: derivedCompPct(value, prior) };
+}
+// SPLH is today-only, as-of-refresh — no prior-year comparison.
+function deriveSplh(r: TodayRaw): number | null {
+  return r.laborHoursTY > 0 ? r.netSalesTY / r.laborHoursTY : null;
+}
+function sumTodayRaw(stores: TodayRaw[]): TodayRaw {
+  return {
+    storeId: "", name: "", state: "TN",
+    netSalesTY: stores.reduce((s, r) => s + r.netSalesTY, 0),
+    netSalesLY: stores.reduce((s, r) => s + r.netSalesLY, 0),
+    txTY: stores.reduce((s, r) => s + r.txTY, 0),
+    txLY: stores.reduce((s, r) => s + r.txLY, 0),
+    laborHoursTY: stores.reduce((s, r) => s + r.laborHoursTY, 0),
+    clockedInTY: stores.reduce((s, r) => s + r.clockedInTY, 0),
+  };
+}
+
+const TODAY_METRIC_COLS: { key: string; label: string; fmt: (v: number) => string; derive: (r: TodayRaw) => MetricFigure }[] = [
+  { key: "netSales", label: "Net Sales", fmt: fmtDollars, derive: deriveNetSalesFigure },
+  { key: "transactions", label: "Transactions", fmt: v => Math.round(v).toLocaleString(), derive: deriveTxFigure },
+  { key: "avgCheck", label: "Average Check", fmt: fmtProductivity, derive: deriveTodayAvgCheckFigure },
+];
+
+function SimpleFigureCell({ value, fmt }: { value: number | null; fmt: (v: number) => string }) {
+  return (
+    <td className="px-2 py-1 text-right tabular-nums text-xs whitespace-nowrap">
+      <span className="font-semibold text-gray-900">{value != null ? fmt(value) : "—"}</span>
+    </td>
+  );
+}
+
+function useTodayVsLastYear() {
+  const [stores, setStores] = useState<TodayRaw[]>([]);
+  const [todayDate, setTodayDate] = useState("");
+  const [lastYearDate, setLastYearDate] = useState("");
+  const [asOfLabel, setAsOfLabel] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const refetch = useCallback(() => {
+    setLoading(true);
+    fetch("/api/par/today-vs-last-year")
+      .then(r => r.json())
+      .then(d => {
+        setStores(d.stores ?? []);
+        setTodayDate(d.todayDate ?? "");
+        setLastYearDate(d.lastYearDate ?? "");
+        setAsOfLabel(d.asOfLabel ?? "");
+      })
+      .catch(err => console.error("[PAR] today-vs-last-year fetch failed", err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { stores, todayDate, lastYearDate, asOfLabel, loading, refetch };
+}
+
+function TodayVsLastYearTable({
+  stores, loading, showVA, showTN, todayDate, lastYearDate, asOfLabel,
+}: {
+  stores: TodayRaw[];
+  loading: boolean;
+  showVA: boolean;
+  showTN: boolean;
+  todayDate: string;
+  lastYearDate: string;
+  asOfLabel: string;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const tnStores = stores.filter(s => s.state === "TN");
+  const vaStores = stores.filter(s => s.state === "VA");
+  const groups = [
+    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+  ];
+  const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+        <CopyableTitle title="Today vs Last Year" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {loading
+          ? <span className="text-xs text-gray-400 animate-pulse">Loading (live PAR pull, may take a bit)…</span>
+          : (todayDate && lastYearDate) && (
+              <span className="text-xs text-gray-500">
+                {todayDate} vs {lastYearDate}, both through {asOfLabel}
+              </span>
+            )
+        }
+      </div>
+      <table className="w-full table-fixed">
+        <colgroup>
+          <col className="w-[16%]" />
+          <col className="w-[20%]" />
+          <col className="w-[20%]" />
+          <col className="w-[20%]" />
+          <col className="w-[14%]" />
+          <col className="w-[10%]" />
+        </colgroup>
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            {TODAY_METRIC_COLS.map(c => (
+              <th key={c.key} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
+              </th>
+            ))}
+            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              Productivity
+            </th>
+            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              Clocked In
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {stores.length === 0 && loading ? (
+            <tr><td colSpan={6} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+          ) : (
+            <>
+              {groups.map(group => (
+                <Fragment key={group.label}>
+                  {group.stores.map(s => (
+                    <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
+                        {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
+                      </td>
+                      {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(s)} fmt={c.fmt} />)}
+                      <SimpleFigureCell value={deriveSplh(s)} fmt={fmtProductivity} />
+                      <SimpleFigureCell value={s.clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
+                    </tr>
+                  ))}
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
+                    {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumTodayRaw(group.stores))} fmt={c.fmt} />)}
+                    <SimpleFigureCell value={deriveSplh(sumTodayRaw(group.stores))} fmt={fmtProductivity} />
+                    <SimpleFigureCell value={sumTodayRaw(group.stores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
+                  </tr>
+                </Fragment>
+              ))}
+              <tr className="bg-gray-100 border-t-2 border-gray-200">
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumTodayRaw(hrgStores))} fmt={c.fmt} />)}
+                <SimpleFigureCell value={deriveSplh(sumTodayRaw(hrgStores))} fmt={fmtProductivity} />
+                <SimpleFigureCell value={sumTodayRaw(hrgStores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
+              </tr>
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function PARClient({ locations }: { locations: PARLocation[] }) {
@@ -401,6 +829,10 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
   const [showTN, setShowTN] = useState(true);
   const [mode, setMode] = useState<Mode>("weeks");
   const posData = usePosData(locations, mode);
+  const netSalesComp = useMetricComp("/api/par/net-sales-comp");
+  const transactionsComp = useMetricComp("/api/par/transactions-comp");
+  const avgCheckComp = useAvgCheckComp();
+  const todayVsLastYear = useTodayVsLastYear();
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -411,13 +843,18 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
       console.error("[PAR] cache refresh failed", err);
     }
     posData.refetch();
+    netSalesComp.refetch();
+    transactionsComp.refetch();
+    avgCheckComp.refetch();
+    todayVsLastYear.refetch();
     setRefreshing(false);
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <div className="sticky top-0 z-10">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
@@ -485,10 +922,31 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
           </div>
         </div>
       </div>
+      </div>
 
       {/* Main */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="dollars" {...posData} />
+        <TodayVsLastYearTable
+          stores={todayVsLastYear.stores}
+          loading={todayVsLastYear.loading}
+          showVA={showVA}
+          showTN={showTN}
+          todayDate={todayVsLastYear.todayDate}
+          lastYearDate={todayVsLastYear.lastYearDate}
+          asOfLabel={todayVsLastYear.asOfLabel}
+        />
+        <div className="mt-6">
+          <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} showVA={showVA} showTN={showTN} fmt={fmtDollars} />
+        </div>
+        <div className="mt-6">
+          <MetricCompTable title="Transactions" stores={transactionsComp.stores} loading={transactionsComp.loading} showVA={showVA} showTN={showTN} fmt={v => Math.round(v).toLocaleString()} />
+        </div>
+        <div className="mt-6">
+          <AvgCheckCompTable stores={avgCheckComp.stores} loading={avgCheckComp.loading} showVA={showVA} showTN={showTN} />
+        </div>
+        <div className="mt-6">
+          <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="dollars" {...posData} />
+        </div>
         <div className="mt-6">
           <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="count" {...posData} />
         </div>

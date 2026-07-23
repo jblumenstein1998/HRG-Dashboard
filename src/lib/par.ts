@@ -107,6 +107,7 @@ async function soapPost(service: string, action: string, body: string, locationT
 export type PAROrder = {
   netSales:   number;
   closedHour: number | null; // local hour 0-23, null if ClosedTime missing
+  closedMinutes: number | null; // minutes since local midnight, null if ClosedTime missing
   isRefund:   boolean;
   // PAR's own "does this count as a transaction" flag (Order.Count, always 0 or 1).
   // Some closed $0 orders have Count=0 (not real transactions — duplicates/corrections)
@@ -120,7 +121,47 @@ export type PARShift = {
   startMinutes: number; // minutes from midnight, local time
   endMinutes:   number;
   minutesWorked: number;
+  // True if this employee hasn't clocked out yet. PAR represents "no clock-out
+  // yet" as an EndTime whose DateTime is the sentinel 0001-01-01 — NOT a missing
+  // tag — so this can't be inferred from endDt being null.
+  isOpen: boolean;
 };
+
+// ── XML parsing (shared between cached and always-live fetchers) ────────────
+
+function parseOrdersXml(xml: string): PAROrder[] {
+  return allTags(xml, "Order").map(o => {
+    const top           = stripTag(o, "Entries"); // line items carry their own NetSales
+    const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
+    const isRefund      = tagVal(top, "IsRefund") === "true";
+    const isCountedOrder = tagVal(top, "Count") === "1";
+    const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
+    const dtStr         = tagVal(closedTimeXml, "DateTime");
+    const closedDate    = dtStr ? new Date(dtStr) : null;
+    const closedHour    = closedDate ? closedDate.getHours() : null;
+    const closedMinutes = closedDate ? closedDate.getHours() * 60 + closedDate.getMinutes() : null;
+    return { netSales, closedHour, closedMinutes, isRefund, isCountedOrder };
+  });
+}
+
+function parseShiftsXml(xml: string): PARShift[] {
+  return allTags(xml, "Shift").map(s => {
+    const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
+    const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
+    const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
+    const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
+    // Sentinel "no value" date PAR uses for an EndTime that hasn't happened yet.
+    const isOpen  = !endDt || endDt.startsWith("0001-01-01");
+    const toMins  = (dt: string | null) => {
+      if (!dt) return null;
+      const d = new Date(dt);
+      return d.getHours() * 60 + d.getMinutes();
+    };
+    const startMinutes = toMins(startDt) ?? 0;
+    const endMinutes   = isOpen ? Math.min(startMinutes + minutesWorked, 1440) : (toMins(endDt) ?? Math.min(startMinutes + minutesWorked, 1440));
+    return { startMinutes, endMinutes, minutesWorked, isOpen };
+  });
+}
 
 // ── Fetch functions ───────────────────────────────────────────────────────────
 
@@ -133,17 +174,7 @@ export const getOrders = unstable_cache(
       `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
       token,
     );
-
-    return allTags(xml, "Order").map(o => {
-      const top           = stripTag(o, "Entries"); // line items carry their own NetSales
-      const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
-      const isRefund      = tagVal(top, "IsRefund") === "true";
-      const isCountedOrder = tagVal(top, "Count") === "1";
-      const closedTimeXml = tagVal(top, "ClosedTime") ?? "";
-      const dtStr         = tagVal(closedTimeXml, "DateTime");
-      const closedHour    = dtStr ? new Date(dtStr).getHours() : null;
-      return { netSales, closedHour, isRefund, isCountedOrder };
-    });
+    return parseOrdersXml(xml);
   },
   ["par-orders"],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
@@ -158,25 +189,37 @@ export const getShifts = unstable_cache(
       `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
       token,
     );
-
-    return allTags(xml, "Shift").map(s => {
-      const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
-      const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
-      const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
-      const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
-      const toMins  = (dt: string | null) => {
-        if (!dt) return null;
-        const d = new Date(dt);
-        return d.getHours() * 60 + d.getMinutes();
-      };
-      const startMinutes = toMins(startDt) ?? 0;
-      const endMinutes   = toMins(endDt)   ?? Math.min(startMinutes + minutesWorked, 1440);
-      return { startMinutes, endMinutes, minutesWorked };
-    });
+    return parseShiftsXml(xml);
   },
   ["par-shifts"],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
+
+// Uncached variants — used by the live "Today vs Last Year" table, which needs
+// to reflect PAR's numbers at the exact moment of each refresh (today's order
+// count and open shifts' worked-minutes keep changing minute to minute), not
+// whatever happened to be sitting in the 1hr shared cache.
+export async function getOrdersLive(storeId: string, businessDate: string): Promise<PAROrder[]> {
+  const token = getLocationToken(storeId);
+  const xml = await soapPost(
+    "Sales2.svc",
+    "http://www.brinksoftware.com/webservices/sales/v2/ISalesWebService2/GetOrders",
+    `<GetOrders xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate><ExcludeOpenOrders>true</ExcludeOpenOrders></request></GetOrders>`,
+    token,
+  );
+  return parseOrdersXml(xml);
+}
+
+export async function getShiftsLive(storeId: string, businessDate: string): Promise<PARShift[]> {
+  const token = getLocationToken(storeId);
+  const xml = await soapPost(
+    "Labor2.svc",
+    "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
+    `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
+    token,
+  );
+  return parseShiftsXml(xml);
+}
 
 // ── Date utilities ────────────────────────────────────────────────────────────
 

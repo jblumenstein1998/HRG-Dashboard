@@ -1,6 +1,6 @@
 import { resolveRange, type RangeKey } from "@/lib/fiscal";
 
-function todayCentralISO(): string {
+export function todayCentralISO(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
     year: "numeric",
