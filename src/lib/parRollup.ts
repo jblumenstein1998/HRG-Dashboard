@@ -1,5 +1,5 @@
 import { sql } from "@/lib/db";
-import { PAR_LOCATIONS, getOrders, getShifts, dateRange } from "@/lib/par";
+import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange } from "@/lib/par";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
 // Used both to write the rollup (backfillStoreDay) and to compute today's
@@ -216,9 +216,17 @@ export async function getWindowTotals(
   startMinutes: number,
   endMinutes: number,
 ): Promise<WindowTotals> {
+  // A closed/past day is safe to read from the 1hr-cached fetchers (nothing
+  // about it changes anymore), but "today" must bypass that cache entirely —
+  // the whole point of a same-day hourly query is to reflect orders that
+  // closed minutes ago, and a stale cache entry from earlier in the day (e.g.
+  // fetched at 11:05am and not due to refresh for another 55 minutes) would
+  // silently show a near-empty lunch instead of what's actually happened
+  // since. See getOrdersLive/getShiftsLive's own doc comment in par.ts.
+  const isToday = businessDate === todayCentralISO();
   const [orders, shifts] = await Promise.all([
-    getOrders(storeId, businessDate).catch(() => []),
-    getShifts(storeId, businessDate).catch(() => []),
+    (isToday ? getOrdersLive(storeId, businessDate) : getOrders(storeId, businessDate)).catch(() => []),
+    (isToday ? getShiftsLive(storeId, businessDate) : getShifts(storeId, businessDate)).catch(() => []),
   ]);
 
   // Same isCountedOrder distinction computeDayTotals uses above — orders.length
