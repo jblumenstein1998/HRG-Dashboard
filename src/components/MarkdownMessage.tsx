@@ -10,15 +10,20 @@ const components: Components = {
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   code: ({ children }) => <code className="bg-black/5 rounded px-1 py-0.5 text-xs">{children}</code>,
   table: ({ children }) => (
-    <div className="overflow-x-auto mb-1.5 -mx-1">
-      <table className="text-xs border-collapse">{children}</table>
+    <div className="overflow-x-auto mb-1.5 rounded-lg border border-gray-200 bg-white">
+      <table className="text-xs border-collapse w-full">{children}</table>
     </div>
   ),
-  thead: ({ children }) => <thead>{children}</thead>,
+  thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+  tbody: ({ children }) => <tbody className="[&>tr:nth-child(even)]:bg-gray-50/60">{children}</tbody>,
   th: ({ children }) => (
-    <th className="border border-gray-300 px-2 py-1 bg-gray-50 text-left font-medium whitespace-nowrap">{children}</th>
+    <th className="px-2.5 py-1.5 text-left font-semibold text-gray-600 whitespace-nowrap border-b border-gray-200">
+      {children}
+    </th>
   ),
-  td: ({ children }) => <td className="border border-gray-300 px-2 py-1 whitespace-nowrap">{children}</td>,
+  td: ({ children }) => (
+    <td className="px-2.5 py-1.5 whitespace-nowrap tabular-nums border-b border-gray-100">{children}</td>
+  ),
 };
 
 export default function MarkdownMessage({ text }: { text: string }) {

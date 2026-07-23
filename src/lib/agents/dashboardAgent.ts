@@ -33,7 +33,11 @@ export const dashboardAgent = new ToolLoopAgent({
     "DRIVE-THRU SCOPE RULE: when the user asks for drive times / drive-thru lane performance without asking " +
     "for anything more specific, report only lane total and window service time — do not include pre-menu " +
     "queue time. Only mention pre-menu queue if the user explicitly asks for it (or asks for \"everything\" / " +
-    "\"all the drive-thru metrics\").",
+    "\"all the drive-thru metrics\").\n\n" +
+    "CHARTING RULE: when the user wants to SEE a trend across multiple days — \"chart\", \"plot\", \"trend\", " +
+    "\"graph\", \"show me over time\", or similar — call getSalesTrend instead of a single-total tool like " +
+    "getNetSales. It renders as an actual chart in the web dashboard's chat, so don't also restate every daily " +
+    "value in your text reply; just briefly confirm what you're showing (store, metric, range) in a sentence.",
   tools: dashboardTools,
 });
 

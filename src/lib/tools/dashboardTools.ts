@@ -9,6 +9,7 @@ import {
   getLaborHoursForRange,
   getAvgOrderValueForRange,
   getWindowTotals,
+  getDailyRowsForRange,
 } from "@/lib/parRollup";
 import { getShiftsLive } from "@/lib/par";
 import { fetchLocationReport } from "@/lib/netchef";
@@ -381,6 +382,49 @@ export const getHourlyMetrics = tool({
   },
 });
 
+const TREND_METRICS = ["netSales", "transactions", "avgTicket", "laborHours", "splh", "tplh"] as const;
+
+export const getSalesTrend = tool({
+  description:
+    "Gets a day-by-day trend (one data point per day) for a store over a date range, for the user to SEE as a " +
+    "chart — e.g. \"chart Hillcrest's sales trend this month\", \"show me Brentwood's labor hours over the last " +
+    "2 weeks\", \"plot Columbia's productivity trend\". Use this instead of getNetSales/getProductivity/etc. " +
+    "whenever the user wants to visualize how a metric moved across multiple days, not just get one total for " +
+    "a range. Each day's point includes net sales, transactions, average ticket, labor hours, SPLH, and TPLH. " +
+    "Set metric to whichever one the user is asking to see (defaults to netSales if unspecified). Supports " +
+    "either a preset rangeKey (ytd, p4, last_week, ...) or a custom startDate/endDate for arbitrary ranges — " +
+    "a multi-day range is expected here, a single day won't make a useful chart.",
+  inputSchema: z.object({
+    storeName: storeNameSchema,
+    metric: z.enum(TREND_METRICS).optional().describe(
+      "Which metric to chart: netSales, transactions, avgTicket, laborHours, splh, or tplh. Defaults to netSales."
+    ),
+    rangeKey: dateRangeSchema.rangeKey,
+    startDate: dateRangeSchema.startDate,
+    endDate: dateRangeSchema.endDate,
+  }),
+  execute: async ({ storeName, metric, rangeKey, startDate, endDate }) => {
+    const store = resolveStore(storeName);
+    if (!store) return storeNotFound(storeName);
+    const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
+    if ("error" in bounds) return bounds;
+    const { start, end, label } = bounds;
+
+    const daily = await getDailyRowsForRange(store.storeId, start, end);
+    const points = daily.map(d => ({
+      date: d.date,
+      netSales: d.netSales,
+      transactions: d.transactions,
+      avgTicket: d.avgTicket,
+      laborHours: d.laborHours,
+      splh: d.laborHours > 0 ? Math.round((d.netSales / d.laborHours) * 100) / 100 : null,
+      tplh: d.laborHours > 0 ? Math.round((d.transactions / d.laborHours) * 100) / 100 : null,
+    }));
+
+    return { store: store.name, range: label, metric: metric ?? "netSales", points };
+  },
+});
+
 export const dashboardTools = {
   listStores,
   getNetSales,
@@ -391,4 +435,5 @@ export const dashboardTools = {
   getFoodCostMetrics,
   getDriveThru,
   getHourlyMetrics,
+  getSalesTrend,
 };
