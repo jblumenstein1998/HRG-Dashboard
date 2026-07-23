@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, type RefObject } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
-import { groupBranches, getStoreLabel } from "@/lib/stores";
+import { groupBranches, getStoreLabel, getStoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { TOTAL_TIME_TIERS, WINDOW_TIME_TIERS, fmtGoalSecs, goalColor, lookupMetric } from "@/lib/salesTierGoals";
 
@@ -44,6 +44,8 @@ export default function DashboardClient() {
   const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
   const [driveThruLabel, setDriveThruLabel] = useState("");
   const [salesLabel, setSalesLabel] = useState("");
+  const [showVA, setShowVA] = useState(true);
+  const [showTN, setShowTN] = useState(true);
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -116,18 +118,23 @@ export default function DashboardClient() {
       .catch(err => console.error("[DriveThru] sales-tier fetch failed", err));
   }, [rangeKey]);
 
+  const visibleBranches = branches.filter(b => {
+    const section = getStoreSection(b);
+    return (section === "Virginia" && showVA) || (section === "Tennessee" && showTN);
+  });
+
   // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
   useEffect(() => {
     if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; }
-    if (dataLoading || branches.length === 0) { setRevealedCount(0); return; }
+    if (dataLoading || visibleBranches.length === 0) { setRevealedCount(0); return; }
     let count = 0;
     revealTimer.current = setInterval(() => {
       count++;
       setRevealedCount(count);
-      if (count >= branches.length) { clearInterval(revealTimer.current!); revealTimer.current = null; }
+      if (count >= visibleBranches.length) { clearInterval(revealTimer.current!); revealTimer.current = null; }
     }, 60);
     return () => { if (revealTimer.current) { clearInterval(revealTimer.current); revealTimer.current = null; } };
-  }, [dataLoading, branches.length]);
+  }, [dataLoading, visibleBranches.length]);
 
   function handleRangeChange(key: RangeKey) {
     setRangeKey(key);
@@ -301,20 +308,32 @@ export default function DashboardClient() {
               {driveThruLabel && salesLabel && <span className="text-gray-300">·</span>}
               {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
             </div>
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
-              {(["summary", "daypart"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setViewMode(mode)}
-                  className={`text-xs px-3 py-1.5 transition ${
-                    viewMode === mode
-                      ? "bg-gray-800 text-white font-medium"
-                      : "bg-white text-gray-600 hover:bg-gray-50"
-                  }`}
-                >
-                  {mode === "summary" ? "Summary" : "By Daypart"}
-                </button>
-              ))}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={showVA} onChange={e => setShowVA(e.target.checked)} className="rounded border-gray-300" />
+                  VA
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
+                  TN
+                </label>
+              </div>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
+                {(["summary", "daypart"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
+                    className={`text-xs px-3 py-1.5 transition ${
+                      viewMode === mode
+                        ? "bg-gray-800 text-white font-medium"
+                        : "bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    {mode === "summary" ? "Summary" : "By Daypart"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -330,7 +349,7 @@ export default function DashboardClient() {
         )}
 
         <SalesTierTable
-          branches={branches}
+          branches={visibleBranches}
           getMetrics={getMetrics}
           loading={dataLoading || branchesLoading}
           salesByStoreId={salesByStoreId}
@@ -357,11 +376,11 @@ export default function DashboardClient() {
               </div>
             )}
 
-            {!branchesLoading && branches.length > 0 && (() => {
+            {!branchesLoading && visibleBranches.length > 0 && (() => {
               let gIdx = 0;
               return (
                 <div className="flex flex-col gap-8">
-                  {groupBranches(branches).map(({ section, branches: sectionBranches }) =>
+                  {groupBranches(visibleBranches).map(({ section, branches: sectionBranches }) =>
                     sectionBranches.length > 0 ? (
                       <div key={section}>
                         <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
@@ -391,7 +410,7 @@ export default function DashboardClient() {
               );
             })()}
 
-            {!branchesLoading && branches.length === 0 && !error && (
+            {!branchesLoading && visibleBranches.length === 0 && !error && (
               <div className="text-center py-20 text-gray-400">
                 <p className="text-lg font-medium">No locations found</p>
               </div>
@@ -399,7 +418,7 @@ export default function DashboardClient() {
           </div>
         </div>
 
-        <DriveThruTrendCharts branches={branches} />
+        <DriveThruTrendCharts branches={visibleBranches} />
       </main>
     </div>
   );
@@ -452,8 +471,7 @@ function SalesTierTable({
             if (tb == null) return -1;
             return ta - tb;
           }),
-      }))
-      .filter(t => t.branches.length > 0);
+      }));
   }
 
   const totalTimeTiered = buildTiers(TOTAL_TIME_TIERS, "lane_total");
@@ -464,20 +482,20 @@ function SalesTierTable({
       <div ref={gridRef} className="flex flex-col sm:flex-row items-start gap-6">
         {totalTimeTiered.length > 0 && (
           <div className="flex-1 min-w-0 w-full">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2">Total Time</h3>
+            <CopyableTitle title="Total Time" targetRef={gridRef} className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2" heightBufferPx={40} />
             <div className="flex flex-wrap items-start gap-4">
               {totalTimeTiered.map(tier => (
-                <SalesTierCard key={`lane_total-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
+                <SalesTierCard key={`lane_total-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} />
               ))}
             </div>
           </div>
         )}
         {windowTimeTiered.length > 0 && (
           <div className="flex-1 min-w-0 w-full">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2">Window Time</h3>
+            <CopyableTitle title="Window Time" targetRef={gridRef} className="text-xs font-bold uppercase tracking-widest text-gray-700 mb-2" heightBufferPx={40} />
             <div className="flex flex-wrap items-start gap-4">
               {windowTimeTiered.map(tier => (
-                <SalesTierCard key={`window_service-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} copyTargetRef={gridRef} />
+                <SalesTierCard key={`window_service-${tier.label}`} tier={tier} getMetrics={getMetrics} salesByStoreId={salesByStoreId} productivityByStoreId={productivityByStoreId} />
               ))}
             </div>
           </div>
@@ -492,18 +510,16 @@ function SalesTierCard({
   getMetrics,
   salesByStoreId,
   productivityByStoreId,
-  copyTargetRef,
 }: {
   tier: { label: string; metricField: "lane_total" | "window_service"; greenMax: number; yellowMax: number; branches: BranchStore[] };
   getMetrics: (b: BranchStore) => StoreMetrics | null;
   salesByStoreId: Record<string, number>;
   productivityByStoreId: Record<string, number | null>;
-  copyTargetRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div className="w-[calc(50%-8px)] bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
-        <CopyableTitle title={tier.label} targetRef={copyTargetRef} className="text-sm font-bold uppercase tracking-widest text-gray-900" heightBufferPx={40} />
+        <p className="text-sm font-bold uppercase tracking-widest text-gray-900">{tier.label}</p>
         <p className="text-xs text-gray-600 mt-0.5">
           Goal: <span className="text-green-600 font-semibold">≤{fmtGoalSecs(tier.greenMax)}</span>
           {" · "}
@@ -511,6 +527,9 @@ function SalesTierCard({
         </p>
       </div>
       <div className="divide-y divide-gray-50">
+        {tier.branches.length === 0 && (
+          <div className="px-4 py-3 text-[13px] text-gray-400">No stores</div>
+        )}
         {tier.branches.map(branch => {
           const m = getMetrics(branch);
           const sales = lookupMetric(branch, m, salesByStoreId);
