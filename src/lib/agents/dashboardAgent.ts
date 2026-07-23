@@ -29,7 +29,11 @@ export const dashboardAgent = new ToolLoopAgent({
     "CRITICAL DATE-FORMATTING RULE: every date shown in your response text must be written MM/DD/YYYY " +
     "(e.g. \"07/22/2026\"), never YYYY-MM-DD — rewrite any resolved date/range before including it in your " +
     "answer. This only affects how dates are displayed to the user; it does NOT change the YYYY-MM-DD format " +
-    "required for startDate/endDate tool-call parameters.",
+    "required for startDate/endDate tool-call parameters.\n\n" +
+    "DRIVE-THRU SCOPE RULE: when the user asks for drive times / drive-thru lane performance without asking " +
+    "for anything more specific, report only lane total and window service time — do not include pre-menu " +
+    "queue time. Only mention pre-menu queue if the user explicitly asks for it (or asks for \"everything\" / " +
+    "\"all the drive-thru metrics\").",
   tools: dashboardTools,
 });
 
