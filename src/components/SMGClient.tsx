@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { SMG_TREND_DATA, SMG_METRICS, SMG_STORES, type SmgMetricKey, type SmgWeekPoint } from "@/lib/smgTrendData";
 import { SMG_TREND_DATA_MONTHLY } from "@/lib/smgTrendDataMonthly";
+import { SMG_TREND_DATA_VA_MONTHLY, SMG_STORES_VA } from "@/lib/smgTrendDataVA";
 import { CopyableTitle } from "@/components/CopyImageButton";
 
 // Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
@@ -14,6 +15,15 @@ const STORE_COLOR: Record<string, string> = {
   "White House":  "#16a34a",
   "Brentwood":    "#d97706",
   "Spring Hill":  "#7c3aed",
+};
+const STORE_COLOR_VA: Record<string, string> = {
+  "College":    "#0891b2",
+  "Hampton":    "#dc2626",
+  "Oyster":     "#7c3aed",
+  "Chesapeake": "#16a34a",
+  "Jefferson":  "#d97706",
+  "Hillcrest":  "#db2777",
+  "Beach":      "#2563eb",
 };
 const COMBINED_COLOR = "#374151";
 
@@ -81,9 +91,16 @@ function SmgTooltip({ active, payload, label, isPercentByName }: {
   );
 }
 
-function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; points: SmgWeekPoint[]; yAxisMin?: number; yAxisMax?: number }) {
+function SmgTrendChart({ title, points, stores, storeColors, yAxisMin, yAxisMax }: {
+  title: string;
+  points: SmgWeekPoint[];
+  stores: readonly string[];
+  storeColors: Record<string, string>;
+  yAxisMin?: number;
+  yAxisMax?: number;
+}) {
   const [activeMetrics, setActiveMetrics] = useState<Set<SmgMetricKey>>(new Set(["overall"]));
-  const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set(SMG_STORES));
+  const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set(stores));
   const [showCombined, setShowCombined] = useState(true);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -91,7 +108,7 @@ function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; p
   const multiMetric = selectedMetrics.length > 1;
   const isPercent = selectedMetrics.length > 0 ? selectedMetrics.every(m => m.isPercent) : true;
 
-  const seriesNames = [...SMG_STORES, "Combined"];
+  const seriesNames = [...stores, "Combined"];
 
   let visibleMin = Infinity;
   let visibleMax = -Infinity;
@@ -148,9 +165,9 @@ function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; p
     });
   };
 
-  const allSeriesChecked = visibleStores.size === SMG_STORES.length && showCombined;
+  const allSeriesChecked = visibleStores.size === stores.length && showCombined;
   const toggleAllSeries = (checked: boolean) => {
-    setVisibleStores(checked ? new Set(SMG_STORES) : new Set());
+    setVisibleStores(checked ? new Set(stores) : new Set());
     setShowCombined(checked);
   };
 
@@ -158,10 +175,10 @@ function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; p
 
   type LineSpec = { key: string; store: string; metric: SmgMetricKey; name: string; color: string };
   const lineSpecs: LineSpec[] = [];
-  SMG_STORES.forEach(name => {
+  stores.forEach(name => {
     if (!visibleStores.has(name)) return;
     selectedMetrics.forEach(m => {
-      lineSpecs.push({ key: `${name}-${m.key}`, store: name, metric: m.key, name: lineName(name, m.label), color: STORE_COLOR[name] });
+      lineSpecs.push({ key: `${name}-${m.key}`, store: name, metric: m.key, name: lineName(name, m.label), color: storeColors[name] });
     });
   });
   if (showCombined) {
@@ -238,13 +255,13 @@ function SmgTrendChart({ title, points, yAxisMin, yAxisMax }: { title: string; p
           />
           All
         </label>
-        {SMG_STORES.map(name => (
+        {stores.map(name => (
           <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={visibleStores.has(name)}
               onChange={() => toggleStore(name)}
-              style={{ accentColor: STORE_COLOR[name] }}
+              style={{ accentColor: storeColors[name] }}
               className="rounded border-gray-300"
             />
             {name}
@@ -304,8 +321,9 @@ export default function SMGClient() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
-        <SmgTrendChart title="SMG Trend — by Store — Weekly" points={SMG_TREND_DATA} />
-        <SmgTrendChart title="SMG Trend — by Store — Monthly" points={SMG_TREND_DATA_MONTHLY} yAxisMin={40} yAxisMax={100} />
+        <SmgTrendChart title="SMG Trend — by Store — Weekly" points={SMG_TREND_DATA} stores={SMG_STORES} storeColors={STORE_COLOR} />
+        <SmgTrendChart title="SMG Trend — by Store — Monthly" points={SMG_TREND_DATA_MONTHLY} stores={SMG_STORES} storeColors={STORE_COLOR} yAxisMin={40} yAxisMax={100} />
+        <SmgTrendChart title="SMG Trend — VA — Monthly" points={SMG_TREND_DATA_VA_MONTHLY} stores={SMG_STORES_VA} storeColors={STORE_COLOR_VA} yAxisMin={40} yAxisMax={100} />
       </main>
     </div>
   );
