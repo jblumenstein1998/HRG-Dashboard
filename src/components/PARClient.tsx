@@ -832,6 +832,95 @@ function TodayVsLastYearTable({
   );
 }
 
+// ── VA period net sales comp (P4/P5/P6, store + market summary) ───────────────
+// Fixed to VA only, per request — not gated by the showVA/showTN toggle above.
+
+type StorePeriodNetSales = { storeId: string; name: string; state: "TN" | "VA"; periods: Record<number, MetricFigure> };
+
+function periodColLabel(periodNum: number): string {
+  const p = PERIODS.find(x => x.period === periodNum);
+  return p ? periodLabel(p) : `P${periodNum}`;
+}
+
+function sumPeriodFigures(stores: StorePeriodNetSales[], periodNum: number): MetricFigure {
+  const value = stores.reduce((s, r) => s + (r.periods[periodNum]?.value ?? 0), 0);
+  const prior = stores.reduce((s, r) => s + (r.periods[periodNum]?.prior ?? 0), 0);
+  return { value, prior, compPct: derivedCompPct(value, prior) };
+}
+
+function usePeriodNetSalesComp(periodNums: number[]) {
+  const [stores, setStores] = useState<StorePeriodNetSales[]>([]);
+  const [loading, setLoading] = useState(true);
+  const periodsKey = periodNums.join(",");
+
+  const refetch = useCallback(() => {
+    setLoading(true);
+    fetch(`/api/par/period-net-sales-comp?periods=${periodsKey}`)
+      .then(r => r.json())
+      .then(d => setStores(d.stores ?? []))
+      .catch(err => console.error("[PAR] period-net-sales-comp fetch failed", err))
+      .finally(() => setLoading(false));
+  }, [periodsKey]);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  return { stores, loading, refetch };
+}
+
+function PeriodNetSalesTable({
+  stores, loading, periodNums,
+}: {
+  stores: StorePeriodNetSales[];
+  loading: boolean;
+  periodNums: number[];
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const vaStores = stores.filter(s => s.state === "VA").sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+        <CopyableTitle title="VA Net Sales — P4/P5/P6" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            {periodNums.map(n => (
+              <th key={n} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+                {periodColLabel(n)} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {vaStores.length === 0 && loading ? (
+            <tr><td colSpan={periodNums.length + 1} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+          ) : (
+            <>
+              {vaStores.map(s => (
+                <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                  <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
+                  {periodNums.map(n => (
+                    <MetricFigureCell key={n} figure={s.periods[n] ?? { value: 0, prior: 0, compPct: null }} fmt={fmtDollars} />
+                  ))}
+                </tr>
+              ))}
+              <tr className="bg-gray-100 border-t-2 border-gray-200">
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">VA Total</td>
+                {periodNums.map(n => (
+                  <MetricFigureCell key={n} figure={sumPeriodFigures(vaStores, n)} fmt={fmtDollars} />
+                ))}
+              </tr>
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function PARClient({ locations }: { locations: PARLocation[] }) {
@@ -845,6 +934,7 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
   const transactionsComp = useMetricComp("/api/par/transactions-comp");
   const avgCheckComp = useAvgCheckComp();
   const todayVsLastYear = useTodayVsLastYear();
+  const periodNetSalesComp = usePeriodNetSalesComp([4, 5, 6]);
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -859,6 +949,7 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
     transactionsComp.refetch();
     avgCheckComp.refetch();
     todayVsLastYear.refetch();
+    periodNetSalesComp.refetch();
     setRefreshing(false);
   };
 
@@ -962,6 +1053,9 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
         </div>
         <div className="mt-6">
           <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="count" {...posData} />
+        </div>
+        <div className="mt-6">
+          <PeriodNetSalesTable stores={periodNetSalesComp.stores} loading={periodNetSalesComp.loading} periodNums={[4, 5, 6]} />
         </div>
       </main>
     </div>
