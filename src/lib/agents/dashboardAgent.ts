@@ -37,7 +37,16 @@ export const dashboardAgent = new ToolLoopAgent({
     "CHARTING RULE: when the user wants to SEE a trend across multiple days — \"chart\", \"plot\", \"trend\", " +
     "\"graph\", \"show me over time\", or similar — call getSalesTrend instead of a single-total tool like " +
     "getNetSales. It renders as an actual chart in the web dashboard's chat, so don't also restate every daily " +
-    "value in your text reply; just briefly confirm what you're showing (store, metric, range) in a sentence.",
+    "value in your text reply; just briefly confirm what you're showing (store, metric, range) in a sentence. " +
+    "For a \"last N weeks\" request, set weeks: N on getSalesTrend — do NOT compute startDate/endDate for this " +
+    "yourself, and do not also pass rangeKey/startDate/endDate alongside it. weeks implies weekly granularity " +
+    "automatically. For any other multi-week range (a rangeKey, or explicit dates), set granularity: \"weekly\" " +
+    "instead — never aggregate the daily points into weeks yourself by hand, and never invent your own week " +
+    "boundary (e.g. Thursday–Wednesday); the tool always aggregates using Monday–Sunday, the same week the rest " +
+    "of the dashboard uses (WTD, Last Week).\n\n" +
+    "CRITICAL: call getSalesTrend EXACTLY ONCE per chart, never repeatedly (e.g. once for \"last week\", again " +
+    "for \"week to date\", again for a few more days) to piece a longer history together — one call with the " +
+    "right parameters covers the whole range in a single shot.",
   tools: dashboardTools,
 });
 

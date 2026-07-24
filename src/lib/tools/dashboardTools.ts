@@ -10,6 +10,7 @@ import {
   getAvgOrderValueForRange,
   getWindowTotals,
   getDailyRowsForRange,
+  type PARDailyRow,
 } from "@/lib/parRollup";
 import { getShiftsLive } from "@/lib/par";
 import { fetchLocationReport } from "@/lib/netchef";
@@ -384,44 +385,132 @@ export const getHourlyMetrics = tool({
 
 const TREND_METRICS = ["netSales", "transactions", "avgTicket", "laborHours", "splh", "tplh"] as const;
 
+type TrendPoint = {
+  date: string;
+  netSales: number;
+  transactions: number;
+  avgTicket: number;
+  laborHours: number;
+  splh: number | null;
+  tplh: number | null;
+};
+
+function toTrendPoint(date: string, netSales: number, transactions: number, laborHours: number): TrendPoint {
+  return {
+    date,
+    netSales: Math.round(netSales * 100) / 100,
+    transactions,
+    avgTicket: transactions > 0 ? Math.round((netSales / transactions) * 100) / 100 : 0,
+    laborHours: Math.round(laborHours * 100) / 100,
+    splh: laborHours > 0 ? Math.round((netSales / laborHours) * 100) / 100 : null,
+    tplh: laborHours > 0 ? Math.round((transactions / laborHours) * 100) / 100 : null,
+  };
+}
+
+// Monday of the week containing this date — same week boundary as
+// getWtdRange/getLastWeekRange (fiscal.ts) elsewhere in the app. Points are
+// labeled by their week's Monday.
+function mondayOf(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const day = dt.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  dt.setDate(dt.getDate() - (day === 0 ? 6 : day - 1));
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+// Deterministic "last N weeks" range: N full Monday–Sunday weeks ending at
+// the most recently COMPLETED Sunday (today's own in-progress week, if any,
+// is excluded — e.g. if today is Thursday, this week doesn't count as one of
+// the N). Computed in code rather than asked of the model: an LLM doing this
+// date arithmetic by hand is exactly what produced a wrong-by-a-year range
+// the first time this was tried purely via startDate/endDate.
+function lastNWeeksRange(weeks: number): { start: string; end: string } {
+  const todayIso = todayCentralISO();
+  const day = new Date(`${todayIso}T00:00:00`).getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysSinceLastSunday = day === 0 ? 7 : day; // today itself is never "completed"
+  const end = addDays(todayIso, -daysSinceLastSunday);
+  const start = addDays(mondayOf(end), -7 * (weeks - 1));
+  return { start, end };
+}
+
+function aggregateWeekly(daily: PARDailyRow[]): TrendPoint[] {
+  const weeks = new Map<string, { netSales: number; transactions: number; laborMinutes: number }>();
+  for (const d of daily) {
+    const weekStart = mondayOf(d.date);
+    const acc = weeks.get(weekStart) ?? { netSales: 0, transactions: 0, laborMinutes: 0 };
+    acc.netSales += d.netSales;
+    acc.transactions += d.transactions;
+    acc.laborMinutes += d.laborHours * 60;
+    weeks.set(weekStart, acc);
+  }
+  return Array.from(weeks.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([weekStart, acc]) => toTrendPoint(weekStart, acc.netSales, acc.transactions, acc.laborMinutes / 60));
+}
+
 export const getSalesTrend = tool({
   description:
-    "Gets a day-by-day trend (one data point per day) for a store over a date range, for the user to SEE as a " +
-    "chart — e.g. \"chart Hillcrest's sales trend this month\", \"show me Brentwood's labor hours over the last " +
-    "2 weeks\", \"plot Columbia's productivity trend\". Use this instead of getNetSales/getProductivity/etc. " +
-    "whenever the user wants to visualize how a metric moved across multiple days, not just get one total for " +
-    "a range. Each day's point includes net sales, transactions, average ticket, labor hours, SPLH, and TPLH. " +
-    "Set metric to whichever one the user is asking to see (defaults to netSales if unspecified). Supports " +
-    "either a preset rangeKey (ytd, p4, last_week, ...) or a custom startDate/endDate for arbitrary ranges — " +
-    "a multi-day range is expected here, a single day won't make a useful chart.",
+    "Gets a trend for a store over a date range, for the user to SEE as a chart — e.g. \"chart Hillcrest's sales " +
+    "trend this month\", \"show me Brentwood's labor hours over the last 2 weeks\", \"plot Columbia's weekly " +
+    "productivity for the last 6 weeks\". Use this instead of getNetSales/getProductivity/etc. whenever the user " +
+    "wants to visualize how a metric moved over time, not just get one total for a range. " +
+    "For a \"last N weeks\" request, set weeks: N instead of computing startDate/endDate yourself — this is " +
+    "computed correctly in code (N full Monday–Sunday weeks ending at the most recently completed Sunday), " +
+    "which you cannot reliably do by hand; setting weeks also implies weekly granularity automatically. " +
+    "For any other multi-week range, or when the user just says \"weekly\"/\"by week\" for a range you already " +
+    "have from a rangeKey or explicit dates, set granularity: \"weekly\" instead — never sum/average the daily " +
+    "figures into weeks yourself, and never invent a week boundary other than Monday–Sunday (the same one the " +
+    "dashboard's own WTD/Last Week use). " +
+    "Each point includes net sales, transactions, average ticket, labor hours, SPLH, and TPLH (weekly points are " +
+    "the real sum/weighted-average for that week, not an average of daily values). Set metric to whichever one " +
+    "the user is asking to see (defaults to netSales if unspecified). Call this tool EXACTLY ONCE per chart.",
   inputSchema: z.object({
     storeName: storeNameSchema,
     metric: z.enum(TREND_METRICS).optional().describe(
       "Which metric to chart: netSales, transactions, avgTicket, laborHours, splh, or tplh. Defaults to netSales."
     ),
+    granularity: z.enum(["daily", "weekly"]).optional().describe(
+      "\"daily\" (default) for one point per day, or \"weekly\" to aggregate into Monday–Sunday weekly totals " +
+      "— use weekly whenever the user says \"weekly\", \"by week\", \"each week\", or asks for a range spanning " +
+      "several weeks where daily points would be too noisy to read. Implied automatically when weeks is set."
+    ),
+    weeks: z.number().int().positive().optional().describe(
+      "Shortcut for a \"last N weeks\" request: number of most-recently-completed Monday–Sunday weeks to " +
+      "include, ending at the most recent completed Sunday. Use this INSTEAD of rangeKey/startDate/endDate for " +
+      "\"last N weeks\" — do not also set those. Implies weekly granularity unless you override it."
+    ),
     rangeKey: dateRangeSchema.rangeKey,
     startDate: dateRangeSchema.startDate,
     endDate: dateRangeSchema.endDate,
   }),
-  execute: async ({ storeName, metric, rangeKey, startDate, endDate }) => {
+  execute: async ({ storeName, metric, granularity, weeks, rangeKey, startDate, endDate }) => {
     const store = resolveStore(storeName);
     if (!store) return storeNotFound(storeName);
-    const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
-    if ("error" in bounds) return bounds;
-    const { start, end, label } = bounds;
 
+    let start: string, end: string, label: string;
+    if (weeks != null) {
+      ({ start, end } = lastNWeeksRange(weeks));
+      label = `Last ${weeks} week${weeks === 1 ? "" : "s"} (${start} to ${end})`;
+    } else {
+      const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
+      if ("error" in bounds) return bounds;
+      ({ start, end, label } = bounds);
+    }
+
+    const effectiveGranularity = granularity ?? (weeks != null ? "weekly" : "daily");
     const daily = await getDailyRowsForRange(store.storeId, start, end);
-    const points = daily.map(d => ({
-      date: d.date,
-      netSales: d.netSales,
-      transactions: d.transactions,
-      avgTicket: d.avgTicket,
-      laborHours: d.laborHours,
-      splh: d.laborHours > 0 ? Math.round((d.netSales / d.laborHours) * 100) / 100 : null,
-      tplh: d.laborHours > 0 ? Math.round((d.transactions / d.laborHours) * 100) / 100 : null,
-    }));
+    const points =
+      effectiveGranularity === "weekly"
+        ? aggregateWeekly(daily)
+        : daily.map(d => toTrendPoint(d.date, d.netSales, d.transactions, d.laborHours));
 
-    return { store: store.name, range: label, metric: metric ?? "netSales", points };
+    return { store: store.name, range: label, metric: metric ?? "netSales", granularity: effectiveGranularity, points };
   },
 });
 

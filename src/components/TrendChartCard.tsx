@@ -34,15 +34,18 @@ export default function TrendChartCard({
   store,
   range,
   metric,
+  granularity,
   points,
 }: {
   store: string;
   range: string;
   metric: string;
+  granularity?: string;
   points: TrendPoint[];
 }) {
   const fmt = METRIC_FORMAT[metric] ?? ((v: number) => String(v));
   const label = METRIC_LABEL[metric] ?? metric;
+  const granularityLabel = granularity === "weekly" ? " (Weekly)" : "";
 
   if (points.length === 0) {
     return <div className="text-xs text-gray-400 italic">No data in range.</div>;
@@ -52,6 +55,7 @@ export default function TrendChartCard({
     <div className="bg-white rounded-lg border border-gray-200 p-2 my-1 not-prose">
       <div className="text-xs font-semibold text-gray-700">
         {store} — {label}
+        {granularityLabel}
       </div>
       <div className="text-[10px] text-gray-400 mb-1.5">{range}</div>
       <div style={{ width: "100%", height: 160 }}>

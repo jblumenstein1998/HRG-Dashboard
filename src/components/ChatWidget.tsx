@@ -161,6 +161,7 @@ export default function ChatWidget() {
                         store={output.store}
                         range={output.range}
                         metric={output.metric}
+                        granularity={output.granularity}
                         points={output.points}
                       />
                     );
