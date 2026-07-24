@@ -101,7 +101,12 @@ export default function ChatWidget() {
     <div
       className={
         "fixed bottom-5 right-5 z-50 bg-white border border-gray-200 rounded-lg shadow-xl flex flex-col " +
-        (expanded ? "w-[44rem] max-w-[calc(100vw-2.5rem)] h-[80vh]" : "w-[28rem] h-[34rem]")
+        // Below the sm breakpoint (phones), always size relative to the
+        // viewport with a consistent 20px margin — the fixed rem sizes below
+        // (28rem/44rem wide) would overflow off the left edge of a ~390px
+        // phone screen otherwise. sm: and up keeps the fixed desktop sizing.
+        "w-[calc(100vw-2.5rem)] " +
+        (expanded ? "h-[85vh] sm:w-[44rem] sm:h-[80vh]" : "h-[70vh] sm:w-[28rem] sm:h-[34rem]")
       }
     >
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
