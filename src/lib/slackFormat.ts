@@ -13,7 +13,37 @@
 // space-padded ASCII table with no pipes at all — so both shapes are detected
 // here rather than relying on the model to always pick one.
 
+import type { MetricDisplay } from "@/lib/tools/displayFormat";
+
 export type SlackBlock = { type: "section"; text: { type: "mrkdwn"; text: string } } | { type: "divider" };
+
+// ── Figures rendered from tool output, not from prose ────────────────────────
+// Numbers reach Slack through these blocks, built directly from what the tool
+// returned. The model chooses which tool runs and writes the commentary around
+// the card, but it never supplies the digits — so a figure here cannot be
+// invented, and the house formatting cannot be violated.
+
+/** Renders one tool's display block as Slack section blocks. */
+export function displayToSlackBlocks(display: MetricDisplay): SlackBlock[] {
+  const header = display.subtitle
+    ? `*${display.title}*\n_${display.subtitle}_`
+    : `*${display.title}*`;
+  const rows = display.rows.map(r => `${r.label}: *${r.value}*`).join("\n");
+
+  const blocks: SlackBlock[] = [
+    { type: "section", text: { type: "mrkdwn", text: `${header}\n${rows}` } },
+  ];
+  if (display.note) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `:warning: _${display.note}_` } });
+  }
+  return blocks;
+}
+
+/** Plain-text mirror of a card, for the notification preview and accessibility. */
+export function displayToFallbackText(display: MetricDisplay): string {
+  const rows = display.rows.map(r => `${r.label}: ${r.value}`).join(" | ");
+  return [display.title, display.subtitle, rows, display.note].filter(Boolean).join(" — ");
+}
 
 type ParsedTable = { headers: string[]; rows: string[][] };
 

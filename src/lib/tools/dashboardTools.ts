@@ -19,6 +19,7 @@ import { getDriveThruMetrics, warmStandardRanges, ChartFetchError, isClosedRange
 import { getBerryAuth } from "@/lib/auth";
 import { loginBerryService } from "@/lib/berryAuth";
 import { resolveDaypart, daypartLabel } from "@/lib/dayparts";
+import { money, money2, num2, count, pct, usRange, incompleteNote } from "./displayFormat";
 import { after } from "next/server";
 
 const rangeKeyDescription =
@@ -91,8 +92,18 @@ export const getNetSales = tool({
         }
       : {};
 
+    const note = incompleteNote(current.missingDates);
+
     if (!compareToPriorYear) {
-      return { store: store.name, range: label, start, end, netSales, ...incomplete };
+      return {
+        store: store.name, range: label, start, end, netSales, ...incomplete,
+        display: {
+          title: `${store.name} — Net Sales`,
+          subtitle: usRange(start, end),
+          rows: [{ label: "Net sales", value: money(netSales) }],
+          ...(note ? { note } : {}),
+        },
+      };
     }
 
     const prior = getPriorYearRange(start, end);
@@ -106,6 +117,16 @@ export const getNetSales = tool({
         ...(priorTotals.missingDates.length
           ? { incompleteData: true, missingDates: priorTotals.missingDates }
           : {}),
+      },
+      display: {
+        title: `${store.name} — Net Sales`,
+        subtitle: usRange(start, end),
+        rows: [
+          { label: "Net sales", value: money(netSales) },
+          { label: `Last year (${usRange(prior.start, prior.end)})`, value: money(priorNetSales) },
+          { label: "Change", value: pct(changePct(netSales, priorNetSales)) },
+        ],
+        ...(note ? { note } : {}),
       },
     };
   },
@@ -125,13 +146,31 @@ export const getLaborHours = tool({
     const { start, end, label } = bounds;
     const laborHours = await getLaborHoursForRange(store.storeId, start, end);
 
-    if (!compareToPriorYear) return { store: store.name, range: label, start, end, laborHours };
+    if (!compareToPriorYear) {
+      return {
+        store: store.name, range: label, start, end, laborHours,
+        display: {
+          title: `${store.name} — Labor Hours`,
+          subtitle: usRange(start, end),
+          rows: [{ label: "Labor hours", value: num2(laborHours) }],
+        },
+      };
+    }
 
     const prior = getPriorYearRange(start, end);
     const priorLaborHours = await getLaborHoursForRange(store.storeId, prior.start, prior.end);
     return {
       store: store.name, range: label, start, end, laborHours,
       priorYear: { start: prior.start, end: prior.end, laborHours: priorLaborHours, changePct: changePct(laborHours, priorLaborHours) },
+      display: {
+        title: `${store.name} — Labor Hours`,
+        subtitle: usRange(start, end),
+        rows: [
+          { label: "Labor hours", value: num2(laborHours) },
+          { label: `Last year (${usRange(prior.start, prior.end)})`, value: num2(priorLaborHours) },
+          { label: "Change", value: pct(changePct(laborHours, priorLaborHours)) },
+        ],
+      },
     };
   },
 });
@@ -154,7 +193,19 @@ export const getAvgOrderValue = tool({
       getOrderCountForRange(store.storeId, start, end),
     ]);
 
-    if (!compareToPriorYear) return { store: store.name, range: label, start, end, avgOrderValue, orderCount };
+    if (!compareToPriorYear) {
+      return {
+        store: store.name, range: label, start, end, avgOrderValue, orderCount,
+        display: {
+          title: `${store.name} — Average Order Value`,
+          subtitle: usRange(start, end),
+          rows: [
+            { label: "Average order value", value: money2(avgOrderValue) },
+            { label: "Orders", value: count(orderCount) },
+          ],
+        },
+      };
+    }
 
     const prior = getPriorYearRange(start, end);
     const [priorAvgOrderValue, priorOrderCount] = await Promise.all([
@@ -166,6 +217,17 @@ export const getAvgOrderValue = tool({
       priorYear: {
         start: prior.start, end: prior.end, avgOrderValue: priorAvgOrderValue, orderCount: priorOrderCount,
         changePct: changePct(avgOrderValue, priorAvgOrderValue),
+      },
+      display: {
+        title: `${store.name} — Average Order Value`,
+        subtitle: usRange(start, end),
+        rows: [
+          { label: "Average order value", value: money2(avgOrderValue) },
+          { label: "Orders", value: count(orderCount) },
+          { label: `Last year AOV (${usRange(prior.start, prior.end)})`, value: money2(priorAvgOrderValue) },
+          { label: "Last year orders", value: count(priorOrderCount) },
+          { label: "AOV change", value: pct(changePct(avgOrderValue, priorAvgOrderValue)) },
+        ],
       },
     };
   },
@@ -200,16 +262,45 @@ export const getProductivity = tool({
 
     const current = await computeSplhTplh(start, end);
 
-    if (!compareToPriorYear) return { store: store.name, range: label, start, end, ...current };
+    if (!compareToPriorYear) {
+      return {
+        store: store.name, range: label, start, end, ...current,
+        display: {
+          title: `${store.name} — Productivity`,
+          subtitle: usRange(start, end),
+          rows: [
+            { label: "SPLH", value: money2(current.splh) },
+            { label: "TPLH", value: num2(current.tplh) },
+            { label: "Net sales", value: money(current.netSales) },
+            { label: "Orders", value: count(current.orderCount) },
+            { label: "Labor hours", value: num2(current.laborHours) },
+          ],
+        },
+      };
+    }
 
     const prior = getPriorYearRange(start, end);
     const priorMetrics = await computeSplhTplh(prior.start, prior.end);
+    const splhChange = current.splh != null && priorMetrics.splh != null ? changePct(current.splh, priorMetrics.splh) : null;
+    const tplhChange = current.tplh != null && priorMetrics.tplh != null ? changePct(current.tplh, priorMetrics.tplh) : null;
     return {
       store: store.name, range: label, start, end, ...current,
       priorYear: {
         start: prior.start, end: prior.end, ...priorMetrics,
-        splhChangePct: current.splh != null && priorMetrics.splh != null ? changePct(current.splh, priorMetrics.splh) : null,
-        tplhChangePct: current.tplh != null && priorMetrics.tplh != null ? changePct(current.tplh, priorMetrics.tplh) : null,
+        splhChangePct: splhChange,
+        tplhChangePct: tplhChange,
+      },
+      display: {
+        title: `${store.name} — Productivity`,
+        subtitle: usRange(start, end),
+        rows: [
+          { label: "SPLH", value: money2(current.splh) },
+          { label: `Last year SPLH (${usRange(prior.start, prior.end)})`, value: money2(priorMetrics.splh) },
+          { label: "SPLH change", value: pct(splhChange) },
+          { label: "TPLH", value: num2(current.tplh) },
+          { label: "Last year TPLH", value: num2(priorMetrics.tplh) },
+          { label: "TPLH change", value: pct(tplhChange) },
+        ],
       },
     };
   },
@@ -231,7 +322,17 @@ export const getClockedIn = tool({
     const clockedIn = shifts.filter(s => s.isOpen).length;
     const laborHours = Math.round((shifts.reduce((sum, s) => sum + s.minutesWorked, 0) / 60) * 100) / 100;
 
-    return { store: store.name, clockedIn, laborHoursToday: laborHours, asOf: new Date().toISOString() };
+    return {
+      store: store.name, clockedIn, laborHoursToday: laborHours, asOf: new Date().toISOString(),
+      display: {
+        title: `${store.name} — Currently Clocked In`,
+        subtitle: "Live, as of now",
+        rows: [
+          { label: "Clocked in", value: count(clockedIn) },
+          { label: "Labor hours today", value: num2(laborHours) },
+        ],
+      },
+    };
   },
 });
 

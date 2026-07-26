@@ -6,6 +6,8 @@ import { DefaultChatTransport, isToolUIPart } from "ai";
 import type { DashboardAgentUIMessage } from "@/lib/agents/dashboardAgent";
 import MarkdownMessage from "./MarkdownMessage";
 import TrendChartCard from "./TrendChartCard";
+import MetricCard from "./MetricCard";
+import { getDisplay } from "@/lib/tools/displayFormat";
 
 const STORAGE_KEY = "hrg-chat-history-v1";
 // Display scrollback only — this does NOT bound what gets sent to the model.
@@ -181,6 +183,12 @@ export default function ChatWidget() {
                 }
 
                 if (isToolUIPart(part)) {
+                  // Figures render from the tool's own output rather than from
+                  // the model's text, so what's shown here cannot be invented.
+                  if (part.state === "output-available") {
+                    const display = getDisplay(part.output);
+                    if (display) return <MetricCard key={i} display={display} />;
+                  }
                   return (
                     <div key={i} className="text-xs text-gray-500 italic">
                       {part.state === "output-available" ? "looked up data" : "looking up data…"}

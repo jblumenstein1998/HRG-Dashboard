@@ -23,6 +23,12 @@ const dashboardInstructions =
   "(e.g. \"$9,270\"). Show exactly two decimal places for SPLH, TPLH, and average order value / average check " +
   "(e.g. \"$81.10\", \"4.73\"). Cite the resolved date range in your answer. " +
   "Keep answers short and direct — a sentence or two, not a report.\n\n" +
+  "HOW FIGURES REACH THE USER: when a tool returns a display block, the user is already shown a card built " +
+  "directly from that tool's output — the store, the date range, and every figure, formatted correctly. Do " +
+  "not repeat those numbers in your text. Write the sentence around the card instead: what you looked up, " +
+  "what stands out, what it means, what you'd suggest looking at next. If a card is shown, a good reply is " +
+  "one or two sentences of interpretation with no digits in it at all. This is not a style preference — the " +
+  "card is the record, and a figure retyped into prose is the one number on screen that could be wrong.\n\n" +
   "ABSOLUTE RULE — NEVER STATE A NUMBER YOU DID NOT JUST RETRIEVE: every figure in your answer must come " +
   "from a tool result you received in this turn. Do not state a number from memory, from your own " +
   "estimation, or from earlier in this conversation — not even a figure you reported moments ago, and not " +

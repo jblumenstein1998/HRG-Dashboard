@@ -4,7 +4,14 @@ import crypto from "crypto";
 import type { ModelMessage } from "ai";
 import { dashboardAgent } from "@/lib/agents/dashboardAgent";
 import { getConversation, saveConversation } from "@/lib/slackConversation";
-import { markdownToSlackBlocks, fallbackText, type SlackBlock } from "@/lib/slackFormat";
+import {
+  markdownToSlackBlocks,
+  fallbackText,
+  displayToSlackBlocks,
+  displayToFallbackText,
+  type SlackBlock,
+} from "@/lib/slackFormat";
+import { extractDisplays } from "@/lib/tools/displayFormat";
 
 // Requests older than this are rejected even with a valid signature — blocks
 // replay of a captured request (Slack's own recommended window).
@@ -56,12 +63,25 @@ async function handleMessage(channelId: string, text: string) {
     const result = await dashboardAgent.generate({ messages });
     const reply = result.text.trim() || "Sorry, I couldn't find an answer to that.";
 
+    // Every figure is rendered from what the tools returned, not from the
+    // model's prose, and the cards lead the message so the authoritative
+    // numbers are what gets read first. The model still writes the commentary
+    // underneath, but it is no longer the transport for any digit.
+    const displays = extractDisplays(result.toolResults.map(r => r.output));
+    const cards = displays.flatMap(displayToSlackBlocks);
+    const blocks: SlackBlock[] = cards.length
+      ? [...cards, { type: "divider" }, ...markdownToSlackBlocks(reply)]
+      : markdownToSlackBlocks(reply);
+
     // Save the agent's original Markdown to history (not the Slack-reformatted
     // version) so a follow-up question feeds back clean, familiar formatting
     // rather than teaching the agent to imitate its own reformatted output.
     await saveConversation(channelId, [...messages, { role: "assistant", content: reply }]);
 
-    await sendMessage(channelId, fallbackText(reply), markdownToSlackBlocks(reply));
+    const preview = displays.length
+      ? displays.map(displayToFallbackText).join(" • ")
+      : fallbackText(reply);
+    await sendMessage(channelId, preview, blocks);
   } catch (err) {
     console.error("[slack] agent error:", err);
     await sendMessage(channelId, "Sorry, something went wrong answering that — try again in a bit.");
