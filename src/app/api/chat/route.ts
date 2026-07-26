@@ -3,6 +3,7 @@ import {
   dashboardAgent,
   type DashboardAgentUIMessage,
 } from "@/lib/agents/dashboardAgent";
+import { isChatEnabled } from "@/lib/featureFlags";
 
 // The client posts its whole thread on every question. Past tool results ride
 // along with it, and they dominate the payload — getSalesTrend returns a point
@@ -49,6 +50,16 @@ function trimHistory(
 }
 
 export async function POST(request: Request) {
+  // Belt and braces alongside the layout gate: a cached page or an open tab
+  // could still post here after the widget stopped being rendered, and a
+  // request that hangs is worse than one that fails fast.
+  if (!isChatEnabled()) {
+    return new Response(
+      JSON.stringify({ error: "Chat is temporarily disabled while it's being reworked." }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   const { messages } = (await request.json()) as {
     messages: DashboardAgentUIMessage[];
   };

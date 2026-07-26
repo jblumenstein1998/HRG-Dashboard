@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
 import ChatWidgetGate from "@/components/ChatWidgetGate";
+import { isChatEnabled } from "@/lib/featureFlags";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -22,7 +23,7 @@ export default function RootLayout({
     <html lang="en" className={`${geistSans.variable} h-full`}>
       <body className="min-h-full bg-gray-50 antialiased">
         {children}
-        <ChatWidgetGate />
+        {isChatEnabled() && <ChatWidgetGate />}
       </body>
     </html>
   );
