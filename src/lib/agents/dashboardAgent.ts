@@ -2,7 +2,7 @@ import { ToolLoopAgent, InferAgentUIMessage } from "ai";
 import { dashboardTools } from "@/lib/tools/dashboardTools";
 
 export const dashboardAgent = new ToolLoopAgent({
-  model: "anthropic/claude-sonnet-5",
+  model: "anthropic/claude-opus-5",
   instructions:
     "You are HRG Dashboard's data assistant. Answer questions about net sales, labor hours, " +
     "average order value, labor productivity (SPLH/TPLH), food cost/variance, and drive-thru lane " +
