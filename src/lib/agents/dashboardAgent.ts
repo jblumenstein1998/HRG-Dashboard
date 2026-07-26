@@ -1,4 +1,4 @@
-import { ToolLoopAgent, InferAgentUIMessage } from "ai";
+import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from "ai";
 import { dashboardTools } from "@/lib/tools/dashboardTools";
 
 // Held as a module constant so the rendered system block is byte-identical on
@@ -99,13 +99,23 @@ export const dashboardAgent = new ToolLoopAgent({
     providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
   },
   tools: dashboardTools,
+  // Hard ceiling on the loop. Without an explicit value this falls back to a
+  // default of one step, and any runaway tool-calling would otherwise have no
+  // bound at all — a request that never returns is worse than one that stops
+  // early with a partial answer.
+  stopWhen: stepCountIs(10),
   // Structural guard, not a request: the first step cannot produce a final
   // answer without calling something. The prompt has told the model to always
   // call a tool from day one, and in production it still fabricated store
   // totals across several turns — an instruction the model can decline to
-  // follow is not a control. Later steps are unconstrained so it can stop.
+  // follow is not a control.
+  //
+  // Later steps must explicitly go back to "auto". Returning an empty object
+  // here is not the same as clearing the override: if "required" carries
+  // forward, the model is compelled to call a tool on every step and can never
+  // emit a final answer, which presents as the request hanging forever.
   prepareStep: ({ stepNumber }) =>
-    stepNumber === 0 ? { toolChoice: "required" } : {},
+    stepNumber === 0 ? { toolChoice: "required" } : { toolChoice: "auto" },
   // Caching fails silently — a bad prefix just means zero reads while still
   // paying the write premium. Log the split so a regression is visible in the
   // Vercel function logs rather than only in the bill.
