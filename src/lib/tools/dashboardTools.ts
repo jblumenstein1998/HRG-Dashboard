@@ -132,6 +132,110 @@ export const getNetSales = tool({
   },
 });
 
+type StoreNetSalesRow = {
+  store: string;
+  state: string;
+  netSales: number;
+  priorYearNetSales: number | null;
+  changePct: number | null;
+  missingDates: string[];
+};
+
+export const getAllStoresNetSales = tool({
+  description:
+    "Gets net sales for EVERY HRG store in a single call, with per-state (TN/VA) and company-wide totals " +
+    "already summed. Use this for any question covering more than one store: \"all stores\", \"the whole " +
+    "company\", \"which store did best\", a ranked list, or a regional summary. Never call getNetSales " +
+    "repeatedly to assemble a multi-store answer, and never add the stores up yourself — the rollups here " +
+    "are computed in code. Supports a preset rangeKey or custom startDate/endDate, plus compareToPriorYear.",
+  inputSchema: z.object({ ...dateRangeSchema }),
+  execute: async ({ rangeKey, startDate, endDate, compareToPriorYear }) => {
+    const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
+    if ("error" in bounds) return bounds;
+    const { start, end, label } = bounds;
+    const prior = compareToPriorYear ? getPriorYearRange(start, end) : null;
+
+    const rows: StoreNetSalesRow[] = await Promise.all(
+      listResolvedStores().map(async s => {
+        const [cur, pri] = await Promise.all([
+          getTotalsForRange(s.storeId, start, end),
+          prior ? getTotalsForRange(s.storeId, prior.start, prior.end) : Promise.resolve(null),
+        ]);
+        const netSales = Math.round(cur.netSales * 100) / 100;
+        const priorYearNetSales = pri ? Math.round(pri.netSales * 100) / 100 : null;
+        return {
+          store: s.name,
+          state: s.state,
+          netSales,
+          priorYearNetSales,
+          changePct: priorYearNetSales == null ? null : changePct(netSales, priorYearNetSales),
+          missingDates: cur.missingDates,
+        };
+      }),
+    );
+
+    // Summed here rather than by the model. This tool exists because a
+    // multi-store question previously meant a dozen separate calls and manual
+    // arithmetic, which is exactly where fabricated totals came from.
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const totalOf = (list: StoreNetSalesRow[]) => round2(list.reduce((t, r) => t + r.netSales, 0));
+    const priorTotalOf = (list: StoreNetSalesRow[]) =>
+      list.every(r => r.priorYearNetSales == null)
+        ? null
+        : round2(list.reduce((t, r) => t + (r.priorYearNetSales ?? 0), 0));
+
+    const states = [...new Set(rows.map(r => r.state))].sort();
+    const rollups = [
+      ...states.map(st => {
+        const list = rows.filter(r => r.state === st);
+        const netSales = totalOf(list);
+        const priorNet = priorTotalOf(list);
+        return {
+          label: st,
+          netSales,
+          priorYearNetSales: priorNet,
+          changePct: priorNet == null ? null : changePct(netSales, priorNet),
+        };
+      }),
+      (() => {
+        const netSales = totalOf(rows);
+        const priorNet = priorTotalOf(rows);
+        return {
+          label: "All stores",
+          netSales,
+          priorYearNetSales: priorNet,
+          changePct: priorNet == null ? null : changePct(netSales, priorNet),
+        };
+      })(),
+    ];
+
+    const ranked = [...rows].sort((a, b) => b.netSales - a.netSales);
+    const allMissing = [...new Set(rows.flatMap(r => r.missingDates))].sort();
+
+    return {
+      range: label, start, end,
+      stores: ranked,
+      rollups,
+      ...(allMissing.length ? { incompleteData: true, missingDates: allMissing } : {}),
+      display: {
+        title: "All Stores — Net Sales",
+        subtitle: usRange(start, end),
+        rows: [
+          ...ranked.map(r => ({
+            label: r.store,
+            value: prior ? `${money(r.netSales)}  (${pct(r.changePct)})` : money(r.netSales),
+          })),
+          ...rollups.map(r => ({
+            label: `▸ ${r.label}`,
+            value: prior ? `${money(r.netSales)}  (${pct(r.changePct)})` : money(r.netSales),
+          })),
+        ],
+        ...(incompleteNote(allMissing) ? { note: incompleteNote(allMissing) } : {}),
+      },
+    };
+  },
+});
+
 export const getLaborHours = tool({
   description:
     "Gets total labor hours worked for a store over a given time range. Supports either a preset " +
@@ -643,6 +747,7 @@ export const getSalesTrend = tool({
 export const dashboardTools = {
   listStores,
   getNetSales,
+  getAllStoresNetSales,
   getLaborHours,
   getAvgOrderValue,
   getProductivity,
