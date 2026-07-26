@@ -221,13 +221,15 @@ export const getAllStoresNetSales = tool({
         title: "All Stores — Net Sales",
         subtitle: usRange(start, end),
         rows: [
+          // pct() already parenthesises negatives per house convention — don't
+          // wrap it again or a decline renders as "((5.19%))".
           ...ranked.map(r => ({
             label: r.store,
-            value: prior ? `${money(r.netSales)}  (${pct(r.changePct)})` : money(r.netSales),
+            value: prior ? `${money(r.netSales)}   ${pct(r.changePct)}` : money(r.netSales),
           })),
           ...rollups.map(r => ({
             label: `▸ ${r.label}`,
-            value: prior ? `${money(r.netSales)}  (${pct(r.changePct)})` : money(r.netSales),
+            value: prior ? `${money(r.netSales)}   ${pct(r.changePct)}` : money(r.netSales),
           })),
         ],
         ...(incompleteNote(allMissing) ? { note: incompleteNote(allMissing) } : {}),
