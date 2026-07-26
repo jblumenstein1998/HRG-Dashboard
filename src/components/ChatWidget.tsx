@@ -8,6 +8,11 @@ import MarkdownMessage from "./MarkdownMessage";
 import TrendChartCard from "./TrendChartCard";
 
 const STORAGE_KEY = "hrg-chat-history-v1";
+// Display scrollback only — this does NOT bound what gets sent to the model.
+// The API payload is capped and stripped server-side in /api/chat, which is
+// what controls cost. Kept bounded anyway: this array is re-serialized into
+// localStorage on every message, and stored tool results (chart series) are
+// large enough to hit the ~5MB quota if left to grow forever.
 const MAX_STORED_MESSAGES = 60;
 
 export default function ChatWidget() {
