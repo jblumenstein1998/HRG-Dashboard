@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
-import ChatWidgetGate from "@/components/ChatWidgetGate";
-import { isChatEnabled } from "@/lib/featureFlags";
+// The chat widget and its /api/chat route are removed from this branch while
+// the assistant is reworked — it was hanging without returning an answer, and a
+// disabled flag still shipped the function. The full implementation lives on
+// the `chat-rework` branch; develop there and merge back when it's right.
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,7 +25,6 @@ export default function RootLayout({
     <html lang="en" className={`${geistSans.variable} h-full`}>
       <body className="min-h-full bg-gray-50 antialiased">
         {children}
-        {isChatEnabled() && <ChatWidgetGate />}
       </body>
     </html>
   );
