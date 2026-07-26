@@ -7,6 +7,7 @@ import {
   getNetSalesForRange,
   getOrderCountForRange,
   getLaborHoursForRange,
+  getTotalsForRange,
   getAvgOrderValueForRange,
   getWindowTotals,
   getDailyRowsForRange,
@@ -73,15 +74,39 @@ export const getNetSales = tool({
     const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
     if ("error" in bounds) return bounds;
     const { start, end, label } = bounds;
-    const netSales = await getNetSalesForRange(store.storeId, start, end);
+    const current = await getTotalsForRange(store.storeId, start, end);
+    const netSales = Math.round(current.netSales * 100) / 100;
 
-    if (!compareToPriorYear) return { store: store.name, range: label, start, end, netSales };
+    // Days we could neither read from the rollup nor recover from PAR. Passed to
+    // the model so an incomplete total gets labelled rather than reported as
+    // fact — a missing day used to be indistinguishable from a genuine $0.
+    const incomplete = current.missingDates.length
+      ? {
+          incompleteData: true,
+          missingDates: current.missingDates,
+          warning:
+            "No data available for the dates listed in missingDates, so netSales is lower than the " +
+            "true figure. Report this total as incomplete and name the missing dates. Do not present " +
+            "it as the store's actual sales.",
+        }
+      : {};
+
+    if (!compareToPriorYear) {
+      return { store: store.name, range: label, start, end, netSales, ...incomplete };
+    }
 
     const prior = getPriorYearRange(start, end);
-    const priorNetSales = await getNetSalesForRange(store.storeId, prior.start, prior.end);
+    const priorTotals = await getTotalsForRange(store.storeId, prior.start, prior.end);
+    const priorNetSales = Math.round(priorTotals.netSales * 100) / 100;
     return {
-      store: store.name, range: label, start, end, netSales,
-      priorYear: { start: prior.start, end: prior.end, netSales: priorNetSales, changePct: changePct(netSales, priorNetSales) },
+      store: store.name, range: label, start, end, netSales, ...incomplete,
+      priorYear: {
+        start: prior.start, end: prior.end, netSales: priorNetSales,
+        changePct: changePct(netSales, priorNetSales),
+        ...(priorTotals.missingDates.length
+          ? { incompleteData: true, missingDates: priorTotals.missingDates }
+          : {}),
+      },
     };
   },
 });

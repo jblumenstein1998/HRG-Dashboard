@@ -33,6 +33,11 @@ const dashboardInstructions =
   "what was asked, say exactly that and name what is missing — never close the gap with an approximation. " +
   "A plausible number you did not retrieve is the worst possible outcome; \"I don't have that\" is always " +
   "the better answer.\n\n" +
+  "INCOMPLETE DATA RULE: if a tool result contains incompleteData or missingDates, the figure it returned " +
+  "is lower than the true value because some days had no data at all. Never present such a total as the " +
+  "store's actual sales. Say plainly that the range is incomplete, list the missing dates, and give the " +
+  "partial figure only if you label it as covering just the days that reported. A missing day is not a " +
+  "zero-sales day — never describe it as $0.\n\n" +
   "CRITICAL NUMBER-FORMATTING RULE — apply this to every single negative number you output, with no " +
   "exceptions: a negative value is written in parentheses, NEVER with a minus sign. \"-10.54%\" is WRONG. " +
   "\"(10.54%)\" is CORRECT. This applies to every percentage and every dollar change in your response — " +
@@ -73,6 +78,13 @@ export const dashboardAgent = new ToolLoopAgent({
     providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
   },
   tools: dashboardTools,
+  // Structural guard, not a request: the first step cannot produce a final
+  // answer without calling something. The prompt has told the model to always
+  // call a tool from day one, and in production it still fabricated store
+  // totals across several turns — an instruction the model can decline to
+  // follow is not a control. Later steps are unconstrained so it can stop.
+  prepareStep: ({ stepNumber }) =>
+    stepNumber === 0 ? { toolChoice: "required" } : {},
   // Caching fails silently — a bad prefix just means zero reads while still
   // paying the write premium. Log the split so a regression is visible in the
   // Vercel function logs rather than only in the bill.

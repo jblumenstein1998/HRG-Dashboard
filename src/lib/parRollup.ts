@@ -10,12 +10,28 @@ import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, date
 
 type DayTotals = { netSales: number; orderCount: number; laborMinutes: number };
 
+type PAROrders = Awaited<ReturnType<typeof getOrders>>;
+
 async function computeDayTotals(storeId: string, businessDate: string, live = false): Promise<DayTotals> {
   const [orders, shifts] = await Promise.all([
     (live ? getOrdersLive(storeId, businessDate) : getOrders(storeId, businessDate)).catch(() => []),
     (live ? getShiftsLive(storeId, businessDate) : getShifts(storeId, businessDate)).catch(() => []),
   ]);
+  return aggregateDay(orders, shifts);
+}
 
+// Same aggregation, but lets a PAR failure throw instead of being swallowed into
+// an empty array. Used when recovering a missing day: there, "the API errored"
+// and "the store sold nothing" must not collapse to the same $0.
+async function computeDayTotalsStrict(storeId: string, businessDate: string): Promise<DayTotals> {
+  const [orders, shifts] = await Promise.all([
+    getOrdersLive(storeId, businessDate),
+    getShiftsLive(storeId, businessDate),
+  ]);
+  return aggregateDay(orders, shifts);
+}
+
+function aggregateDay(orders: PAROrders, shifts: PARShift[]): DayTotals {
   // Net sales sums every order (refunds included — they're already negative).
   // Order/transaction count must NOT use orders.length: PAR returns some closed
   // $0 orders that aren't real transactions (duplicates/corrections) alongside
@@ -95,39 +111,114 @@ function dayBefore(iso: string): string {
 
 type RangeTotals = { netSales: number; orderCount: number; laborMinutes: number };
 
-async function getRollupTotals(storeId: string, start: string, end: string): Promise<RangeTotals> {
-  const rows = await sql`
-    SELECT
-      COALESCE(SUM(net_sales), 0)     AS net_sales,
-      COALESCE(SUM(order_count), 0)   AS order_count,
-      COALESCE(SUM(labor_minutes), 0) AS labor_minutes
+const EMPTY_TOTALS: RangeTotals = { netSales: 0, orderCount: 0, laborMinutes: 0 };
+
+// A day with no rollup row and a day that genuinely rang $0 are the same number
+// once summed, so any historical gap is retried against the live PAR API rather
+// than silently contributing zero. Bounded, because a long range against a
+// stalled pipeline would otherwise fan out into hundreds of API calls.
+const MAX_LIVE_BACKFILL_DAYS = 10;
+
+export type RangeTotalsWithCoverage = RangeTotals & {
+  // Historical dates still unaccounted for after the live retry. Any total
+  // carrying entries here is under-reported and must be labelled incomplete
+  // rather than presented as fact.
+  missingDates: string[];
+};
+
+// Returns the rollup totals plus which business dates actually had a row. Reads
+// the rows instead of SUM()ing in SQL on purpose: COALESCE(SUM(...), 0) collapses
+// "no data" and "zero sales" into an indistinguishable 0, which is precisely the
+// bug this exists to prevent.
+async function getRollupTotals(
+  storeId: string,
+  start: string,
+  end: string,
+): Promise<RangeTotals & { covered: Set<string> }> {
+  const rows = (await sql`
+    SELECT business_date, net_sales, order_count, labor_minutes
     FROM par_daily_metrics
     WHERE store_id = ${storeId}
       AND business_date BETWEEN ${start} AND ${end}
-  `;
-  const row = rows[0] as { net_sales: string; order_count: string; labor_minutes: string };
-  return {
-    netSales: Number(row.net_sales),
-    orderCount: Number(row.order_count),
-    laborMinutes: Number(row.labor_minutes),
-  };
+  `) as {
+    business_date: string | Date;
+    net_sales: string;
+    order_count: string;
+    labor_minutes: string;
+  }[];
+
+  const covered = new Set<string>();
+  const totals = { ...EMPTY_TOTALS };
+  for (const row of rows) {
+    covered.add(
+      typeof row.business_date === "string"
+        ? row.business_date.slice(0, 10)
+        : row.business_date.toISOString().slice(0, 10),
+    );
+    totals.netSales += Number(row.net_sales);
+    totals.orderCount += Number(row.order_count);
+    totals.laborMinutes += Number(row.labor_minutes);
+  }
+  return { ...totals, covered };
 }
 
-async function getTotalsForRange(storeId: string, start: string, end: string): Promise<RangeTotals> {
+export async function getTotalsForRange(
+  storeId: string,
+  start: string,
+  end: string,
+): Promise<RangeTotalsWithCoverage> {
   const today = todayCentralISO();
   const includesToday = end >= today && start <= today;
   const historicalEnd = end < today ? end : dayBefore(today);
+  const hasHistorical = start <= historicalEnd;
 
   const [historical, live] = await Promise.all([
-    start <= historicalEnd ? getRollupTotals(storeId, start, historicalEnd) : Promise.resolve({ netSales: 0, orderCount: 0, laborMinutes: 0 }),
-    includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve({ netSales: 0, orderCount: 0, laborMinutes: 0 }),
+    hasHistorical
+      ? getRollupTotals(storeId, start, historicalEnd)
+      : Promise.resolve({ ...EMPTY_TOTALS, covered: new Set<string>() }),
+    includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve(EMPTY_TOTALS),
   ]);
 
-  return {
+  const totals = {
     netSales: historical.netSales + live.netSales,
     orderCount: historical.orderCount + live.orderCount,
     laborMinutes: historical.laborMinutes + live.laborMinutes,
   };
+
+  const gaps = hasHistorical
+    ? dateRange(start, historicalEnd).filter(d => !historical.covered.has(d))
+    : [];
+
+  // Nothing missing, or too much missing to recover in one request — report the
+  // gaps rather than quietly returning a short total.
+  if (gaps.length === 0 || gaps.length > MAX_LIVE_BACKFILL_DAYS) {
+    return { ...totals, missingDates: gaps };
+  }
+
+  const recovered = await Promise.all(
+    gaps.map(async date => {
+      try {
+        return { date, totals: await computeDayTotalsStrict(storeId, date) };
+      } catch {
+        // PAR unreachable for this day — leave it reported as missing rather
+        // than folding a zero into the total.
+        return { date, totals: null };
+      }
+    }),
+  );
+
+  const missingDates: string[] = [];
+  for (const day of recovered) {
+    if (!day.totals) {
+      missingDates.push(day.date);
+      continue;
+    }
+    totals.netSales += day.totals.netSales;
+    totals.orderCount += day.totals.orderCount;
+    totals.laborMinutes += day.totals.laborMinutes;
+  }
+
+  return { ...totals, missingDates };
 }
 
 export async function getNetSalesForRange(storeId: string, start: string, end: string): Promise<number> {
