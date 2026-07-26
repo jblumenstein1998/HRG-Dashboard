@@ -92,6 +92,23 @@ export function pct(n: number | null | undefined): string {
   return `+${body}`;
 }
 
+/**
+ * A percentage that is a level, not a change — a cost or variance rate. No
+ * leading + (that would read as "increased by"), but negatives still take
+ * parentheses per house convention.
+ */
+export function pctPlain(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return NO_DATA;
+  const body = Math.abs(n).toFixed(2) + "%";
+  return n < 0 ? `(${body})` : body;
+}
+
+/** Passes through a value a source already formatted (e.g. Berry's CHAR_ fields). */
+export function passthrough(v: unknown): string {
+  if (v == null || v === "") return NO_DATA;
+  return String(v);
+}
+
 /** Minutes:seconds from a raw seconds value: 154 -> "2:34". */
 export function duration(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds)) return NO_DATA;

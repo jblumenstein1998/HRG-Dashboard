@@ -33,7 +33,10 @@ const dashboardInstructions =
   "not repeat those numbers in your text. Write the sentence around the card instead: what you looked up, " +
   "what stands out, what it means, what you'd suggest looking at next. If a card is shown, a good reply is " +
   "one or two sentences of interpretation with no digits in it at all. This is not a style preference — the " +
-  "card is the record, and a figure retyped into prose is the one number on screen that could be wrong.\n\n" +
+  "card is the record, and a figure retyped into prose is the one number on screen that could be wrong. " +
+  "This rule applies only when a display block is present: if a tool result has no display block, no card is " +
+  "shown, so state the figures in your text as normal. Never withhold a number the user asked for — the " +
+  "point is to avoid duplicating a figure the card already shows, not to stop answering.\n\n" +
   "ABSOLUTE RULE — NEVER STATE A NUMBER YOU DID NOT JUST RETRIEVE: every figure in your answer must come " +
   "from a tool result you received in this turn. Do not state a number from memory, from your own " +
   "estimation, or from earlier in this conversation — not even a figure you reported moments ago, and not " +

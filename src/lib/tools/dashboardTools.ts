@@ -19,7 +19,7 @@ import { getDriveThruMetrics, warmStandardRanges, ChartFetchError, isClosedRange
 import { getBerryAuth } from "@/lib/auth";
 import { loginBerryService } from "@/lib/berryAuth";
 import { resolveDaypart, daypartLabel } from "@/lib/dayparts";
-import { money, money2, num2, count, pct, usRange, incompleteNote } from "./displayFormat";
+import { money, money2, num2, count, pct, pctPlain, passthrough, usDate, usRange, incompleteNote } from "./displayFormat";
 import { after } from "next/server";
 
 const rangeKeyDescription =
@@ -498,6 +498,18 @@ export const getDriveThru = tool({
       flaggedPullForward: storeMetrics.overall.flagged_pull_forward,
       peak: storeMetrics.peak,
       nonpeak: storeMetrics.nonpeak,
+      display: {
+        title: `${store.name} — Drive-Thru`,
+        subtitle: payload.range_label,
+        // Lane total and window service only: pre-menu queue is deliberately
+        // omitted here to match the scope rule in the system prompt. It stays
+        // in the raw result above for when the user asks for it explicitly.
+        rows: [
+          { label: "Lane total", value: passthrough(storeMetrics.overall.lane_total) },
+          { label: "Window service", value: passthrough(storeMetrics.overall.window_service) },
+          { label: "Total cars", value: passthrough(storeMetrics.overall.total_cars) },
+        ],
+      },
     };
   },
 });
@@ -520,17 +532,45 @@ export const getFoodCostMetrics = tool({
     // normal 1hr cache — same reasoning as getDriveThru's bust flag above.
     const report = await fetchLocationReport(store.ncLocationId, start, end, { bust: end >= todayCentralISO() });
 
-    if (!compareToPriorYear) return { store: store.name, range: label, start, end, ...report };
+    const foodCostRows = (r: typeof report) => [
+      { label: "Actual cost", value: pctPlain(r.actualCostPct) },
+      { label: "Actual cost $", value: money(r.actualCostDollars) },
+      { label: "Variance", value: pctPlain(r.variancePct) },
+      { label: "Variance $", value: money(r.varianceDollars) },
+    ];
+
+    if (!compareToPriorYear) {
+      return {
+        store: store.name, range: label, start, end, ...report,
+        display: {
+          title: `${store.name} — Food Cost & Variance`,
+          subtitle: usRange(start, end),
+          rows: foodCostRows(report),
+        },
+      };
+    }
 
     const prior = getPriorYearRange(start, end);
     const priorReport = await fetchLocationReport(store.ncLocationId, prior.start, prior.end);
+    const varianceChangePts = report.variancePct != null && priorReport.variancePct != null
+      ? Math.round((report.variancePct - priorReport.variancePct) * 100) / 100
+      : null;
     return {
       store: store.name, range: label, start, end, ...report,
       priorYear: {
         start: prior.start, end: prior.end, ...priorReport,
-        variancePctChangePts: report.variancePct != null && priorReport.variancePct != null
-          ? Math.round((report.variancePct - priorReport.variancePct) * 100) / 100
-          : null,
+        variancePctChangePts: varianceChangePts,
+      },
+      display: {
+        title: `${store.name} — Food Cost & Variance`,
+        subtitle: usRange(start, end),
+        rows: [
+          ...foodCostRows(report),
+          { label: `Last year variance (${usRange(prior.start, prior.end)})`, value: pctPlain(priorReport.variancePct) },
+          // Percentage points, not a percent change — a variance moving from
+          // 2% to 3% is +1.00 pts, not +50%.
+          { label: "Variance change (pts)", value: varianceChangePts == null ? "—" : pct(varianceChangePts) },
+        ],
       },
     };
   },
@@ -599,16 +639,29 @@ export const getHourlyMetrics = tool({
     const splh = laborHours > 0 ? Math.round((netSales / laborHours) * 100) / 100 : null;
     const tplh = laborHours > 0 ? Math.round((orderCount / laborHours) * 100) / 100 : null;
 
+    const roundedNetSales = Math.round(netSales * 100) / 100;
     return {
       store: store.name,
       businessDate,
       window: windowLabel,
-      netSales: Math.round(netSales * 100) / 100,
+      netSales: roundedNetSales,
       orderCount,
       avgOrderValue,
       laborHours,
       splh,
       tplh,
+      display: {
+        title: `${store.name} — ${windowLabel}`,
+        subtitle: usDate(businessDate),
+        rows: [
+          { label: "Net sales", value: money(roundedNetSales) },
+          { label: "Orders", value: count(orderCount) },
+          { label: "Average order value", value: money2(avgOrderValue) },
+          { label: "Labor hours", value: num2(laborHours) },
+          { label: "SPLH", value: money2(splh) },
+          { label: "TPLH", value: num2(tplh) },
+        ],
+      },
     };
   },
 });
