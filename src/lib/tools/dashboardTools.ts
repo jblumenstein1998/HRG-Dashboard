@@ -132,6 +132,72 @@ export const getNetSales = tool({
   },
 });
 
+// ── Generalised metric query ─────────────────────────────────────────────────
+// The single-purpose tools each answer one question about one store. Anything
+// outside that shape — several metrics at once, a subset of stores, a ranking,
+// a breakdown by state or by week — had no tool that could express it, which
+// left the model with only two options: decline, or invent. This exists so that
+// "cut it this way" is always expressible.
+//
+// It deliberately routes through getTotalsForRange / getDailyRowsForRange rather
+// than querying par_daily_metrics directly, so it inherits the live-today merge,
+// the missing-day recovery, and the counted-order rules instead of quietly
+// bypassing them.
+
+const METRIC_KEYS = ["netSales", "orders", "avgOrderValue", "laborHours", "splh", "tplh"] as const;
+type MetricKey = (typeof METRIC_KEYS)[number];
+
+const METRIC_LABEL: Record<MetricKey, string> = {
+  netSales: "Net sales",
+  orders: "Orders",
+  avgOrderValue: "Avg order",
+  laborHours: "Labor hrs",
+  splh: "SPLH",
+  tplh: "TPLH",
+};
+
+const METRIC_FORMAT: Record<MetricKey, (n: number | null) => string> = {
+  netSales: money,
+  orders: count,
+  avgOrderValue: money2,
+  laborHours: num2,
+  splh: money2,
+  tplh: num2,
+};
+
+type BaseTotals = { netSales: number; orderCount: number; laborHours: number };
+
+function deriveMetric(key: MetricKey, t: BaseTotals): number | null {
+  switch (key) {
+    case "netSales": return Math.round(t.netSales * 100) / 100;
+    case "orders": return t.orderCount;
+    case "laborHours": return Math.round(t.laborHours * 100) / 100;
+    // Derived from the summed bases, never by averaging per-row averages —
+    // averaging an average across stores or days silently mis-weights it.
+    case "avgOrderValue": return t.orderCount > 0 ? Math.round((t.netSales / t.orderCount) * 100) / 100 : null;
+    case "splh": return t.laborHours > 0 ? Math.round((t.netSales / t.laborHours) * 100) / 100 : null;
+    case "tplh": return t.laborHours > 0 ? Math.round((t.orderCount / t.laborHours) * 100) / 100 : null;
+  }
+}
+
+function addTotals(a: BaseTotals, b: BaseTotals): BaseTotals {
+  return {
+    netSales: a.netSales + b.netSales,
+    orderCount: a.orderCount + b.orderCount,
+    laborHours: a.laborHours + b.laborHours,
+  };
+}
+
+const ZERO_TOTALS: BaseTotals = { netSales: 0, orderCount: 0, laborHours: 0 };
+
+/** Monday-start week key, matching the week boundary the rest of the dashboard uses. */
+function weekStart(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  const dow = (d.getDay() + 6) % 7; // Monday = 0
+  d.setDate(d.getDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
+
 type StoreNetSalesRow = {
   store: string;
   state: string;
@@ -140,6 +206,179 @@ type StoreNetSalesRow = {
   changePct: number | null;
   missingDates: string[];
 };
+
+export const queryMetrics = tool({
+  description:
+    "The flexible way to pull sales and labor data: any combination of metrics, any set of stores, grouped " +
+    "however the question needs. Use this whenever the question involves more than one metric, more than one " +
+    "store, a ranking, or a breakdown — \"net sales and SPLH for the VA stores last week\", \"rank every store " +
+    "by average order value\", \"labor hours by week for Columbia this period\", \"how did TN do vs VA\". " +
+    "Prefer this over calling a single-store tool repeatedly, and never total the results yourself: the " +
+    "totals row is computed in code. Available metrics: netSales, orders, avgOrderValue, laborHours, splh, " +
+    "tplh. compareToPriorYear works with groupBy store, state or total (not with day or week — for a time " +
+    "series across periods use getSalesTrend, which draws a chart).",
+  inputSchema: z.object({
+    metrics: z.array(z.enum(METRIC_KEYS)).min(1).describe(
+      "Which metrics to return, in the order they should appear as columns."
+    ),
+    stores: z.array(storeNameSchema).optional().describe(
+      "Limit to these stores. Omit for all 12."
+    ),
+    groupBy: z.enum(["store", "state", "day", "week", "total"]).optional().describe(
+      "One row per store (default), per state, per day, per Monday-start week, or a single combined row."
+    ),
+    sortBy: z.enum(METRIC_KEYS).optional().describe(
+      "Sort rows by this metric, highest first. Defaults to the order of the grouping (stores by first metric, time ascending)."
+    ),
+    limit: z.number().int().positive().optional().describe("Keep only the first N rows after sorting, e.g. for a top-5."),
+    ...dateRangeSchema,
+  }),
+  execute: async ({ metrics, stores, groupBy, sortBy, limit, rangeKey, startDate, endDate, compareToPriorYear }) => {
+    const bounds = resolveToolDateRange({ rangeKey, startDate, endDate });
+    if ("error" in bounds) return bounds;
+    const { start, end, label } = bounds;
+
+    const selected = stores?.length
+      ? stores.map(n => resolveStore(n)).filter((s): s is NonNullable<typeof s> => s != null)
+      : listResolvedStores();
+    if (stores?.length && selected.length !== stores.length) {
+      const unknown = stores.filter(n => !resolveStore(n));
+      return storeNotFound(unknown[0]);
+    }
+    if (!selected.length) return { error: "No matching stores." };
+
+    const grouping = groupBy ?? "store";
+    const byTime = grouping === "day" || grouping === "week";
+    if (byTime && compareToPriorYear) {
+      return { error: "compareToPriorYear is not supported with groupBy day or week. Drop the comparison, or use getSalesTrend for a time series." };
+    }
+
+    const missing = new Set<string>();
+
+    // Rows keyed by whatever dimension was asked for.
+    const buckets = new Map<string, BaseTotals>();
+    const priorBuckets = new Map<string, BaseTotals>();
+    const prior = compareToPriorYear ? getPriorYearRange(start, end) : null;
+
+    if (byTime) {
+      const perStore = await Promise.all(
+        selected.map(s => getDailyRowsForRange(s.storeId, start, end)),
+      );
+      for (const rows of perStore) {
+        for (const row of rows) {
+          const key = grouping === "day" ? row.date : weekStart(row.date);
+          buckets.set(
+            key,
+            addTotals(buckets.get(key) ?? ZERO_TOTALS, {
+              netSales: row.netSales,
+              orderCount: row.transactions,
+              laborHours: row.laborHours,
+            }),
+          );
+        }
+      }
+    } else {
+      const perStore = await Promise.all(
+        selected.map(async s => {
+          const [cur, pri] = await Promise.all([
+            getTotalsForRange(s.storeId, start, end),
+            prior ? getTotalsForRange(s.storeId, prior.start, prior.end) : Promise.resolve(null),
+          ]);
+          for (const d of cur.missingDates) missing.add(d);
+          return { store: s, cur, pri };
+        }),
+      );
+      for (const { store, cur, pri } of perStore) {
+        const key = grouping === "store" ? store.name : grouping === "state" ? store.state : "All stores";
+        const asBase = (t: { netSales: number; orderCount: number; laborMinutes: number }) => ({
+          netSales: t.netSales, orderCount: t.orderCount, laborHours: t.laborMinutes / 60,
+        });
+        buckets.set(key, addTotals(buckets.get(key) ?? ZERO_TOTALS, asBase(cur)));
+        if (pri) priorBuckets.set(key, addTotals(priorBuckets.get(key) ?? ZERO_TOTALS, asBase(pri)));
+      }
+    }
+
+    let keys = [...buckets.keys()];
+    if (byTime) keys.sort();
+    else if (sortBy) {
+      keys.sort((a, b) => (deriveMetric(sortBy, buckets.get(b)!) ?? -Infinity) - (deriveMetric(sortBy, buckets.get(a)!) ?? -Infinity));
+    } else {
+      keys.sort((a, b) => (deriveMetric(metrics[0], buckets.get(b)!) ?? -Infinity) - (deriveMetric(metrics[0], buckets.get(a)!) ?? -Infinity));
+    }
+    if (limit) keys = keys.slice(0, limit);
+
+    const dimensionLabel =
+      grouping === "store" ? "Store" : grouping === "state" ? "State" :
+      grouping === "day" ? "Date" : grouping === "week" ? "Week of" : "";
+
+    const data = keys.map(k => {
+      const t = buckets.get(k)!;
+      const p = priorBuckets.get(k);
+      return {
+        group: k,
+        ...Object.fromEntries(metrics.map(m => [m, deriveMetric(m, t)])),
+        ...(p ? { priorYear: Object.fromEntries(metrics.map(m => [m, deriveMetric(m, p)])) } : {}),
+      };
+    });
+
+    // Totals computed here, never by the model.
+    const grandTotal = keys.reduce((acc, k) => addTotals(acc, buckets.get(k)!), ZERO_TOTALS);
+    const priorGrandTotal = prior ? keys.reduce((acc, k) => addTotals(acc, priorBuckets.get(k) ?? ZERO_TOTALS), ZERO_TOTALS) : null;
+    const showTotals = keys.length > 1;
+
+    const cell = (m: MetricKey, t: BaseTotals) => METRIC_FORMAT[m](deriveMetric(m, t));
+    const columns = [
+      dimensionLabel,
+      ...metrics.map(m => METRIC_LABEL[m]),
+      ...(prior ? metrics.map(m => `${METRIC_LABEL[m]} Δ`) : []),
+    ];
+    const tableRows = keys.map(k => {
+      const t = buckets.get(k)!;
+      const p = priorBuckets.get(k);
+      return [
+        grouping === "day" || grouping === "week" ? usDate(k) : k,
+        ...metrics.map(m => cell(m, t)),
+        ...(prior
+          ? metrics.map(m => {
+              const cur = deriveMetric(m, t);
+              const pv = p ? deriveMetric(m, p) : null;
+              return cur == null || pv == null ? "—" : pct(changePct(cur, pv));
+            })
+          : []),
+      ];
+    });
+    if (showTotals) {
+      tableRows.push([
+        "Total",
+        ...metrics.map(m => cell(m, grandTotal)),
+        ...(prior && priorGrandTotal
+          ? metrics.map(m => {
+              const cur = deriveMetric(m, grandTotal);
+              const pv = deriveMetric(m, priorGrandTotal);
+              return cur == null || pv == null ? "—" : pct(changePct(cur, pv));
+            })
+          : []),
+      ]);
+    }
+
+    const missingDates = [...missing].sort();
+    return {
+      range: label, start, end, groupBy: grouping, metrics,
+      rows: data,
+      ...(missingDates.length ? { incompleteData: true, missingDates } : {}),
+      display: {
+        title: metrics.map(m => METRIC_LABEL[m]).join(", ") + (grouping === "total" ? "" : ` by ${dimensionLabel.toLowerCase()}`),
+        subtitle: usRange(start, end) + (selected.length < listResolvedStores().length ? ` · ${selected.map(s => s.name).join(", ")}` : ""),
+        table: {
+          columns,
+          rows: tableRows,
+          ...(showTotals ? { totalsFromIndex: tableRows.length - 1 } : {}),
+        },
+        ...(incompleteNote(missingDates) ? { note: incompleteNote(missingDates) } : {}),
+      },
+    };
+  },
+});
 
 export const getAllStoresNetSales = tool({
   description:
@@ -801,6 +1040,7 @@ export const getSalesTrend = tool({
 
 export const dashboardTools = {
   listStores,
+  queryMetrics,
   getNetSales,
   getAllStoresNetSales,
   getLaborHours,

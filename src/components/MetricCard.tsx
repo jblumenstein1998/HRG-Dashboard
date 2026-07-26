@@ -1,6 +1,61 @@
 "use client";
 
-import type { MetricDisplay } from "@/lib/tools/displayFormat";
+import type { MetricDisplay, MetricTable } from "@/lib/tools/displayFormat";
+
+// Wide results scroll inside their own container rather than stretching the
+// chat bubble — the widget is narrow, and narrower still on a phone.
+function DisplayTable({ table }: { table: MetricTable }) {
+  const numeric = new Set(
+    table.numericColumns ?? table.columns.map((_, i) => i).filter(i => i > 0),
+  );
+  const totalsFrom = table.totalsFromIndex ?? table.rows.length;
+
+  return (
+    <div className="mt-2 -mx-1 overflow-x-auto">
+      <table className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr className="border-b border-gray-200">
+            {table.columns.map((col, i) => (
+              <th
+                key={i}
+                className={
+                  "px-1 py-1 font-medium text-gray-500 " +
+                  (numeric.has(i) ? "text-right" : "text-left")
+                }
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, r) => (
+            <tr
+              key={r}
+              className={
+                r >= totalsFrom
+                  ? "border-t border-gray-300 font-semibold text-gray-900"
+                  : "text-gray-800"
+              }
+            >
+              {row.map((cell, c) => (
+                <td
+                  key={c}
+                  className={
+                    "whitespace-nowrap px-1 py-0.5 " +
+                    (numeric.has(c) ? "text-right tabular-nums" : "text-left")
+                  }
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 // Renders figures straight from the tool's own output. The model picks which
 // tool runs and writes the commentary around this card, but every digit shown
@@ -18,14 +73,18 @@ export default function MetricCard({ display }: { display: MetricDisplay }) {
         <div className="text-[11px] text-gray-500">{display.subtitle}</div>
       )}
 
-      <dl className="mt-2 space-y-1">
-        {display.rows.map((row, i) => (
-          <div key={i} className="flex items-baseline justify-between gap-4">
-            <dt className="text-[11px] text-gray-500">{row.label}</dt>
-            <dd className="text-xs font-medium tabular-nums text-gray-900">{row.value}</dd>
-          </div>
-        ))}
-      </dl>
+      {display.rows && (
+        <dl className="mt-2 space-y-1">
+          {display.rows.map((row, i) => (
+            <div key={i} className="flex items-baseline justify-between gap-4">
+              <dt className="text-[11px] text-gray-500">{row.label}</dt>
+              <dd className="text-xs font-medium tabular-nums text-gray-900">{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {display.table && <DisplayTable table={display.table} />}
 
       {display.note && (
         <p className="mt-2 border-t border-gray-100 pt-2 text-[11px] text-amber-700">

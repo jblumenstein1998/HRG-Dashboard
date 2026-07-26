@@ -28,10 +28,17 @@ export function displayToSlackBlocks(display: MetricDisplay): SlackBlock[] {
   const header = display.subtitle
     ? `*${display.title}*\n_${display.subtitle}_`
     : `*${display.title}*`;
-  const rows = display.rows.map(r => `${r.label}: *${r.value}*`).join("\n");
+  // Block Kit has no table primitive (see the note at the top of this file), so
+  // a grid degrades to one line per row. Columns after the first are joined
+  // inline rather than aligned.
+  const body = display.rows
+    ? display.rows.map(r => `${r.label}: *${r.value}*`).join("\n")
+    : (display.table?.rows ?? [])
+        .map(row => `${row[0]}: *${row.slice(1).join("*  •  *")}*`)
+        .join("\n");
 
   const blocks: SlackBlock[] = [
-    { type: "section", text: { type: "mrkdwn", text: `${header}\n${rows}` } },
+    { type: "section", text: { type: "mrkdwn", text: `${header}\n${body}` } },
   ];
   if (display.note) {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: `:warning: _${display.note}_` } });
@@ -41,7 +48,9 @@ export function displayToSlackBlocks(display: MetricDisplay): SlackBlock[] {
 
 /** Plain-text mirror of a card, for the notification preview and accessibility. */
 export function displayToFallbackText(display: MetricDisplay): string {
-  const rows = display.rows.map(r => `${r.label}: ${r.value}`).join(" | ");
+  const rows = display.rows
+    ? display.rows.map(r => `${r.label}: ${r.value}`).join(" | ")
+    : (display.table?.rows ?? []).map(row => row.join(" ")).join(" | ");
   return [display.title, display.subtitle, rows, display.note].filter(Boolean).join(" — ");
 }
 

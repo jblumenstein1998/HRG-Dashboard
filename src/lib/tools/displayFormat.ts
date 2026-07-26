@@ -12,12 +12,30 @@
 
 export type DisplayRow = { label: string; value: string };
 
+/**
+ * A real grid, for results with more than one dimension — several metrics
+ * across several stores, or a metric across time. Cells are pre-formatted
+ * strings for the same reason everything else here is: the renderer should
+ * never be deciding what a number looks like.
+ */
+export type MetricTable = {
+  columns: string[];
+  rows: string[][];
+  /** Index from which rows are totals/rollups rather than data, so the renderer can set them apart. */
+  totalsFromIndex?: number;
+  /** Column indexes to right-align (numeric columns). Defaults to everything but the first. */
+  numericColumns?: number[];
+};
+
 export type MetricDisplay = {
   title: string;
   subtitle?: string;
-  rows: DisplayRow[];
-  // Shown beneath the rows, for caveats that must travel with the number —
-  // incomplete ranges above all.
+  /** Label/value pairs, for a single-subject result. */
+  rows?: DisplayRow[];
+  /** Grid, for a multi-dimensional result. A display carries one or the other. */
+  table?: MetricTable;
+  // Shown beneath, for caveats that must travel with the number — incomplete
+  // ranges above all.
   note?: string;
 };
 
@@ -40,12 +58,10 @@ export function getDisplay(output: unknown): MetricDisplay | null {
 function isMetricDisplayCarrier(o: unknown): o is { display: MetricDisplay } {
   if (typeof o !== "object" || o === null || !("display" in o)) return false;
   const d = (o as { display: unknown }).display;
-  return (
-    typeof d === "object" &&
-    d !== null &&
-    typeof (d as MetricDisplay).title === "string" &&
-    Array.isArray((d as MetricDisplay).rows)
-  );
+  if (typeof d !== "object" || d === null) return false;
+  const display = d as MetricDisplay;
+  if (typeof display.title !== "string") return false;
+  return Array.isArray(display.rows) || Array.isArray(display.table?.rows);
 }
 
 /** Whole dollars, thousands-separated: 9270.43 -> "$9,270". */

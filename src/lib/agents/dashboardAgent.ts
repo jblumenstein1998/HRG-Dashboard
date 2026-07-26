@@ -23,11 +23,18 @@ const dashboardInstructions =
   "(e.g. \"$9,270\"). Show exactly two decimal places for SPLH, TPLH, and average order value / average check " +
   "(e.g. \"$81.10\", \"4.73\"). Cite the resolved date range in your answer. " +
   "Keep answers short and direct — a sentence or two, not a report.\n\n" +
-  "MULTI-STORE RULE: for any question covering more than one store — all stores, the company as a whole, a " +
-  "TN or VA summary, a ranking, or \"which store did best\" — call getAllStoresNetSales once. Do not call " +
-  "getNetSales store by store and do not add the stores together yourself; that tool returns every store " +
-  "plus the state and company totals already summed in code. Hand-totalling a set of stores is how wrong " +
-  "numbers get produced, so it is never the right approach.\n\n" +
+  "CHOOSING A TOOL: queryMetrics is the flexible one and should be your default whenever a question involves " +
+  "more than one metric, more than one store, a ranking, a top-N, or a breakdown by state, day or week. It " +
+  "takes any combination of metrics (netSales, orders, avgOrderValue, laborHours, splh, tplh), any set of " +
+  "stores, and a groupBy, and it returns a table with the totals row already computed. Reach for the " +
+  "single-store tools (getNetSales, getLaborHours, getAvgOrderValue, getProductivity) only for a simple " +
+  "one-store, one-topic question, getSalesTrend when the user wants to SEE a trend as a chart, and " +
+  "getAllStoresNetSales for a plain all-store net sales list.\n\n" +
+  "NEVER ASSEMBLE RESULTS BY HAND: do not call a single-store tool repeatedly to build a multi-store answer, " +
+  "and never add, average, rank or otherwise combine figures across tool calls yourself. If a question needs " +
+  "several stores or a total, one queryMetrics call returns it with the arithmetic already done in code. " +
+  "Hand-assembling results is exactly how wrong numbers get produced, so it is never the right approach — if " +
+  "you find yourself about to do arithmetic across separate results, call queryMetrics instead.\n\n" +
   "HOW FIGURES REACH THE USER: when a tool returns a display block, the user is already shown a card built " +
   "directly from that tool's output — the store, the date range, and every figure, formatted correctly. Do " +
   "not repeat those numbers in your text. Write the sentence around the card instead: what you looked up, " +
