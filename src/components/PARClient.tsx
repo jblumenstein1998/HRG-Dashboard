@@ -640,37 +640,63 @@ function AvgCheckCompTable({
   );
 }
 
-// ── Today vs. same-time-last-year (live) ───────────────────────────────────────
-// Unlike the tables above (which read the Postgres daily rollup and stop at
-// yesterday), this one hits PAR's live order API directly on every load/refresh
-// for both today and the corresponding date last year — so it's slower, but it
-// reflects sales-so-far vs. last year's sales through that exact same clock
-// time (not last year's full day). See @/lib/todayVsLastYear for the cutoff
-// logic. Types are duplicated (not imported) from that module for the same
-// reason as the tables above: it pulls in server-only PAR/cache internals that
-// must never end up in a client bundle.
+// ── Sales snapshot vs. last year (range-selectable) ───────────────────────────
+// The range picker drives two different server paths (see @/lib/salesSnapshot):
+// "Today" is a live PAR pull — sales-so-far vs. last year's sales through that
+// exact same clock time, not last year's full day — so it's slower than the
+// tables below, which read the Postgres daily rollup. Every other range
+// (yesterday / WTD / PTD / YTD / a past fiscal period) is settled and comes
+// from that same rollup. Types are duplicated (not imported) from that module
+// for the same reason as the tables above: it pulls in server-only PAR/cache
+// internals that must never end up in a client bundle.
 
-type TodayRaw = {
+type SnapshotRaw = {
   storeId: string; name: string; state: "TN" | "VA";
-  netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number; clockedInTY: number;
+  netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number;
+  // Only the live "Today" range reports who's on the clock right now.
+  clockedInTY: number | null;
 };
 
-function deriveNetSalesFigure(r: TodayRaw): MetricFigure {
+const QUICK_RANGES = [
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "wtd", label: "WTD" },
+  { key: "ptd", label: "PTD" },
+  { key: "ytd", label: "YTD" },
+] as const;
+
+type SnapshotRange = (typeof QUICK_RANGES)[number]["key"] | `p${number}`;
+
+// Completed fiscal periods only, newest first — the current period is already
+// covered by PTD, and a future one has no data.
+function completedPeriods(): FiscalPeriod[] {
+  const cur = currentPeriod().period;
+  return PERIODS.filter(p => p.period < cur).slice().reverse();
+}
+
+function snapshotRangeLabel(range: SnapshotRange): string {
+  const quick = QUICK_RANGES.find(r => r.key === range);
+  if (quick) return quick.label;
+  return `P${range.slice(1)}`;
+}
+
+function deriveNetSalesFigure(r: SnapshotRaw): MetricFigure {
   return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.netSalesTY, r.netSalesLY) };
 }
-function deriveTxFigure(r: TodayRaw): MetricFigure {
+function deriveTxFigure(r: SnapshotRaw): MetricFigure {
   return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.txTY, r.txLY) };
 }
-function deriveTodayAvgCheckFigure(r: TodayRaw): MetricFigure {
+function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
   const value = r.txTY > 0 ? r.netSalesTY / r.txTY : 0;
   const prior = r.txLY > 0 ? r.netSalesLY / r.txLY : 0;
   return { value, prior, compPct: derivedCompPct(value, prior) };
 }
-// SPLH is today-only, as-of-refresh — no prior-year comparison.
-function deriveSplh(r: TodayRaw): number | null {
+// Productivity ($/labor hour) is this-year-only — no prior-year comparison.
+function deriveSplh(r: SnapshotRaw): number | null {
   return r.laborHoursTY > 0 ? r.netSalesTY / r.laborHoursTY : null;
 }
-function sumTodayRaw(stores: TodayRaw[]): TodayRaw {
+function sumSnapshotRaw(stores: SnapshotRaw[]): SnapshotRaw {
+  const clockedIn = stores.filter(r => r.clockedInTY != null);
   return {
     storeId: "", name: "", state: "TN",
     netSalesTY: stores.reduce((s, r) => s + r.netSalesTY, 0),
@@ -678,14 +704,14 @@ function sumTodayRaw(stores: TodayRaw[]): TodayRaw {
     txTY: stores.reduce((s, r) => s + r.txTY, 0),
     txLY: stores.reduce((s, r) => s + r.txLY, 0),
     laborHoursTY: stores.reduce((s, r) => s + r.laborHoursTY, 0),
-    clockedInTY: stores.reduce((s, r) => s + r.clockedInTY, 0),
+    clockedInTY: clockedIn.length === 0 ? null : clockedIn.reduce((s, r) => s + (r.clockedInTY ?? 0), 0),
   };
 }
 
-const TODAY_METRIC_COLS: { key: string; label: string; fmt: (v: number) => string; derive: (r: TodayRaw) => MetricFigure }[] = [
+const SNAPSHOT_METRIC_COLS: { key: string; label: string; fmt: (v: number) => string; derive: (r: SnapshotRaw) => MetricFigure }[] = [
   { key: "netSales", label: "Net Sales", fmt: fmtDollars, derive: deriveNetSalesFigure },
   { key: "transactions", label: "Transactions", fmt: v => Math.round(v).toLocaleString(), derive: deriveTxFigure },
-  { key: "avgCheck", label: "Average Check", fmt: fmtProductivity, derive: deriveTodayAvgCheckFigure },
+  { key: "avgCheck", label: "Average Check", fmt: fmtProductivity, derive: deriveSnapshotAvgCheckFigure },
 ];
 
 function SimpleFigureCell({ value, fmt }: { value: number | null; fmt: (v: number) => string }) {
@@ -696,45 +722,62 @@ function SimpleFigureCell({ value, fmt }: { value: number | null; fmt: (v: numbe
   );
 }
 
-function useTodayVsLastYear() {
-  const [stores, setStores] = useState<TodayRaw[]>([]);
-  const [todayDate, setTodayDate] = useState("");
-  const [lastYearDate, setLastYearDate] = useState("");
-  const [asOfLabelCT, setAsOfLabelCT] = useState("");
-  const [asOfLabelET, setAsOfLabelET] = useState("");
+type SnapshotMeta = {
+  startDate: string; endDate: string;
+  priorStartDate: string; priorEndDate: string;
+  live: boolean; emptyWindow: boolean;
+  asOfLabelCT: string; asOfLabelET: string;
+};
+
+const EMPTY_SNAPSHOT_META: SnapshotMeta = {
+  startDate: "", endDate: "", priorStartDate: "", priorEndDate: "",
+  live: false, emptyWindow: false, asOfLabelCT: "", asOfLabelET: "",
+};
+
+function useSalesSnapshot(range: SnapshotRange) {
+  const [stores, setStores] = useState<SnapshotRaw[]>([]);
+  const [meta, setMeta] = useState<SnapshotMeta>(EMPTY_SNAPSHOT_META);
   const [loading, setLoading] = useState(true);
 
   const refetch = useCallback(() => {
     setLoading(true);
-    fetch("/api/par/today-vs-last-year")
+    fetch(`/api/par/sales-snapshot?range=${range}`)
       .then(r => r.json())
       .then(d => {
         setStores(d.stores ?? []);
-        setTodayDate(d.todayDate ?? "");
-        setLastYearDate(d.lastYearDate ?? "");
-        setAsOfLabelCT(d.asOfLabelCT ?? "");
-        setAsOfLabelET(d.asOfLabelET ?? "");
+        setMeta({
+          startDate: d.startDate ?? "",
+          endDate: d.endDate ?? "",
+          priorStartDate: d.priorStartDate ?? "",
+          priorEndDate: d.priorEndDate ?? "",
+          live: d.live ?? false,
+          emptyWindow: d.emptyWindow ?? false,
+          asOfLabelCT: d.asOfLabelCT ?? "",
+          asOfLabelET: d.asOfLabelET ?? "",
+        });
       })
-      .catch(err => console.error("[PAR] today-vs-last-year fetch failed", err))
+      .catch(err => console.error("[PAR] sales-snapshot fetch failed", err))
       .finally(() => setLoading(false));
-  }, []);
+  }, [range]);
 
-  useEffect(() => { refetch(); }, [refetch]);
+  // Switching ranges swaps in a whole new dataset — clear the old one rather
+  // than leaving last year's period on screen under the new range's heading
+  // while the fetch is in flight.
+  useEffect(() => { setStores([]); setMeta(EMPTY_SNAPSHOT_META); refetch(); }, [refetch]);
 
-  return { stores, todayDate, lastYearDate, asOfLabelCT, asOfLabelET, loading, refetch };
+  return { stores, meta, loading, refetch };
 }
 
-function TodayVsLastYearTable({
-  stores, loading, showVA, showTN, todayDate, lastYearDate, asOfLabelCT, asOfLabelET,
+function SnapshotVsLastYearTable({
+  stores, meta, loading, showVA, showTN, range, onRangeChange,
 }: {
-  stores: TodayRaw[];
+  stores: SnapshotRaw[];
+  meta: SnapshotMeta;
   loading: boolean;
   showVA: boolean;
   showTN: boolean;
-  todayDate: string;
-  lastYearDate: string;
-  asOfLabelCT: string;
-  asOfLabelET: string;
+  range: SnapshotRange;
+  onRangeChange: (range: SnapshotRange) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -746,27 +789,64 @@ function TodayVsLastYearTable({
   ];
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
+  const periods = completedPeriods();
+  const isPeriod = range.startsWith("p");
+
   // TN and VA are in different time zones, so each has its own "as of" cutoff
   // (last year's comparison is sliced to the same local time-of-day, not a
   // single blanket time for every store) — only show the labels for whichever
-  // group(s) are actually visible.
+  // group(s) are actually visible. Settled ranges have no cutoff at all.
   const asOfParts = [
-    ...(showTN ? [asOfLabelCT] : []),
-    ...(showVA ? [asOfLabelET] : []),
+    ...(showTN ? [meta.asOfLabelCT] : []),
+    ...(showVA ? [meta.asOfLabelET] : []),
   ].filter(Boolean);
+
+  // Single-day ranges show the full ISO date (a bare "7/26" reads ambiguously
+  // next to last year's date); multi-day ranges are short M/D–M/D.
+  const fmtWindow = (start: string, end: string) => (start === end ? start : `${fmtDate(start)}–${fmtDate(end)}`);
+  const rangeSummary = meta.startDate && meta.priorStartDate
+    ? `${fmtWindow(meta.startDate, meta.endDate)} vs ${fmtWindow(meta.priorStartDate, meta.priorEndDate)}`
+    : "";
+
+  const selectClass = "text-xs rounded-lg border border-gray-200 bg-white px-2 py-1 text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-red-700";
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
-        <CopyableTitle title="Today vs Last Year" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
-        {loading
-          ? <span className="text-xs text-gray-400 animate-pulse">Loading (live PAR pull, may take a bit)…</span>
-          : (todayDate && lastYearDate) && (
-              <span className="text-xs text-gray-500">
-                {todayDate} vs {lastYearDate}, each through {asOfParts.join(" / ")}
-              </span>
-            )
-        }
+      <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <CopyableTitle title={`${snapshotRangeLabel(range)} vs Last Year`} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        {/* Excluded from the copied image — the picker is a control, and the
+            title + date line above already record which range was captured. */}
+        <div data-copy-image-ignore="true" className="flex items-center gap-2">
+          <select
+            value={isPeriod ? "" : range}
+            onChange={e => { if (e.target.value) onRangeChange(e.target.value as SnapshotRange); }}
+            className={selectClass}
+          >
+            {isPeriod && <option value="">Range…</option>}
+            {QUICK_RANGES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+          <select
+            value={isPeriod ? range : ""}
+            onChange={e => { if (e.target.value) onRangeChange(e.target.value as SnapshotRange); }}
+            className={selectClass}
+          >
+            <option value="">Past period…</option>
+            {periods.map(p => <option key={p.period} value={`p${p.period}`}>{periodLabel(p)}</option>)}
+          </select>
+        </div>
+        <div className="ml-auto text-xs text-gray-500">
+          {loading
+            ? <span className="text-gray-400 animate-pulse">{meta.live || range === "today" ? "Loading (live PAR pull, may take a bit)…" : "Loading…"}</span>
+            : meta.emptyWindow
+              ? <span className="text-gray-400">No completed business day in this window yet</span>
+              : rangeSummary && (
+                  <span>
+                    {rangeSummary}
+                    {meta.live && asOfParts.length > 0 && `, each through ${asOfParts.join(" / ")}`}
+                  </span>
+                )
+          }
+        </div>
       </div>
       <table className="w-full table-fixed">
         <colgroup>
@@ -780,7 +860,7 @@ function TodayVsLastYearTable({
         <thead>
           <tr className="border-b border-gray-100">
             <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            {TODAY_METRIC_COLS.map(c => (
+            {SNAPSHOT_METRIC_COLS.map(c => (
               <th key={c.key} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
               </th>
@@ -805,24 +885,24 @@ function TodayVsLastYearTable({
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
                       </td>
-                      {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(s)} fmt={c.fmt} />)}
+                      {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(s)} fmt={c.fmt} />)}
                       <SimpleFigureCell value={deriveSplh(s)} fmt={fmtProductivity} />
                       <SimpleFigureCell value={s.clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
                     </tr>
                   ))}
                   <tr className="bg-gray-50 border-b border-gray-100">
                     <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
-                    {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumTodayRaw(group.stores))} fmt={c.fmt} />)}
-                    <SimpleFigureCell value={deriveSplh(sumTodayRaw(group.stores))} fmt={fmtProductivity} />
-                    <SimpleFigureCell value={sumTodayRaw(group.stores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
+                    {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumSnapshotRaw(group.stores))} fmt={c.fmt} />)}
+                    <SimpleFigureCell value={deriveSplh(sumSnapshotRaw(group.stores))} fmt={fmtProductivity} />
+                    <SimpleFigureCell value={sumSnapshotRaw(group.stores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
                   </tr>
                 </Fragment>
               ))}
               <tr className="bg-gray-100 border-t-2 border-gray-200">
                 <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
-                {TODAY_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumTodayRaw(hrgStores))} fmt={c.fmt} />)}
-                <SimpleFigureCell value={deriveSplh(sumTodayRaw(hrgStores))} fmt={fmtProductivity} />
-                <SimpleFigureCell value={sumTodayRaw(hrgStores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
+                {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumSnapshotRaw(hrgStores))} fmt={c.fmt} />)}
+                <SimpleFigureCell value={deriveSplh(sumSnapshotRaw(hrgStores))} fmt={fmtProductivity} />
+                <SimpleFigureCell value={sumSnapshotRaw(hrgStores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
               </tr>
             </>
           )}
@@ -951,11 +1031,12 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
   const [mode, setMode] = useState<Mode>("weeks");
+  const [snapshotRange, setSnapshotRange] = useState<SnapshotRange>("today");
   const posData = usePosData(locations, mode);
   const netSalesComp = useMetricComp("/api/par/net-sales-comp");
   const transactionsComp = useMetricComp("/api/par/transactions-comp");
   const avgCheckComp = useAvgCheckComp();
-  const todayVsLastYear = useTodayVsLastYear();
+  const salesSnapshot = useSalesSnapshot(snapshotRange);
   const periodNetSalesComp = usePeriodNetSalesComp([4, 5, 6]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -970,7 +1051,7 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
     netSalesComp.refetch();
     transactionsComp.refetch();
     avgCheckComp.refetch();
-    todayVsLastYear.refetch();
+    salesSnapshot.refetch();
     periodNetSalesComp.refetch();
     setRefreshing(false);
   };
@@ -1051,15 +1132,14 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
 
       {/* Main */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        <TodayVsLastYearTable
-          stores={todayVsLastYear.stores}
-          loading={todayVsLastYear.loading}
+        <SnapshotVsLastYearTable
+          stores={salesSnapshot.stores}
+          meta={salesSnapshot.meta}
+          loading={salesSnapshot.loading}
           showVA={showVA}
           showTN={showTN}
-          todayDate={todayVsLastYear.todayDate}
-          lastYearDate={todayVsLastYear.lastYearDate}
-          asOfLabelCT={todayVsLastYear.asOfLabelCT}
-          asOfLabelET={todayVsLastYear.asOfLabelET}
+          range={snapshotRange}
+          onRangeChange={setSnapshotRange}
         />
         <div className="mt-6">
           <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} showVA={showVA} showTN={showTN} fmt={fmtDollars} />
