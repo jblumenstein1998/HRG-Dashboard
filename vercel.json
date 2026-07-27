@@ -7,6 +7,14 @@
     {
       "path": "/api/cron/drive-thru-warm",
       "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/smg-sync",
+      "schedule": "30 12 * * *"
+    },
+    {
+      "path": "/api/cron/smg-snapshots",
+      "schedule": "0 */4 * * *"
     }
   ]
 }
