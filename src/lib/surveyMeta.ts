@@ -78,10 +78,14 @@ export function scoreTone(value: number | null | undefined, metric: string): Sco
   return "bad";
 }
 
+/**
+ * Same scale the Food Cost tables use (green/yellow/red-600 on -50 fills), so a
+ * red cell means the same thing and looks the same on both tabs.
+ */
 export const TONE_TEXT: Record<ScoreTone, string> = {
-  good: "text-emerald-800",
-  ok: "text-amber-800",
-  bad: "text-red-800",
+  good: "text-green-600",
+  ok: "text-yellow-600",
+  bad: "text-red-600",
   none: "text-gray-400",
 };
 
@@ -92,17 +96,9 @@ export const TONE_TEXT: Record<ScoreTone, string> = {
  * when there's no score, so a blank cell reads as absent rather than neutral.
  */
 export const TONE_BG: Record<ScoreTone, string> = {
-  good: "bg-emerald-100",
-  ok: "bg-amber-100",
-  bad: "bg-red-100",
-  none: "",
-};
-
-/** One step stronger, so summary rows keep reading as heavier than the stores. */
-export const TONE_BG_STRONG: Record<ScoreTone, string> = {
-  good: "bg-emerald-200",
-  ok: "bg-amber-200",
-  bad: "bg-red-200",
+  good: "bg-green-50",
+  ok: "bg-yellow-50",
+  bad: "bg-red-50",
   none: "",
 };
 

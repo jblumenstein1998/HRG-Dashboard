@@ -9,7 +9,6 @@ import {
   COMBINED_KEY,
   STORE_LABELS,
   TONE_BG,
-  TONE_BG_STRONG,
   TONE_TEXT,
   marketOf,
   metricRank,
@@ -364,6 +363,14 @@ export default function SurveyDataClient() {
     });
   }, [listed, sort]);
 
+  const summaryRows = useMemo(() => {
+    const out: { label: string; row: UnitRow }[] = [];
+    if (isStoreLevel && showTN && tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
+    if (isStoreLevel && showVA && vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
+    if (hrgSummary && showTN && showVA) out.push({ label: "HRG", row: hrgSummary });
+    return out;
+  }, [isStoreLevel, showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
+
   const colCount = metrics.length + 3;
 
   /**
@@ -494,9 +501,9 @@ export default function SurveyDataClient() {
                 only snapshot selections ever had them. */}
           </div>
           <div className={`overflow-x-auto transition-opacity ${busy ? "opacity-50" : "opacity-100"}`}>
-            {/* 15px rather than text-sm's 14 — one point up, which is as far as
-                it goes before the metric columns start wrapping. */}
-            <table className="w-full text-[15px] table-fixed">
+            {/* text-sm cells / text-xs headers / py-3 rows — same metrics as the
+                Food Cost tables, so the two read as one system. */}
+            <table className="w-full text-sm table-fixed">
               {/* Every data column the same width; the label column takes the rest. */}
               <colgroup>
                 <col style={{ width: `${LABEL_COL_PCT}%` }} />
@@ -540,16 +547,12 @@ export default function SurveyDataClient() {
                 {!loading && sorted.map((u) => <DataRow key={u.key} row={u} metrics={metrics} />)}
 
                 {/* Market and company rollups, pinned below the stores rather
-                    than splitting the list into sections. */}
-                {!loading && isStoreLevel && showTN && tnSummary && tn.length > 0 && (
-                  <SummaryRow label="TN" row={tnSummary} metrics={metrics} />
-                )}
-                {!loading && isStoreLevel && showVA && vaSummary && va.length > 0 && (
-                  <SummaryRow label="VA" row={vaSummary} metrics={metrics} />
-                )}
-                {!loading && hrgSummary && showTN && showVA && (
-                  <SummaryRow label="HRG" row={hrgSummary} metrics={metrics} emphasis />
-                )}
+                    than splitting the list into sections. Whichever lands first
+                    carries the rule that divides them from the store rows. */}
+                {!loading &&
+                  summaryRows.map((s, i) => (
+                    <SummaryRow key={s.label} label={s.label} row={s.row} metrics={metrics} first={i === 0} />
+                  ))}
               </tbody>
             </table>
           </div>
@@ -596,14 +599,14 @@ function SortHeader({
     <th
       scope="col"
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-      className={`px-4 py-2 text-[13px] font-semibold uppercase tracking-wide ${align === "left" ? "text-left" : "text-right"}`}
+      className={`px-4 py-2 text-xs font-semibold uppercase tracking-wide ${align === "left" ? "text-left" : "text-right"}`}
     >
       <button
         type="button"
         onClick={next}
-        className={`inline-flex items-center gap-1 w-full cursor-pointer transition-colors hover:text-gray-700 ${
+        className={`inline-flex items-center gap-1 w-full cursor-pointer transition-colors hover:text-gray-600 ${
           align === "left" ? "justify-start" : "justify-end"
-        } ${active ? "text-gray-800" : "text-gray-500"}`}
+        } ${active ? "text-gray-700" : "text-gray-400"}`}
       >
         <span>{label}</span>
         <span aria-hidden="true" className={`text-[9px] leading-none ${active ? "opacity-100" : "opacity-0"}`}>
@@ -617,9 +620,9 @@ function SortHeader({
 function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
   return (
     <tr className="border-b border-gray-100">
-      <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{row.label}</td>
-      <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmtSales(row.sales)}</td>
-      <td className="px-4 py-2 text-right tabular-nums text-gray-800">{row.surveys ?? "—"}</td>
+      <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{row.label}</td>
+      <td className="px-4 py-3 text-right tabular-nums text-gray-900">{fmtSales(row.sales)}</td>
+      <td className="px-4 py-3 text-right tabular-nums text-gray-700">{row.surveys ?? "—"}</td>
       {metrics.map((m) => {
         const c = row.cells.get(m);
         const tone = scoreTone(c?.score, m);
@@ -627,7 +630,11 @@ function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
           <td
             key={m}
             title={c?.belowMin ? "Below SMG's minimum response threshold" : undefined}
-            className={`px-4 py-2 text-right tabular-nums ${TONE_TEXT[tone]} ${TONE_BG[tone]} ${c?.belowMin ? "italic opacity-70" : ""}`}
+            // Below-minimum cells are marked with italics only. They used to
+            // carry opacity-70 as well, which faded the fill along with the
+            // text and made those rows look like a lighter shade of the same
+            // scale rather than the same shade with a caveat.
+            className={`px-4 py-3 text-right tabular-nums ${TONE_TEXT[tone]} ${TONE_BG[tone]} ${c?.belowMin ? "italic" : ""}`}
           >
             {c?.score === null || c === undefined ? "—" : `${c.score}%`}
           </td>
@@ -637,29 +644,35 @@ function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
   );
 }
 
+/**
+ * Market / company rollup. Uses exactly the same score colours as a store row —
+ * a heavier fill would read as a worse score rather than a different kind of
+ * row. What separates the block is the rule above it (`first`) plus bold text,
+ * not a second colour scale.
+ */
 function SummaryRow({
   label,
   row,
   metrics,
-  emphasis,
+  first,
 }: {
   label: string;
   row: UnitRow;
   metrics: string[];
-  emphasis?: boolean;
+  first?: boolean;
 }) {
   return (
-    <tr className={`border-b ${emphasis ? "border-gray-300 bg-gray-100" : "border-gray-200 bg-gray-50"}`}>
-      <td className="px-4 py-2 font-semibold text-gray-900 whitespace-nowrap">{label}</td>
-      <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{fmtSales(row.sales)}</td>
-      <td className="px-4 py-2 text-right tabular-nums font-semibold text-gray-900">{row.surveys ?? "—"}</td>
+    <tr className={`border-b border-gray-200 ${first ? "border-t-2 border-t-gray-400" : ""}`}>
+      <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap">{label}</td>
+      <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900">{fmtSales(row.sales)}</td>
+      <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900">{row.surveys ?? "—"}</td>
       {metrics.map((m) => {
         const c = row.cells.get(m);
         const tone = scoreTone(c?.score, m);
         return (
           <td
             key={m}
-            className={`px-4 py-2 text-right tabular-nums font-semibold ${TONE_TEXT[tone]} ${TONE_BG_STRONG[tone]}`}
+            className={`px-4 py-3 text-right tabular-nums font-semibold ${TONE_TEXT[tone]} ${TONE_BG[tone]}`}
           >
             {c?.score === null || c === undefined ? "—" : `${c.score}%`}
           </td>
