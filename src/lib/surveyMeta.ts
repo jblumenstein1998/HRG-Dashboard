@@ -79,10 +79,10 @@ export function scoreTone(value: number | null | undefined, metric: string): Sco
 }
 
 export const TONE_TEXT: Record<ScoreTone, string> = {
-  good: "text-emerald-700",
-  ok: "text-amber-700",
-  bad: "text-red-700",
-  none: "text-gray-300",
+  good: "text-emerald-800",
+  ok: "text-amber-800",
+  bad: "text-red-800",
+  none: "text-gray-400",
 };
 
 /**
@@ -92,17 +92,17 @@ export const TONE_TEXT: Record<ScoreTone, string> = {
  * when there's no score, so a blank cell reads as absent rather than neutral.
  */
 export const TONE_BG: Record<ScoreTone, string> = {
-  good: "bg-emerald-50",
-  ok: "bg-amber-50",
-  bad: "bg-red-50",
+  good: "bg-emerald-100",
+  ok: "bg-amber-100",
+  bad: "bg-red-100",
   none: "",
 };
 
 /** One step stronger, so summary rows keep reading as heavier than the stores. */
 export const TONE_BG_STRONG: Record<ScoreTone, string> = {
-  good: "bg-emerald-100",
-  ok: "bg-amber-100",
-  bad: "bg-red-100",
+  good: "bg-emerald-200",
+  ok: "bg-amber-200",
+  bad: "bg-red-200",
   none: "",
 };
 

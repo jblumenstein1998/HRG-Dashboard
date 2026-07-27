@@ -494,7 +494,9 @@ export default function SurveyDataClient() {
                 only snapshot selections ever had them. */}
           </div>
           <div className={`overflow-x-auto transition-opacity ${busy ? "opacity-50" : "opacity-100"}`}>
-            <table className="w-full text-sm table-fixed">
+            {/* 15px rather than text-sm's 14 — one point up, which is as far as
+                it goes before the metric columns start wrapping. */}
+            <table className="w-full text-[15px] table-fixed">
               {/* Every data column the same width; the label column takes the rest. */}
               <colgroup>
                 <col style={{ width: `${LABEL_COL_PCT}%` }} />
@@ -594,14 +596,14 @@ function SortHeader({
     <th
       scope="col"
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-      className={`px-4 py-2 text-xs font-semibold uppercase tracking-wide ${align === "left" ? "text-left" : "text-right"}`}
+      className={`px-4 py-2 text-[13px] font-semibold uppercase tracking-wide ${align === "left" ? "text-left" : "text-right"}`}
     >
       <button
         type="button"
         onClick={next}
-        className={`inline-flex items-center gap-1 w-full cursor-pointer transition-colors hover:text-gray-600 ${
+        className={`inline-flex items-center gap-1 w-full cursor-pointer transition-colors hover:text-gray-700 ${
           align === "left" ? "justify-start" : "justify-end"
-        } ${active ? "text-gray-700" : "text-gray-400"}`}
+        } ${active ? "text-gray-800" : "text-gray-500"}`}
       >
         <span>{label}</span>
         <span aria-hidden="true" className={`text-[9px] leading-none ${active ? "opacity-100" : "opacity-0"}`}>
@@ -617,7 +619,7 @@ function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
     <tr className="border-b border-gray-100">
       <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{row.label}</td>
       <td className="px-4 py-2 text-right tabular-nums text-gray-900">{fmtSales(row.sales)}</td>
-      <td className="px-4 py-2 text-right tabular-nums text-gray-700">{row.surveys ?? "—"}</td>
+      <td className="px-4 py-2 text-right tabular-nums text-gray-800">{row.surveys ?? "—"}</td>
       {metrics.map((m) => {
         const c = row.cells.get(m);
         const tone = scoreTone(c?.score, m);

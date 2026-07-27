@@ -9,7 +9,7 @@
  * metric is added.
  */
 import { sql } from "@/lib/db";
-import { getLastWeekRange, getMtdRange, getT7Range, getWtdRange } from "@/lib/fiscal";
+import { getLastWeekRange, getPeriodForDate, getT7Range } from "@/lib/fiscal";
 import {
   fetchComparison,
   fetchTrend,
@@ -214,7 +214,7 @@ function rangeStart(range: string): Date {
  * (which are barely populated, since guests answer days after visiting)
  * dragging the to-date numbers down.
  *
- * Returns null when a window has no complete days yet — WTD on a Monday.
+ * Returns null only when the calendar can't place yesterday at all.
  */
 export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Date } | null {
   const today = startOfDay(new Date());
@@ -235,9 +235,29 @@ export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Dat
     return { start: rangeStart(getT7Range().range), end: yesterday };
   }
 
-  const start = rangeStart(key === "wtd" ? getWtdRange().range : getMtdRange().range);
-  if (yesterday < start) return null; // e.g. WTD on a Monday
-  return { start, end: yesterday };
+  // WTD and PTD anchor on YESTERDAY, not today — the window ends yesterday, so
+  // the week/period it belongs to is yesterday's.
+  //
+  // Anchoring on today used to collapse the window on the first day of a period
+  // or week: the new period had no complete day yet, resolve returned null, the
+  // ingest skipped it, and the previous row was left in place. The effect was
+  // that the LAST day of every period never reached a PTD snapshot at all —
+  // P7 ended 7/26 but its final PTD capture only ran through 7/25.
+  //
+  // Anchored on yesterday the window is always whole: mid-period it behaves
+  // exactly as before, and on day one it reports the period that just closed,
+  // complete, instead of a stale partial of it.
+  if (key === "wtd") {
+    const dow = yesterday.getDay(); // 0=Sun; weeks run Mon–Sun
+    const back = dow === 0 ? 6 : dow - 1;
+    const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate() - back);
+    return { start, end: yesterday };
+  }
+
+  const period = getPeriodForDate(yesterday);
+  if (!period) return null; // yesterday falls outside the defined fiscal year
+  const [y, m, d] = period.start.split("-").map(Number);
+  return { start: new Date(y, m - 1, d), end: yesterday };
 }
 
 export async function ensureSnapshotSchema(): Promise<void> {
