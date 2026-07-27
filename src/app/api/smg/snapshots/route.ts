@@ -9,7 +9,12 @@ import type { LevelKey } from "@/lib/smgTrend";
  * Reads stored snapshots only — the cron owns fetching, since each window costs
  * a multi-second round trip to SMG.
  */
-const ORDER: SnapshotKey[] = ["today", "yesterday", "t7", "wtd", "ptd"];
+// "today" is deliberately absent. Every other window ends yesterday, so a
+// once-daily cron captures them whole; today's is still filling when the cron
+// runs and then sits frozen for the rest of the day, reading near-empty. It
+// stays in SnapshotKey so it can be restored by adding it back here (and to
+// the cron's KEYS) if the snapshot job ever runs more than once a day.
+const ORDER: SnapshotKey[] = ["yesterday", "t7", "wtd", "ptd"];
 
 export async function GET(req: NextRequest) {
   const level = (req.nextUrl.searchParams.get("level") ?? "store") as LevelKey;

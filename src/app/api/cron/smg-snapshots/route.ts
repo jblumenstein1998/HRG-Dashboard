@@ -4,13 +4,21 @@ import { smgLogin } from "@/lib/smgTrend";
 
 export const maxDuration = 300;
 
-const KEYS: SnapshotKey[] = ["today", "yesterday", "t7", "wtd", "ptd"];
+// "today" is dropped: on a once-daily schedule its window is still filling when
+// the cron runs and then sits frozen, so it read near-empty all day and isn't
+// surfaced any more (see the snapshots route). Skipping it also saves two of
+// the ten SMG report round-trips per run.
+const KEYS: SnapshotKey[] = ["yesterday", "t7", "wtd", "ptd"];
 
 /**
- * Refreshes the rolling / to-date tiles. Runs several times a day (see
- * vercel.json) rather than daily, because these windows keep moving: Today and
- * WTD change through the day, and every window keeps filling in for days
- * afterwards as guests submit surveys for visits already past.
+ * Refreshes the rolling / to-date tiles. Every window here ends yesterday, so
+ * one daily run captures each of them whole. It still has to re-run daily
+ * rather than once per window, because guests keep submitting surveys for
+ * visits already past — a response filed today can change last week's numbers,
+ * since scores are counted on visit date.
+ *
+ * Vercel Hobby caps crons at once a day; if the plan changes, running this more
+ * often mainly buys faster pickup of those late-arriving responses.
  */
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization");
