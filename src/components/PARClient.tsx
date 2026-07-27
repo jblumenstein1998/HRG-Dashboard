@@ -832,8 +832,7 @@ function TodayVsLastYearTable({
   );
 }
 
-// ── VA period net sales comp (P4/P5/P6, store + market summary) ───────────────
-// Fixed to VA only, per request — not gated by the showVA/showTN toggle above.
+// ── Period net sales comp (P4/P5/P6, store rows + market summary) ─────────────
 
 type StorePeriodNetSales = { storeId: string; name: string; state: "TN" | "VA"; periods: Record<number, MetricFigure> };
 
@@ -868,19 +867,29 @@ function usePeriodNetSalesComp(periodNums: number[]) {
 }
 
 function PeriodNetSalesTable({
-  stores, loading, periodNums,
+  stores, loading, periodNums, showVA, showTN,
 }: {
   stores: StorePeriodNetSales[];
   loading: boolean;
   periodNums: number[];
+  showVA: boolean;
+  showTN: boolean;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const vaStores = stores.filter(s => s.state === "VA").sort((a, b) => a.name.localeCompare(b.name));
+
+  const byName = (a: StorePeriodNetSales, b: StorePeriodNetSales) => a.name.localeCompare(b.name);
+  const tnStores = stores.filter(s => s.state === "TN").sort(byName);
+  const vaStores = stores.filter(s => s.state === "VA").sort(byName);
+  const groups = [
+    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+  ];
+  const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
-        <CopyableTitle title="VA Net Sales — P4/P5/P6" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        <CopyableTitle title="Net Sales by Period" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
         {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
       </div>
       <table className="w-full">
@@ -895,22 +904,34 @@ function PeriodNetSalesTable({
           </tr>
         </thead>
         <tbody>
-          {vaStores.length === 0 && loading ? (
+          {stores.length === 0 && loading ? (
             <tr><td colSpan={periodNums.length + 1} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
           ) : (
             <>
-              {vaStores.map(s => (
-                <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                  <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
-                  {periodNums.map(n => (
-                    <MetricFigureCell key={n} figure={s.periods[n] ?? { value: 0, prior: 0, compPct: null }} fmt={fmtDollars} />
+              {groups.map(group => (
+                <Fragment key={group.label}>
+                  {group.stores.map(s => (
+                    <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
+                        {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
+                      </td>
+                      {periodNums.map(n => (
+                        <MetricFigureCell key={n} figure={s.periods[n] ?? { value: 0, prior: 0, compPct: null }} fmt={fmtDollars} />
+                      ))}
+                    </tr>
                   ))}
-                </tr>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
+                    {periodNums.map(n => (
+                      <MetricFigureCell key={n} figure={sumPeriodFigures(group.stores, n)} fmt={fmtDollars} />
+                    ))}
+                  </tr>
+                </Fragment>
               ))}
               <tr className="bg-gray-100 border-t-2 border-gray-200">
-                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">VA Total</td>
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
                 {periodNums.map(n => (
-                  <MetricFigureCell key={n} figure={sumPeriodFigures(vaStores, n)} fmt={fmtDollars} />
+                  <MetricFigureCell key={n} figure={sumPeriodFigures(hrgStores, n)} fmt={fmtDollars} />
                 ))}
               </tr>
             </>
@@ -920,6 +941,7 @@ function PeriodNetSalesTable({
     </div>
   );
 }
+
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -970,7 +992,7 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
                 <option value="/dashboard">Drive-Thru</option>
                 <option value="/food-cost">Food Cost</option>
                 <option value="/par">POS Sales</option>
-                <option value="/smg">SMG</option>
+                <option value="/survey-data">SMG</option>
               </select>
               <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -1055,7 +1077,7 @@ export default function PARClient({ locations }: { locations: PARLocation[] }) {
           <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="count" {...posData} />
         </div>
         <div className="mt-6">
-          <PeriodNetSalesTable stores={periodNetSalesComp.stores} loading={periodNetSalesComp.loading} periodNums={[4, 5, 6]} />
+          <PeriodNetSalesTable stores={periodNetSalesComp.stores} loading={periodNetSalesComp.loading} periodNums={[4, 5, 6]} showVA={showVA} showTN={showTN} />
         </div>
       </main>
     </div>

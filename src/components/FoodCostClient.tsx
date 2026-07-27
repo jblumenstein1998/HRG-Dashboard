@@ -596,6 +596,7 @@ function HistoryChart() {
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set());
   const [visibleAverages, setVisibleAverages] = useState(new Set(["TN Avg", "VA Avg", "HRG Avg"]));
+  const [periodRange, setPeriodRange] = useState<{ start: number; end: number } | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -607,6 +608,7 @@ function HistoryChart() {
           setPoints(arr);
           setStatus("done");
           setVisibleStores(new Set(Object.keys(arr[0]).filter(k => k !== "label")));
+          setPeriodRange({ start: 0, end: arr.length - 1 });
         } else {
           console.warn("[HistoryChart] unexpected:", data);
           setStatus("error");
@@ -633,12 +635,15 @@ function HistoryChart() {
   const tnNames = TN_STORES.filter(n => storeNames.includes(n));
   const vaNames = VA_STORES.filter(n => storeNames.includes(n));
 
+  const range = periodRange ?? { start: 0, end: points.length - 1 };
+  const visiblePoints = points.slice(range.start, range.end + 1);
+
   const avgVals = (names: string[], pt: PeriodPoint) => {
     const vals = names.map(n => pt[n]).filter((v): v is number => typeof v === "number");
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   };
 
-  const pointsWithAverages: PeriodPoint[] = points.map(pt => ({
+  const pointsWithAverages: PeriodPoint[] = visiblePoints.map(pt => ({
     ...pt,
     "TN Avg": avgVals(tnNames, pt),
     "VA Avg": avgVals(vaNames, pt),
@@ -669,7 +674,7 @@ function HistoryChart() {
   const renderDot = (color: string) => (props: { cx?: number; cy?: number; index?: number }) => {
     const { cx, cy, index } = props;
     if (cx == null || cy == null) return <g/>;
-    const isLast = index === points.length - 1;
+    const isLast = index === visiblePoints.length - 1;
     return <circle key={index} cx={cx} cy={cy} r={isLast ? 4 : 3} fill={isLast ? color : "white"} stroke={color} strokeWidth={2} />;
   };
 
@@ -698,8 +703,26 @@ function HistoryChart() {
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 p-4 mt-6">
-      <div className="mb-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <CopyableTitle title="Variance Trend — by Store — Absolute Value" targetRef={cardRef} />
+        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+          <span>From</span>
+          <select
+            value={range.start}
+            onChange={e => setPeriodRange({ start: Number(e.target.value), end: Math.max(Number(e.target.value), range.end) })}
+            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-400"
+          >
+            {points.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
+          </select>
+          <span>To</span>
+          <select
+            value={range.end}
+            onChange={e => setPeriodRange({ start: Math.min(range.start, Number(e.target.value)), end: Number(e.target.value) })}
+            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-gray-400"
+          >
+            {points.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
+          </select>
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={pointsWithAverages} margin={{ top: 8, right: 48, left: 0, bottom: 0 }}>
@@ -1266,7 +1289,7 @@ export default function FoodCostClient() {
                   <option value="/dashboard">Drive-Thru</option>
                   <option value="/food-cost">Food Cost</option>
                   <option value="/par">POS Sales</option>
-                  <option value="/smg">SMG</option>
+                  <option value="/survey-data">SMG</option>
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
