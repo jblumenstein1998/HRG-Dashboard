@@ -128,8 +128,10 @@ export function buildBuckets(granularity: Granularity): BucketDef[] {
       end.setDate(end.getDate() + 6);
       buckets.push({
         granularity,
+        // The key stays week-numbered so stored rows survive a label change;
+        // only the display label is the week-ending date (weeks end Sunday).
         bucketKey: `${fyLabel}-W${String(n).padStart(2, "0")}`,
-        label: `W${n}-${fyLabel}`,
+        label: `${end.getMonth() + 1}/${end.getDate()}`,
         start: fmt(cursor),
         end: fmt(end),
       });
