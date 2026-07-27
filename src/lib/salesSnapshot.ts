@@ -15,7 +15,8 @@ import { resolveDateBounds } from "@/lib/tools/dateRange";
 //    already fully happened, so its orders get cut off at the same time-of-day
 //    as "now" for an apples-to-apples comparison (see summarize/cutoffMinutes).
 //
-//  • every other range (yesterday / WTD / PTD / YTD / a past fiscal period)
+//  • every other range (yesterday / WTD / last week / PTD / YTD / a past
+//    fiscal period)
 //    resolves entirely through the Postgres daily rollup, exactly like the
 //    Net Sales / Transactions / Average Check tables below it on the POS tab.
 //    Those windows all end yesterday-or-earlier, so they're settled: no live
@@ -66,7 +67,7 @@ function nowLabelForState(state: PARLocation["state"]): string {
 
 // ── Range keys ────────────────────────────────────────────────────────────────
 
-export const QUICK_RANGES = ["today", "yesterday", "wtd", "ptd", "ytd"] as const;
+export const QUICK_RANGES = ["today", "yesterday", "wtd", "last_week", "ptd", "ytd"] as const;
 export type QuickRange = (typeof QUICK_RANGES)[number];
 /** A quick range, or `p<n>` for a full fiscal period (e.g. "p5"). */
 export type SnapshotRange = QuickRange | `p${number}`;
@@ -89,6 +90,7 @@ const QUICK_RANGE_LABELS: Record<QuickRange, string> = {
   today: "Today",
   yesterday: "Yesterday",
   wtd: "WTD",
+  last_week: "Last Week",
   ptd: "PTD",
   ytd: "YTD",
 };

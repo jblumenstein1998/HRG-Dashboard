@@ -6,7 +6,7 @@ export async function GET(req: NextRequest) {
   const range = raw == null ? DEFAULT_SNAPSHOT_RANGE : parseSnapshotRange(raw);
   if (!range) {
     return NextResponse.json(
-      { error: `Unknown range "${raw}" — expected today | yesterday | wtd | ptd | ytd | p<n>` },
+      { error: `Unknown range "${raw}" — expected today | yesterday | wtd | last_week | ptd | ytd | p<n>` },
       { status: 400 }
     );
   }

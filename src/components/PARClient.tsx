@@ -661,6 +661,7 @@ const QUICK_RANGES = [
   { key: "today", label: "Today" },
   { key: "yesterday", label: "Yesterday" },
   { key: "wtd", label: "WTD" },
+  { key: "last_week", label: "Last Week" },
   { key: "ptd", label: "PTD" },
   { key: "ytd", label: "YTD" },
 ] as const;
