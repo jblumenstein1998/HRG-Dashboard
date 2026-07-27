@@ -9,7 +9,7 @@ import { refreshAllTrends } from "@/lib/driveThruTrend";
 // so today/yesterday/wtd/last_week/t7/mtd/qtd/ytd are all already cached
 // before anyone opens the dashboard.
 //
-// It also fills in the drive-thru trend buckets (weekly / monthly / by period)
+// It also fills in the drive-thru trend buckets (weekly and by fiscal period)
 // behind the trend charts. Closed buckets are already stored and get skipped,
 // so in practice this fetches only whichever bucket is still in progress — but
 // it means the charts never make a user wait on Superset.

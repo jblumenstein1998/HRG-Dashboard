@@ -1,5 +1,5 @@
 /**
- * Drive-thru trend history — bucketed by week, calendar month, or fiscal period.
+ * Drive-thru trend history — bucketed by week or fiscal period.
  *
  * Replaces the old berryWeekly.ts, which only knew how to build Monday–Sunday
  * weeks and re-queried all ~26 of them from Superset on every cold start (the
@@ -30,12 +30,18 @@ const METRICS = [
 /** A rolling (still in-progress) bucket re-checks this often; closed ones never do. */
 const ROLLING_TTL_MS = 6 * 60 * 60 * 1000;
 
-export type Granularity = "week" | "month" | "period";
+/**
+ * "period" is HRG's 4-4-5 fiscal period (P1–P12) — what the business means by
+ * "monthly". Calendar months are deliberately not offered: they don't line up
+ * with how the books close, so they'd be a second, conflicting answer to the
+ * same question.
+ */
+export type Granularity = "week" | "period";
 
-export const GRANULARITIES: Granularity[] = ["week", "month", "period"];
+export const GRANULARITIES: Granularity[] = ["week", "period"];
 
 export function isGranularity(v: string | null): v is Granularity {
-  return v === "week" || v === "month" || v === "period";
+  return v === "week" || v === "period";
 }
 
 export type TrendStorePoint = {
@@ -94,8 +100,6 @@ function yesterdayCentral(): Date {
   return new Date(t.getFullYear(), t.getMonth(), t.getDate() - 1);
 }
 
-const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 // ── Bucket definitions ───────────────────────────────────────────────────────
 
 /**
@@ -133,7 +137,7 @@ export function buildBuckets(granularity: Granularity): BucketDef[] {
       cursor.setDate(cursor.getDate() + 7);
       n++;
     }
-  } else if (granularity === "period") {
+  } else {
     for (const p of PERIODS) {
       if (toDate(p.start) > horizon) break;
       buckets.push({
@@ -143,25 +147,6 @@ export function buildBuckets(granularity: Granularity): BucketDef[] {
         start: p.start,
         end: p.end,
       });
-    }
-  } else {
-    // Calendar months. FY2026 opens on Dec 29, 2025, so the first calendar month
-    // inside the fiscal year is a 3-day stub — a bar for "Dec 25" built from
-    // three days would read as a real month-over-month swing on the chart, so
-    // monthly starts at the first month that begins on or after the FY start.
-    let cursor = new Date(fyStart.getFullYear(), fyStart.getMonth(), 1);
-    if (cursor < fyStart) cursor = new Date(fyStart.getFullYear(), fyStart.getMonth() + 1, 1);
-    while (cursor <= horizon) {
-      const end = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
-      const yy = String(cursor.getFullYear()).slice(2);
-      buckets.push({
-        granularity,
-        bucketKey: `${cursor.getFullYear()}-M${String(cursor.getMonth() + 1).padStart(2, "0")}`,
-        label: `${MONTH_ABBR[cursor.getMonth()]} ${yy}`,
-        start: fmt(cursor),
-        end: fmt(end),
-      });
-      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
     }
   }
 
