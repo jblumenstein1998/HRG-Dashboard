@@ -69,10 +69,17 @@ const PERIOD_LOOKBACK = 26;
 /** Width of the label column; the data columns share the remainder evenly. */
 const LABEL_COL_PCT = 20;
 
-/** Postgres DATE columns arrive as full timestamps; show just M/D. */
+/**
+ * Postgres DATE columns arrive as full timestamps; show just M/D.
+ *
+ * Read in UTC, not local time. The server stamps these with its own offset —
+ * UTC on Vercel, local in dev — so reading local components pulls a
+ * UTC-stamped midnight back a day when viewed from a western timezone, and the
+ * window renders as 6/28–7/24 instead of 6/29–7/25.
+ */
 function shortDate(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : `${d.getMonth() + 1}/${d.getDate()}`;
+  return Number.isNaN(d.getTime()) ? iso : `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 }
 
 /**
@@ -83,7 +90,10 @@ function shortDate(iso: string): string {
 function toISODate(value: string): string | null {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // UTC components, for the same reason as shortDate — otherwise the sales
+  // window queried for a rolling range is a day earlier than the scores it
+  // sits next to.
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 type Cell = { score: number | null; responses: number | null; belowMin: boolean };

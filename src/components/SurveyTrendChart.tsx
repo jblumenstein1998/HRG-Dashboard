@@ -297,10 +297,16 @@ export default function SurveyTrendChart({
     const ptd = snapshots.ranges.find((r) => r.key === "ptd");
     if (!ptd) return null;
 
-    // Snapshot windows arrive as JS date strings ("Mon Jun 29 2026 …"), so they
-    // have to be parsed rather than sliced.
-    const start = new Date(ptd.windowStart);
-    if (Number.isNaN(start.getTime())) return null;
+    // Snapshot windows arrive as JS date strings ("Mon Jun 29 2026 00:00:00
+    // GMT+0000 …"), stamped with whatever offset the server runs in — UTC on
+    // Vercel, local in dev. Read the UTC components so the calendar date
+    // survives either, then rebuild it as a local date to compare against the
+    // fiscal calendar. Reading local components instead pulls a UTC-stamped
+    // midnight back a day when viewed from a western timezone, which mapped
+    // P7's start onto P6 in production and silently dropped the partial point.
+    const parsed = new Date(ptd.windowStart);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const start = new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
     const period = getPeriodForDate(start);
     if (!period) return null;
 
