@@ -6,8 +6,9 @@ import { BranchStore } from "@/lib/berry";
 import { groupBranches, getStoreLabel, SectionedBranches } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
 
-// "period" is an HRG fiscal period (P1–P12) — which is what "Monthly" means
-// here. Calendar months aren't offered; the business runs on the fiscal calendar.
+// "period" is an HRG fiscal period (P1–P12) — what the business means when it
+// says "monthly". Labelled "Period" in the UI rather than "Monthly" so there's
+// no chance of reading it as a calendar month; calendar months aren't offered.
 type Granularity = "week" | "period";
 
 type TrendStorePoint = {
@@ -32,7 +33,7 @@ type TrendPoint = {
 
 const GRANULARITY_OPTIONS: { key: Granularity; label: string }[] = [
   { key: "week", label: "Weekly" },
-  { key: "period", label: "Monthly" },
+  { key: "period", label: "Period" },
 ];
 
 // Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
@@ -394,7 +395,7 @@ function TrendControls({
 export default function DriveThruTrendCharts({ branches }: { branches: BranchStore[] }) {
   const [granularity, setGranularity] = useState<Granularity>("week");
   // Each granularity is fetched once and kept, so flipping between Weekly and
-  // Monthly after the first load costs nothing.
+  // Period after the first load costs nothing.
   const [byGranularity, setByGranularity] = useState<Partial<Record<Granularity, TrendPoint[]>>>({});
   const [error, setError] = useState<string | null>(null);
   // null means "no explicit selection yet" — the range then defaults to the full
