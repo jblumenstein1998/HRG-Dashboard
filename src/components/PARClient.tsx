@@ -790,7 +790,6 @@ function SnapshotVsLastYearTable({
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
   const periods = completedPeriods();
-  const isPeriod = range.startsWith("p");
 
   // TN and VA are in different time zones, so each has its own "as of" cutoff
   // (last year's comparison is sliced to the same local time-of-day, not a
@@ -816,24 +815,17 @@ function SnapshotVsLastYearTable({
         <CopyableTitle title={`${snapshotRangeLabel(range)} vs Last Year`} targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
         {/* Excluded from the copied image — the picker is a control, and the
             title + date line above already record which range was captured. */}
-        <div data-copy-image-ignore="true" className="flex items-center gap-2">
-          <select
-            value={isPeriod ? "" : range}
-            onChange={e => { if (e.target.value) onRangeChange(e.target.value as SnapshotRange); }}
-            className={selectClass}
-          >
-            {isPeriod && <option value="">Range…</option>}
-            {QUICK_RANGES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
-          </select>
-          <select
-            value={isPeriod ? range : ""}
-            onChange={e => { if (e.target.value) onRangeChange(e.target.value as SnapshotRange); }}
-            className={selectClass}
-          >
-            <option value="">Past period…</option>
+        <select
+          data-copy-image-ignore="true"
+          value={range}
+          onChange={e => onRangeChange(e.target.value as SnapshotRange)}
+          className={selectClass}
+        >
+          {QUICK_RANGES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+          <optgroup label="Past periods">
             {periods.map(p => <option key={p.period} value={`p${p.period}`}>{periodLabel(p)}</option>)}
-          </select>
-        </div>
+          </optgroup>
+        </select>
         <div className="ml-auto text-xs text-gray-500">
           {loading
             ? <span className="text-gray-400 animate-pulse">{meta.live || range === "today" ? "Loading (live PAR pull, may take a bit)…" : "Loading…"}</span>
