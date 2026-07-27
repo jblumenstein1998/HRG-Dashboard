@@ -52,6 +52,23 @@ const STORE_COLOR: Record<string, string> = {
   "Beach":          "#0d9488",
 };
 
+/**
+ * The TN/VA summary lines are aggregates, not stores, so they deliberately sit
+ * outside the categorical store palette rather than taking a 13th and 14th hue.
+ * Neutral ink + a heavier stroke reads as "reference line", and telling the two
+ * apart rests on the dash pattern, not hue — so it survives colorblindness and
+ * greyscale printing.
+ */
+const SUMMARY_COLOR = "#111827";
+const SUMMARY_WIDTH = 2.5;
+
+/** Straight (unweighted) mean — each store counts once, regardless of car count. */
+function straightAverage(values: (number | null | undefined)[]): number | null {
+  const valid = values.filter((v): v is number => typeof v === "number");
+  if (valid.length === 0) return null;
+  return valid.reduce((a, b) => a + b, 0) / valid.length;
+}
+
 const axisStyle = { fontSize: 10, fill: "#9ca3af" };
 
 function niceStep(range: number, targetCount = 5): number {
@@ -167,8 +184,22 @@ function TrendChart({
   yAxisStep?: number;
 }) {
   const storeOrder = useMemo(() => sections.flatMap(s => s.branches), [sections]);
+
+  // One summary series per market that actually has stores. Virginia is the
+  // dashed one purely so the two never rely on color to be told apart.
+  const summarySeries = useMemo(
+    () =>
+      sections
+        .filter(s => s.branches.length > 0)
+        .map(s => {
+          const short = s.section === "Tennessee" ? "TN" : "VA";
+          return { key: `${short} Average`, short, branches: s.branches, dashed: short === "VA" };
+        }),
+    [sections]
+  );
+
   const [visibleStores, setVisibleStores] = useState<Set<string>>(
-    () => new Set(storeOrder.map(b => getStoreLabel(b)))
+    () => new Set([...storeOrder.map(b => getStoreLabel(b)), ...summarySeries.map(s => s.key)])
   );
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -178,14 +209,21 @@ function TrendChart({
       const v = findStoreValue(b, pt.stores);
       row[getStoreLabel(b)] = v?.[metric] ?? null;
     }
+    // Deliberately averaged over every store in the market, not just the ticked
+    // ones — it's a fixed benchmark to read individual stores against, so it
+    // must not move when someone hides a store.
+    for (const s of summarySeries) {
+      row[s.key] = straightAverage(s.branches.map(b => findStoreValue(b, pt.stores)?.[metric]));
+    }
     return row;
   });
+
+  const seriesKeys = [...storeOrder.map(b => getStoreLabel(b)), ...summarySeries.map(s => s.key)];
 
   let visibleMin = Infinity;
   let visibleMax = -Infinity;
   for (const row of rows) {
-    for (const b of storeOrder) {
-      const name = getStoreLabel(b);
+    for (const name of seriesKeys) {
       if (!visibleStores.has(name)) continue;
       const v = row[name];
       if (typeof v === "number") {
@@ -268,6 +306,24 @@ function TrendChart({
               />
             );
           })}
+          {/* Drawn after the stores so the benchmark sits on top of the pack. */}
+          {summarySeries.map(s => {
+            if (!visibleStores.has(s.key)) return null;
+            return (
+              <Line
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                name={s.key}
+                stroke={SUMMARY_COLOR}
+                strokeWidth={SUMMARY_WIDTH}
+                strokeDasharray={s.dashed ? "6 4" : undefined}
+                dot={<TrendDot color={SUMMARY_COLOR} lastIndex={rows.length - 1} />}
+                connectNulls
+                isAnimationActive={false}
+              />
+            );
+          })}
         </LineChart>
       </ResponsiveContainer>
 
@@ -303,6 +359,32 @@ function TrendChart({
                   </label>
                 );
               })}
+              {(() => {
+                const s = summarySeries.find(x => x.short === groupLabel);
+                if (!s) return null;
+                return (
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-gray-800 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={visibleStores.has(s.key)}
+                      onChange={() => toggleStore(s.key)}
+                      style={{ accentColor: SUMMARY_COLOR }}
+                      className="rounded border-gray-300"
+                    />
+                    {/* Shows the dash pattern, so the two summary lines are
+                        identifiable in the legend without relying on color. */}
+                    <svg width="18" height="8" aria-hidden="true" className="shrink-0">
+                      <line
+                        x1="0" y1="4" x2="18" y2="4"
+                        stroke={SUMMARY_COLOR}
+                        strokeWidth={SUMMARY_WIDTH}
+                        strokeDasharray={s.dashed ? "5 3" : undefined}
+                      />
+                    </svg>
+                    {s.key}
+                  </label>
+                );
+              })()}
             </div>
           );
         })}
