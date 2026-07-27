@@ -366,6 +366,20 @@ export default function SurveyDataClient() {
 
   const colCount = metrics.length + 3;
 
+  /**
+   * The dates the selected window actually covers, carried in the card title so
+   * a pasted screenshot says what it's showing. `range` already resolves both
+   * kinds of selection — snapshot windows from their stored dates, fiscal
+   * periods through fiscal.ts — so the two read identically.
+   */
+  // A one-day window ("Yesterday") reads as a single date, not "7/26–7/26".
+  const titleRange = !range
+    ? ""
+    : range.start === range.end
+      ? shortDate(range.start)
+      : `${shortDate(range.start)}–${shortDate(range.end)}`;
+  const cardTitle = titleRange ? `SMG — ${selectedLabel} · ${titleRange}` : `SMG — ${selectedLabel}`;
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* banner: nav + controls, locked to the top together */}
@@ -465,7 +479,7 @@ export default function SurveyDataClient() {
           <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
               <CopyableTitle
-                title={`SMG — ${selectedLabel}`}
+                title={cardTitle}
                 targetRef={cardRef}
                 className="text-sm font-semibold text-gray-800"
               />
@@ -476,11 +490,8 @@ export default function SurveyDataClient() {
                 </span>
               )}
             </div>
-            {selectedWindow && (
-              <span className="text-xs text-gray-400">
-                {shortDate(selectedWindow.windowStart)}–{shortDate(selectedWindow.windowEnd)}
-              </span>
-            )}
+            {/* The dates used to sit here as well; they're in the title now, and
+                only snapshot selections ever had them. */}
           </div>
           <div className={`overflow-x-auto transition-opacity ${busy ? "opacity-50" : "opacity-100"}`}>
             <table className="w-full text-sm table-fixed">

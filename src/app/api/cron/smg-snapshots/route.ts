@@ -8,7 +8,7 @@ export const maxDuration = 300;
 // the cron runs and then sits frozen, so it read near-empty all day and isn't
 // surfaced any more (see the snapshots route). Skipping it also saves two of
 // the ten SMG report round-trips per run.
-const KEYS: SnapshotKey[] = ["yesterday", "t7", "wtd", "ptd"];
+const KEYS: SnapshotKey[] = ["yesterday", "t7", "wtd", "last_week", "ptd"];
 
 /**
  * Refreshes the rolling / to-date tiles. Every window here ends yesterday, so

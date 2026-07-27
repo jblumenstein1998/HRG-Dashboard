@@ -14,7 +14,7 @@ import type { LevelKey } from "@/lib/smgTrend";
 // runs and then sits frozen for the rest of the day, reading near-empty. It
 // stays in SnapshotKey so it can be restored by adding it back here (and to
 // the cron's KEYS) if the snapshot job ever runs more than once a day.
-const ORDER: SnapshotKey[] = ["yesterday", "t7", "wtd", "ptd"];
+const ORDER: SnapshotKey[] = ["yesterday", "t7", "wtd", "last_week", "ptd"];
 
 export async function GET(req: NextRequest) {
   const level = (req.nextUrl.searchParams.get("level") ?? "store") as LevelKey;

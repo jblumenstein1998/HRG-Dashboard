@@ -9,7 +9,7 @@
  * metric is added.
  */
 import { sql } from "@/lib/db";
-import { getMtdRange, getT7Range, getWtdRange } from "@/lib/fiscal";
+import { getLastWeekRange, getMtdRange, getT7Range, getWtdRange } from "@/lib/fiscal";
 import {
   fetchComparison,
   fetchTrend,
@@ -187,11 +187,12 @@ export async function ingestRecentPeriods(opts: {
 
 // ── snapshots (rolling / to-date windows) ─────────────────────────────────────
 
-export type SnapshotKey = "today" | "yesterday" | "t7" | "wtd" | "ptd";
+export type SnapshotKey = "today" | "yesterday" | "last_week" | "t7" | "wtd" | "ptd";
 
 export const SNAPSHOT_LABELS: Record<SnapshotKey, string> = {
   today: "Today",
   yesterday: "Yesterday",
+  last_week: "Last Week",
   t7: "Rolling 7 Days",
   wtd: "WTD",
   ptd: "PTD",
@@ -221,6 +222,14 @@ export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Dat
 
   if (key === "today") return { start: today, end: today };
   if (key === "yesterday") return { start: yesterday, end: yesterday };
+  if (key === "last_week") {
+    // The last completed Mon–Sun week. Unlike the others this one is already
+    // closed, so it ends on its own Sunday rather than being clipped to
+    // yesterday — clipping would make it a partial week for six days out of
+    // seven, which is what WTD is for.
+    const r = getLastWeekRange().range;
+    return { start: rangeStart(r), end: startOfDay(new Date(r.split(" : ")[1])) };
+  }
   if (key === "t7") {
     // fiscal.ts's T7 already ends yesterday
     return { start: rangeStart(getT7Range().range), end: yesterday };
