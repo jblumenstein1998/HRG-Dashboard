@@ -9,7 +9,7 @@
  * metric is added.
  */
 import { sql } from "@/lib/db";
-import { getLastWeekRange, getPeriodForDate, getT7Range, getTodayRange } from "@/lib/fiscal";
+import { getLastWeekRange, getPeriodForDate, getTodayRange } from "@/lib/fiscal";
 import {
   fetchComparison,
   fetchTrend,
@@ -214,6 +214,9 @@ function rangeStart(range: string): Date {
  * (which are barely populated, since guests answer days after visiting)
  * dragging the to-date numbers down.
  *
+ * T7 is the exception: it ends **today**, so the tile always reads as of the
+ * refresh that wrote it. See the branch below.
+ *
  * Returns null only when the calendar can't place yesterday at all.
  */
 export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Date } | null {
@@ -235,8 +238,20 @@ export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Dat
     return { start: rangeStart(r), end: startOfDay(new Date(r.split(" : ")[1])) };
   }
   if (key === "t7") {
-    // fiscal.ts's T7 already ends yesterday
-    return { start: rangeStart(getT7Range().range), end: yesterday };
+    // Rolling 7 days ending TODAY, so the window is always "as of the last
+    // refresh" — on 7/30 it reads 7/24–7/30, and tomorrow morning's run moves it
+    // to 7/25–7/31. Josh's call, 2026-07-30.
+    //
+    // Deliberately NOT fiscal.ts's getT7Range(), which ends yesterday and is
+    // what the drive-thru tab's "T7" means — the two tabs differ here on
+    // purpose, so don't "fix" one to match the other.
+    //
+    // Including today costs nothing even though visit-date responses for today
+    // are ~0 (guests answer days after visiting): scores are pooled weighted by
+    // response count, so a day contributing no responses can't move the number.
+    // It only changes what the window is labelled.
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+    return { start, end: today };
   }
 
   // WTD and PTD anchor on YESTERDAY, not today — the window ends yesterday, so
