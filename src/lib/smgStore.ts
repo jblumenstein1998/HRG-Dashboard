@@ -9,7 +9,7 @@
  * metric is added.
  */
 import { sql } from "@/lib/db";
-import { getLastWeekRange, getPeriodForDate, getT7Range } from "@/lib/fiscal";
+import { getLastWeekRange, getPeriodForDate, getT7Range, getTodayRange } from "@/lib/fiscal";
 import {
   fetchComparison,
   fetchTrend,
@@ -217,7 +217,11 @@ function rangeStart(range: string): Date {
  * Returns null only when the calendar can't place yesterday at all.
  */
 export function resolveSnapshotWindow(key: SnapshotKey): { start: Date; end: Date } | null {
-  const today = startOfDay(new Date());
+  // "Today" comes from fiscal.ts, which derives it in America/Chicago — not from
+  // the server clock. Vercel runs UTC, so `new Date()` would put the cron on the
+  // wrong calendar day whenever it fires before 05:00 UTC, and would disagree
+  // with the Central-anchored start dates the getters below return.
+  const today = rangeStart(getTodayRange().range);
   const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
 
   if (key === "today") return { start: today, end: today };
