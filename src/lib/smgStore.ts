@@ -338,6 +338,27 @@ export async function ingestSnapshot(opts: {
         window_end   = EXCLUDED.window_end,
         as_of        = now()
     `;
+
+    // Drop rows this run didn't refresh. The upsert only touches unit×metric
+    // pairs present in today's payload, and SMG's payload shrinks as well as
+    // grows — a store that fell below the response threshold, or a metric that
+    // dropped out, leaves its previous row behind under the same range_key with
+    // an older window. That silently mixes two date ranges inside one snapshot:
+    // "Yesterday" was found holding 66 rows for 7/29 alongside 6 rows still
+    // covering 7/26. Any row whose window doesn't match the one just written is
+    // stale by definition, so it goes.
+    //
+    // Deliberately after the insert, not before: cleaning up first would leave
+    // the tile empty for the length of the round trip, and a failed fetch (rows
+    // empty, so this block is skipped) should leave the last good snapshot in
+    // place rather than blank the tile.
+    await sql`
+      DELETE FROM smg_snapshots
+      WHERE range_key = ${opts.key}
+        AND level = ${level}
+        AND date_basis = ${dateBasis}
+        AND (window_start, window_end) <> (${ws}::date, ${we}::date)
+    `;
   }
 
   return { rows: rows.length, start: ws, end: we };

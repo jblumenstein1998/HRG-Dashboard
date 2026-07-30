@@ -25,7 +25,13 @@ export async function GET(req: NextRequest) {
 
     const present = ORDER.filter((k) => rows.some((r) => r.rangeKey === k));
     const ranges = present.map((key) => {
-      const sample = rows.find((r) => r.rangeKey === key)!;
+      // The dates on this row are what the picker labels the window with, so
+      // take the most recently written row rather than whichever one the query
+      // happens to return first — that way a straggler left over from an older
+      // run can't caption the window with a stale date range.
+      const sample = rows
+        .filter((r) => r.rangeKey === key)
+        .reduce((newest, r) => (new Date(r.asOf) > new Date(newest.asOf) ? r : newest));
       return {
         key,
         label: SNAPSHOT_LABELS[key],
