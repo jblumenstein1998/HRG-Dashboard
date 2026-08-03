@@ -11,6 +11,7 @@ import {
   VA_STORES,
   marketOf,
   metricRank,
+  pooledScore,
   prettyUnit,
   shortMetric,
 } from "@/lib/surveyMeta";
@@ -96,22 +97,6 @@ const axisStyle = { fontSize: 10, fill: "#9ca3af" };
 type Cell = { score: number | null; responses: number | null };
 type Point = { label: string; series: Record<string, Record<string, number | null>> };
 
-/**
- * Pooled score weighted by response count — a plain average of percentages
- * would let a store with 2 responses swing the market as hard as one with 60.
- * Same rule the table's summary rows use.
- */
-function pooled(cells: Cell[]): number | null {
-  let num = 0;
-  let den = 0;
-  for (const c of cells) {
-    if (c.score === null || !c.responses) continue;
-    num += c.score * c.responses;
-    den += c.responses;
-  }
-  return den ? Math.round(num / den) : null;
-}
-
 type AnyRow = {
   unitKey: string;
   unitName: string;
@@ -148,7 +133,9 @@ function buildPoint(label: string, rows: AnyRow[]): Point {
 
   for (const key of SUMMARY_KEYS) {
     const out: Record<string, number | null> = {};
-    for (const [metric, cells] of Object.entries(market[key] ?? {})) out[metric] = pooled(cells);
+    // Same pooling as the table's market rows, so the chart line and the row
+    // under it can't print different numbers for the same window.
+    for (const [metric, cells] of Object.entries(market[key] ?? {})) out[metric] = pooledScore(cells).score;
     let total = 0;
     for (const [store, n] of countByStore) {
       const list = key === "TN" ? TN_STORES : VA_STORES;

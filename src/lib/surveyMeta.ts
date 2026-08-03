@@ -62,6 +62,50 @@ export function marketOf(key: string, name: string): "TN" | "VA" | null {
   return null;
 }
 
+// ── Pooling ──────────────────────────────────────────────────────────────────
+
+export type PooledCell = { score: number | null; responses: number | null };
+
+/**
+ * Pooled score across units, behind the TN / VA / HRG rollup rows.
+ *
+ * Weighting by response count is the easy half — a plain average of
+ * percentages would let a store with 2 responses swing the market as hard as
+ * one with 60. The subtle half is *what* gets weighted. SMG reports each unit
+ * as a whole-percent top-box figure, so weighting those percentages
+ * re-averages numbers that have each already lost up to half a point, and the
+ * leftovers don't cancel — they accumulate into the pooled value and tip it
+ * over the next rounding boundary.
+ *
+ * Recovering each unit's top-box count first (score% x responses, back to the
+ * nearest whole respondent) and pooling counts over responses is what SMG
+ * itself does, and it reproduces SMG's own rollup rows. Checked against every
+ * Combined and region-manager row stored: 1215 of 1222 cells (99.4%) against
+ * 1092 (89.4%) for the weighted-percentage form.
+ *
+ * VA is what exposed it — seven stores carrying 7–20 responses apiece is the
+ * worst case for accumulated rounding, and its market line disagreed with the
+ * SMG portal on 8 of 30 snapshot cells (Cleanliness 59 vs 58, OSAT 76 vs 75)
+ * while TN's five larger stores happened to land right on all 30.
+ *
+ * The count recovery is exact while a unit's response count stays under ~100,
+ * which covers any single store. It is not a general way to un-round a figure
+ * the size of the Combined row, so pool from stores, never from other rollups.
+ */
+export function pooledScore(cells: PooledCell[]): { score: number | null; responses: number | null } {
+  let topBox = 0;
+  let responses = 0;
+  for (const c of cells) {
+    if (c.score === null || !c.responses) continue;
+    topBox += Math.round((c.score / 100) * c.responses);
+    responses += c.responses;
+  }
+  return {
+    score: responses ? Math.round((topBox / responses) * 100) : null,
+    responses: responses || null,
+  };
+}
+
 // ── Score color scale ────────────────────────────────────────────────────────
 
 export type ScoreTone = "good" | "ok" | "bad" | "none";

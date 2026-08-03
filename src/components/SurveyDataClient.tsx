@@ -12,6 +12,7 @@ import {
   TONE_TEXT,
   marketOf,
   metricRank,
+  pooledScore,
   prettyUnit,
   scoreTone,
   shortMetric,
@@ -142,27 +143,16 @@ function rangeForSelection(
 }
 
 /**
- * Pooled score across units, weighted by each unit's response count — a plain
- * average of percentages would let a store with 2 responses swing the market
- * as hard as one with 60.
+ * One market's (or the estate's) line, pooled from its stores by
+ * `pooledScore` — see surveyMeta.ts for why the pooling isn't a plain
+ * response-weighted average of the percentages SMG hands us.
  */
 function summarise(units: UnitRow[], metrics: string[]): UnitRow | null {
   if (!units.length) return null;
   const cells = new Map<string, Cell>();
   for (const metric of metrics) {
-    let num = 0;
-    let den = 0;
-    for (const u of units) {
-      const c = u.cells.get(metric);
-      if (!c || c.score === null || !c.responses) continue;
-      num += c.score * c.responses;
-      den += c.responses;
-    }
-    cells.set(metric, {
-      score: den ? Math.round(num / den) : null,
-      responses: den || null,
-      belowMin: false,
-    });
+    const pooled = pooledScore(units.map((u) => u.cells.get(metric) ?? { score: null, responses: null }));
+    cells.set(metric, { ...pooled, belowMin: false });
   }
   const surveys = units.reduce((n, u) => n + (u.surveys ?? 0), 0);
   const sales = units.reduce((n, u) => n + (u.sales ?? 0), 0);
