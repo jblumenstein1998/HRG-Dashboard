@@ -107,6 +107,59 @@ export function pooledScore(cells: PooledCell[]): { score: number | null; respon
   };
 }
 
+export type RollupRow = {
+  unitKey: string;
+  metric: string;
+  score: number | null;
+  responses: number | null;
+};
+
+/**
+ * SMG's own published row for a market, when one provably covers exactly the
+ * stores we're rolling up.
+ *
+ * SMG publishes its region-manager rows for the same windows we show, and
+ * today each region is one market — so where such a row exists it *is* the
+ * answer, with none of the rounding loss `pooledScore` has to work around.
+ *
+ * The catch is that "region manager" is a personnel fact and "TN / VA" is a
+ * geographic one. They coincide right now, but an RM picking up a store across
+ * the state line would silently turn the market line into something else. So a
+ * row is never matched by name: a candidate qualifies only if its response
+ * count agrees with the market's own store total on every metric, which is
+ * exactly the claim "these two cover the same stores". When no candidate
+ * qualifies, or more than one does, the caller falls back to pooling and the
+ * line stays approximately right rather than confidently wrong.
+ *
+ * `marketCells` is the market's store cells keyed by metric — the same input
+ * `pooledScore` would get.
+ */
+export function publishedMarketCells(
+  published: RollupRow[],
+  marketCells: Map<string, PooledCell[]>,
+): Map<string, PooledCell> | null {
+  const byUnit = new Map<string, Map<string, PooledCell>>();
+  for (const r of published) {
+    if (!byUnit.has(r.unitKey)) byUnit.set(r.unitKey, new Map());
+    byUnit.get(r.unitKey)!.set(r.metric, { score: r.score, responses: r.responses });
+  }
+
+  // Responses counted the way pooledScore counts them, so "same denominator"
+  // means the same thing on both sides of the comparison.
+  const wanted = new Map<string, number>();
+  for (const [metric, cells] of marketCells) {
+    let n = 0;
+    for (const c of cells) if (c.score !== null && c.responses) n += c.responses;
+    if (n > 0) wanted.set(metric, n);
+  }
+  if (!wanted.size) return null;
+
+  const qualified = [...byUnit.values()].filter((cells) =>
+    [...wanted].every(([metric, n]) => cells.get(metric)?.responses === n),
+  );
+  return qualified.length === 1 ? qualified[0] : null;
+}
+
 // ── Score color scale ────────────────────────────────────────────────────────
 
 export type ScoreTone = "good" | "ok" | "bad" | "none";

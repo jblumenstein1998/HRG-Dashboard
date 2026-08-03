@@ -13,6 +13,7 @@ import {
   metricRank,
   pooledScore,
   prettyUnit,
+  publishedMarketCells,
   shortMetric,
 } from "@/lib/surveyMeta";
 
@@ -105,8 +106,15 @@ type AnyRow = {
   responses: number | null;
 };
 
-/** One chart point: every store's score plus the TN/VA rollups. */
-function buildPoint(label: string, rows: AnyRow[]): Point {
+/**
+ * One chart point: every store's score plus the TN/VA rollups.
+ *
+ * `published` is SMG's region-manager rows for the same window, used for the
+ * market lines wherever one covers exactly that market's stores — the table
+ * prefers them for the same reason, and the line and the row under it have to
+ * agree.
+ */
+function buildPoint(label: string, rows: AnyRow[], published: AnyRow[] = []): Point {
   const series: Record<string, Record<string, number | null>> = {};
   const market: Record<string, Record<string, Cell[]>> = { TN: {}, VA: {} };
 
@@ -131,11 +139,15 @@ function buildPoint(label: string, rows: AnyRow[]): Point {
   }
   for (const [store, n] of countByStore) series[store][SURVEY_COUNT] = n;
 
+  const candidates = published.filter((r) => r.unitKey !== COMBINED_KEY);
+
   for (const key of SUMMARY_KEYS) {
     const out: Record<string, number | null> = {};
-    // Same pooling as the table's market rows, so the chart line and the row
-    // under it can't print different numbers for the same window.
-    for (const [metric, cells] of Object.entries(market[key] ?? {})) out[metric] = pooledScore(cells).score;
+    const cellsByMetric = new Map(Object.entries(market[key] ?? {}));
+    const smg = publishedMarketCells(candidates, cellsByMetric);
+    for (const [metric, cells] of cellsByMetric) {
+      out[metric] = smg?.get(metric)?.score ?? pooledScore(cells).score;
+    }
     let total = 0;
     for (const [store, n] of countByStore) {
       const list = key === "TN" ? TN_STORES : VA_STORES;
@@ -217,6 +229,10 @@ export default function SurveyTrendChart({
   // SMG only publishes a period once it closes, so the newest closed period is
   // always a few weeks stale. The period-to-date snapshot fills that gap.
   const [snapshots, setSnapshots] = useState<SnapshotsResponse | null>(null);
+  // SMG's region-manager rows — the TN and VA totals as SMG publishes them.
+  // The market lines prefer these over pooling; see publishedMarketCells.
+  const [rmByGrain, setRmByGrain] = useState<Partial<Record<Grain, ScoresResponse>>>({});
+  const [rmSnapshots, setRmSnapshots] = useState<SnapshotsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
   const [activeMetrics, setActiveMetrics] = useState<Set<string>>(new Set());
@@ -247,6 +263,31 @@ export default function SurveyTrendChart({
         const j: SnapshotsResponse = await r.json();
         // A missing snapshot just costs the partial point, so it isn't an error.
         if (!cancelled && !j.error) setSnapshots(j);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [dateBasis]);
+
+  // Published rollups. Failing to load them is never an error — the market
+  // lines just fall back to pooling, which is what they did before.
+  useEffect(() => {
+    if (rmByGrain[grain]) return;
+    let cancelled = false;
+    fetch(`/api/smg/scores?level=regionManager&periodType=${grain}&dateBasis=${dateBasis}&limit=260`)
+      .then(async (r) => {
+        const j: ScoresResponse = await r.json();
+        if (!cancelled && !j.error) setRmByGrain((prev) => ({ ...prev, [grain]: j }));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [grain, rmByGrain, dateBasis]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/smg/snapshots?level=regionManager&dateBasis=${dateBasis}`)
+      .then(async (r) => {
+        const j: SnapshotsResponse = await r.json();
+        if (!cancelled && !j.error) setRmSnapshots(j);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -303,8 +344,9 @@ export default function SurveyTrendChart({
     if (data?.periods.includes(label)) return null;
 
     const rows = snapshots.rows.filter((r) => r.rangeKey === "ptd");
-    return rows.length ? buildPoint(`${label} (partial)`, rows) : null;
-  }, [grain, snapshots, data]);
+    const pub = (rmSnapshots?.rows ?? []).filter((r) => r.rangeKey === "ptd");
+    return rows.length ? buildPoint(`${label} (partial)`, rows, pub) : null;
+  }, [grain, snapshots, rmSnapshots, data]);
 
   /** One point per period, with the in-progress period appended. */
   const points = useMemo<Point[]>(() => {
@@ -314,9 +356,16 @@ export default function SurveyTrendChart({
       const list = byPeriod.get(r.periodLabel);
       if (list) list.push(r); else byPeriod.set(r.periodLabel, [r]);
     }
-    const closed = data.periods.map((label) => buildPoint(label, byPeriod.get(label) ?? []));
+    const pubByPeriod = new Map<string, ScoreRow[]>();
+    for (const r of rmByGrain[grain]?.rows ?? []) {
+      const list = pubByPeriod.get(r.periodLabel);
+      if (list) list.push(r); else pubByPeriod.set(r.periodLabel, [r]);
+    }
+    const closed = data.periods.map((label) =>
+      buildPoint(label, byPeriod.get(label) ?? [], pubByPeriod.get(label) ?? []),
+    );
     return partialPoint ? [...closed, partialPoint] : closed;
-  }, [data, partialPoint]);
+  }, [data, partialPoint, rmByGrain, grain]);
 
   const storeNames = useMemo(() => {
     const s = new Set<string>();

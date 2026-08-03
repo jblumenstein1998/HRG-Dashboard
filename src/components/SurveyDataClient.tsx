@@ -14,6 +14,9 @@ import {
   metricRank,
   pooledScore,
   prettyUnit,
+  publishedMarketCells,
+  type PooledCell,
+  type RollupRow,
   scoreTone,
   shortMetric,
 } from "@/lib/surveyMeta";
@@ -143,16 +146,41 @@ function rangeForSelection(
 }
 
 /**
- * One market's (or the estate's) line, pooled from its stores by
- * `pooledScore` — see surveyMeta.ts for why the pooling isn't a plain
- * response-weighted average of the percentages SMG hands us.
+ * SMG's own row for a group of units, if one of `candidates` covers exactly
+ * those units. Adapts the table's per-unit cell maps to the shape
+ * `publishedMarketCells` compares on.
  */
-function summarise(units: UnitRow[], metrics: string[]): UnitRow | null {
+function matchPublished(candidates: RollupRow[], units: UnitRow[], metrics: string[]) {
+  if (!candidates.length || !units.length) return null;
+  return publishedMarketCells(
+    candidates,
+    new Map(metrics.map((m) => [m, units.map((u) => u.cells.get(m) ?? { score: null, responses: null })])),
+  );
+}
+
+/**
+ * One market's (or the estate's) line.
+ *
+ * `published` is SMG's own row for this group where it has one — matched by
+ * coverage, not by name, in `publishedMarketCells`. Preferring it makes the
+ * line identical to the SMG portal rather than merely very close: pooling has
+ * to reconstruct respondent counts from whole-percent store scores, which is
+ * right ~99.5% of the time but can't be better, since the fractions SMG
+ * rounded away aren't in the data we're given.
+ */
+function summarise(
+  units: UnitRow[],
+  metrics: string[],
+  published?: Map<string, PooledCell> | null,
+): UnitRow | null {
   if (!units.length) return null;
   const cells = new Map<string, Cell>();
   for (const metric of metrics) {
-    const pooled = pooledScore(units.map((u) => u.cells.get(metric) ?? { score: null, responses: null }));
-    cells.set(metric, { ...pooled, belowMin: false });
+    const smg = published?.get(metric);
+    const pooled = smg?.score != null
+      ? smg
+      : pooledScore(units.map((u) => u.cells.get(metric) ?? { score: null, responses: null }));
+    cells.set(metric, { score: pooled.score, responses: pooled.responses, belowMin: false });
   }
   const surveys = units.reduce((n, u) => n + (u.surveys ?? 0), 0);
   const sales = units.reduce((n, u) => n + (u.sales ?? 0), 0);
@@ -173,6 +201,12 @@ export default function SurveyDataClient() {
 
   const [scores, setScores] = useState<ScoresResponse | null>(null);
   const [snapshots, setSnapshots] = useState<SnapshotsResponse | null>(null);
+  // SMG's region-manager rows, which are the TN and VA totals as SMG itself
+  // publishes them. Fetched alongside the store rows rather than replacing
+  // them: the table still lists stores, and the market lines only borrow these
+  // where they provably cover the same stores.
+  const [rmScores, setRmScores] = useState<ScoresResponse | null>(null);
+  const [rmSnapshots, setRmSnapshots] = useState<SnapshotsResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -180,11 +214,15 @@ export default function SurveyDataClient() {
     Promise.all([
       fetch(`/api/smg/scores?level=${level}&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
       fetch(`/api/smg/snapshots?level=${level}&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
+      fetch(`/api/smg/scores?level=regionManager&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
+      fetch(`/api/smg/snapshots?level=regionManager&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
     ])
-      .then(([s, snap]: [ScoresResponse, SnapshotsResponse]) => {
+      .then(([s, snap, rs, rsnap]: [ScoresResponse, SnapshotsResponse, ScoresResponse, SnapshotsResponse]) => {
         if (cancelled) return;
         setScores(s.error ? null : s);
         setSnapshots(snap.error ? null : snap);
+        setRmScores(rs.error ? null : rs);
+        setRmSnapshots(rsnap.error ? null : rsnap);
         setLoading(false);
       })
       .catch(() => !cancelled && setLoading(false));
@@ -308,12 +346,40 @@ export default function SurveyDataClient() {
   const tn = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "TN"), [rows]);
   const va = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "VA"), [rows]);
 
-  const tnSummary = useMemo(() => summarise(tn, metrics), [tn, metrics]);
-  const vaSummary = useMemo(() => summarise(va, metrics), [va, metrics]);
-  const hrgSummary = useMemo(
-    () => summarise(isStoreLevel ? [...tn, ...va] : rows, metrics),
-    [isStoreLevel, tn, va, rows, metrics],
-  );
+  /** SMG's region-manager rows for whichever window is selected. */
+  const publishedRows = useMemo(() => {
+    const source = selected.startsWith("snap:")
+      ? (rmSnapshots?.rows ?? []).filter((r) => r.rangeKey === selected.slice(5))
+      : selected.startsWith("period:")
+        ? (rmScores?.rows ?? []).filter((r) => r.periodLabel === selected.slice(7))
+        : [];
+    // SMG's own all-regions rollup is the HRG line, not a market candidate.
+    return source.filter((r) => r.unitKey !== COMBINED_KEY);
+  }, [selected, rmScores, rmSnapshots]);
+
+  /** SMG's own Combined row for the selected window — the estate total. */
+  const combinedRows = useMemo(() => {
+    const source: { unitKey: string; metric: string; score: number | null; responses: number | null }[] =
+      selected.startsWith("snap:")
+        ? (snapshots?.rows ?? []).filter((r) => r.rangeKey === selected.slice(5))
+        : selected.startsWith("period:")
+          ? (scores?.rows ?? []).filter((r) => r.periodLabel === selected.slice(7))
+          : [];
+    return source.filter((r) => r.unitKey === COMBINED_KEY);
+  }, [selected, scores, snapshots]);
+
+  const tnSummary = useMemo(() => summarise(tn, metrics, matchPublished(publishedRows, tn, metrics)), [tn, metrics, publishedRows]);
+  const vaSummary = useMemo(() => summarise(va, metrics, matchPublished(publishedRows, va, metrics)), [va, metrics, publishedRows]);
+
+  /**
+   * The estate line. SMG publishes Combined at period grain but not for the
+   * rolling snapshot windows, so this falls back to pooling more often than
+   * the market lines do.
+   */
+  const hrgSummary = useMemo(() => {
+    const units = isStoreLevel ? [...tn, ...va] : rows;
+    return summarise(units, metrics, matchPublished(combinedRows, units, metrics));
+  }, [isStoreLevel, tn, va, rows, metrics, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
