@@ -80,8 +80,9 @@ export type PooledCell = { score: number | null; responses: number | null };
  * Recovering each unit's top-box count first (score% x responses, back to the
  * nearest whole respondent) and pooling counts over responses is what SMG
  * itself does, and it reproduces SMG's own rollup rows. Checked against every
- * Combined and region-manager row stored: 1215 of 1222 cells (99.4%) against
- * 1092 (89.4%) for the weighted-percentage form.
+ * Combined and region-manager row stored: 1415 of 1422 cells (99.5%) against
+ * 1292 (90.9%) for the weighted-percentage form. The seven that still differ
+ * land within 0.6 of a rounding boundary, six of them exactly on .50.
  *
  * VA is what exposed it — seven stores carrying 7–20 responses apiece is the
  * worst case for accumulated rounding, and its market line disagreed with the
