@@ -572,7 +572,7 @@ export default function SurveyDataClient() {
                 title="Re-pull this window from SMG. Scores keep moving for 14 days after the visit date, so a window can change between daily syncs."
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
               >
-                {fetching ? "Fetching…" : "Fetch from SMG"}
+                {fetching ? "Fetching…" : "Fetch"}
               </button>
               <button
                 onClick={() => setRefreshKey((k) => k + 1)}
