@@ -197,6 +197,8 @@ export default function SurveyDataClient() {
   // Opens on biggest-selling first, the order the table used to build in.
   const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [fetching, setFetching] = useState(false);
+  const [fetchNote, setFetchNote] = useState<{ ok: boolean; text: string } | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
   const [scores, setScores] = useState<ScoresResponse | null>(null);
@@ -429,6 +431,40 @@ export default function SurveyDataClient() {
 
   const colCount = metrics.length + 3;
 
+  // The note describes the window it was fetched for, so it can't outlive it.
+  useEffect(() => setFetchNote(null), [selected]);
+
+  /**
+   * Re-pull the selected window from SMG, then re-read it.
+   *
+   * Deliberately separate from Refresh, which only re-reads what's already
+   * stored. This one is a live round trip to SMG costing several seconds, so
+   * it stays an explicit act rather than something every refresh triggers.
+   */
+  const fetchFromSmg = async () => {
+    setFetching(true);
+    setFetchNote(null);
+    try {
+      const res = await fetch("/api/smg/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selection: selected, dateBasis: DATE_BASIS }),
+      });
+      const j = (await res.json()) as { error?: string; ok?: boolean };
+      if (!res.ok || j.error) {
+        setFetchNote({ ok: false, text: j.error ? `Fetch failed — ${j.error}` : "Fetch failed" });
+        return;
+      }
+      // Re-read so the table shows what was just written.
+      setRefreshKey((k) => k + 1);
+      setFetchNote({ ok: true, text: `Updated from SMG just now` });
+    } catch {
+      setFetchNote({ ok: false, text: "Fetch failed — couldn't reach the server" });
+    } finally {
+      setFetching(false);
+    }
+  };
+
   /**
    * The dates the selected window actually covers, carried in the card title so
    * a pasted screenshot says what it's showing. `range` already resolves both
@@ -526,13 +562,26 @@ export default function SurveyDataClient() {
               </span>
             )}
 
-            <button
-              onClick={() => setRefreshKey((k) => k + 1)}
-              disabled={busy}
-              className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-            >
-              {busy ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {fetchNote && (
+                <span className={`text-xs ${fetchNote.ok ? "text-gray-500" : "text-red-600"}`}>{fetchNote.text}</span>
+              )}
+              <button
+                onClick={fetchFromSmg}
+                disabled={fetching || !selected}
+                title="Re-pull this window from SMG. Scores keep moving for 14 days after the visit date, so a window can change between daily syncs."
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+              >
+                {fetching ? "Fetching…" : "Fetch from SMG"}
+              </button>
+              <button
+                onClick={() => setRefreshKey((k) => k + 1)}
+                disabled={busy}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+              >
+                {busy ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
