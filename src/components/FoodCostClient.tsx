@@ -1225,7 +1225,7 @@ export default function FoodCostClient() {
       next.add(id);
       return next;
     });
-    const base = `/api/netchef/items?locationId=${id}&start=${startDate}&end=${endDate}`;
+    const base = `/api/netchef/items?locationId=${id}&start=${startDate}&end=${endDate}&limit=10`;
     if (!cogsItemsCache[id]) {
       setCogsItemsCache(prev => ({ ...prev, [id]: "loading" }));
       fetch(`${base}&mode=actual`)
