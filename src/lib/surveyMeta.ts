@@ -32,7 +32,9 @@ export const STORE_LABELS: Record<string, string> = {
   "57007": "Beach",
 };
 
-// Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
+// Canonical per-store colors — the single source for the SMG, Drive-Thru trend and
+// Food Cost variance charts, which all import from here. Change a store's color once,
+// and it changes on every tab; don't copy this map back into a component.
 export const STORE_COLOR: Record<string, string> = {
   "Columbia":       "#dc2626",
   "Springfield":    "#2563eb",
