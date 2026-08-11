@@ -482,9 +482,36 @@ export async function queryScores(q: ScoreQuery = {}): Promise<ScoreRow[]> {
 }
 
 /**
- * When a cut was last written by an ingest. Drives the tab's "Updated N ago"
- * label, so a stale table is visible rather than something you'd only catch by
- * noticing the numbers hadn't moved.
+ * When each period was last written, keyed by period label.
+ *
+ * Per period rather than one MAX over the cut: refreshing P7 would otherwise
+ * make P2 claim to be fresh, since MAX only knows the newest write in the whole
+ * table. The tab stamps whichever window is selected, so it needs that window's
+ * own time.
+ *
+ * Snapshot windows aren't here at all — they live in smg_snapshots and carry
+ * their own `as_of`, which the snapshots route already returns.
+ */
+export async function scoreSyncByPeriod(
+  level: LevelKey = "store",
+  periodType: DateTypeKey = "period",
+  dateBasis: DateBasis = "visit",
+): Promise<Record<string, string>> {
+  const rows = (await sql`
+    SELECT period_label, MAX(updated_at) AS at
+    FROM smg_scores
+    WHERE level = ${level} AND period_type = ${periodType} AND date_basis = ${dateBasis}
+    GROUP BY period_label
+  `) as { period_label: string; at: string | null }[];
+
+  const out: Record<string, string> = {};
+  for (const r of rows) if (r.at) out[r.period_label] = String(r.at);
+  return out;
+}
+
+/**
+ * When a cut was last written by an ingest, as a single MAX. Kept for callers
+ * that want "has this ever synced" rather than per-window freshness.
  */
 export async function lastScoreSyncAt(
   level: LevelKey = "store",

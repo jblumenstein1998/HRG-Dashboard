@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { lastScoreSyncAt, listStoredMetrics, queryScores, type DateBasis } from "@/lib/smgStore";
+import {
+  lastScoreSyncAt,
+  listStoredMetrics,
+  queryScores,
+  scoreSyncByPeriod,
+  type DateBasis,
+} from "@/lib/smgStore";
 import type { DateTypeKey, LevelKey } from "@/lib/smgTrend";
 
 /**
@@ -24,10 +30,11 @@ export async function GET(req: NextRequest) {
   const limit = Math.max(1, Math.min(Number(p.get("limit") ?? 12) || 12, 260));
 
   try {
-    const [rows, metrics, syncedAt] = await Promise.all([
+    const [rows, metrics, syncedAt, syncedByPeriod] = await Promise.all([
       queryScores({ level, periodType, dateBasis, units: csv("units"), metrics: csv("metrics"), limit }),
       listStoredMetrics(level, periodType),
       lastScoreSyncAt(level, periodType, dateBasis),
+      scoreSyncByPeriod(level, periodType, dateBasis),
     ]);
 
     // Period ordering is defined by the data, not by the client re-deriving it.
@@ -50,6 +57,7 @@ export async function GET(req: NextRequest) {
       units,
       availableMetrics: metrics,
       syncedAt,
+      syncedByPeriod,
       rows,
     });
   } catch (err) {
@@ -58,7 +66,7 @@ export async function GET(req: NextRequest) {
     if (/relation "smg_scores" does not exist/i.test(msg)) {
       return NextResponse.json({
         level, periodType, dateBasis,
-        periods: [], units: [], availableMetrics: [], syncedAt: null, rows: [],
+        periods: [], units: [], availableMetrics: [], syncedAt: null, syncedByPeriod: {}, rows: [],
       });
     }
     console.error("[SMG] /api/smg/scores failed:", msg);

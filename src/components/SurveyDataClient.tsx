@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
+import { SHOW_BONUS_TAB } from "@/lib/featureFlags";
 import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
@@ -37,8 +38,10 @@ type ScoresResponse = {
   periods: string[];
   units: { key: string; name: string }[];
   availableMetrics: string[];
-  /** When the ingest last wrote this cut; drives the freshness label. */
+  /** When the ingest last wrote this cut, as a single MAX across periods. */
   syncedAt: string | null;
+  /** Per-period write times, keyed by period label. Drives the freshness label. */
+  syncedByPeriod: Record<string, string>;
   rows: ScoreRow[];
   error?: string;
 };
@@ -454,6 +457,25 @@ export default function SurveyDataClient() {
 
   const colCount = metrics.length + 3;
 
+  /**
+   * When the *selected* window was last written — which is not one timestamp.
+   *
+   * The two kinds of selection are backed by different tables, and Refresh
+   * writes only the one the selection needs. Stamping a table-wide MAX of
+   * smg_scores meant a snapshot window (PTD, Today, WTD…) reported the last
+   * time any *period* was ingested, so it sat unchanged while Refresh said
+   * "Updated from SMG just now" — the snapshot had gone into smg_snapshots,
+   * which the stamp never looked at.
+   *
+   * Reading each selection's own row also stops a refresh of one period from
+   * making every other period claim to be fresh.
+   */
+  const selectionSyncedAt = selected.startsWith("snap:")
+    ? (selectedWindow?.asOf ?? null)
+    : selected.startsWith("period:")
+      ? (scores?.syncedByPeriod?.[selected.slice(7)] ?? null)
+      : null;
+
   // The note describes the window it was fetched for, so it can't outlive it.
   useEffect(() => setFetchNote(null), [selected]);
 
@@ -483,9 +505,11 @@ export default function SurveyDataClient() {
         setFetchNote({ ok: false, text: j.error ? `Fetch failed — ${j.error}` : "Fetch failed" });
         return;
       }
-      // Re-read so the table shows what was just written.
+      // Re-read so the table shows what was just written. No success note —
+      // the card's own "Updated …" stamp already moves, and saying it twice in
+      // two places was noise. Failures still surface, since nothing else would
+      // show them.
       setRefreshKey((k) => k + 1);
-      setFetchNote({ ok: true, text: `Updated from SMG just now` });
     } catch {
       setFetchNote({ ok: false, text: "Fetch failed — couldn't reach the server" });
     } finally {
@@ -525,7 +549,7 @@ export default function SurveyDataClient() {
                   <option value="/food-cost">Food Cost</option>
                   <option value="/par">POS Sales</option>
                   <option value="/survey-data">SMG</option>
-                  <option value="/bonus">Bonus</option>
+                  {SHOW_BONUS_TAB && <option value="/bonus">Bonus</option>}
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -580,8 +604,10 @@ export default function SurveyDataClient() {
             )}
 
             <div className="ml-auto flex items-center gap-2">
-              {fetchNote && (
-                <span className={`text-xs ${fetchNote.ok ? "text-gray-500" : "text-red-600"}`}>{fetchNote.text}</span>
+              {/* Only failures appear here; success is reported by the card's
+                  own "Updated …" stamp rather than said twice. */}
+              {fetchNote && !fetchNote.ok && (
+                <span className="text-xs text-red-600">{fetchNote.text}</span>
               )}
               <button
                 onClick={refreshAll}
@@ -619,8 +645,8 @@ export default function SurveyDataClient() {
             <span className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
               {fetching && <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />}
               <span>
-                Updated {formatSyncStamp(scores?.syncedAt)}
-                {fetching ? " · fetching from SMG…" : ""}
+                Updated {formatSyncStamp(selectionSyncedAt)}
+                {fetching ? " · refreshing…" : ""}
               </span>
             </span>
           </div>

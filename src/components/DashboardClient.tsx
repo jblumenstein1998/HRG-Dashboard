@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import LocationCard from "./LocationCard";
 import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
+import { SHOW_BONUS_TAB } from "@/lib/featureFlags";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel, getStoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
@@ -248,7 +249,7 @@ export default function DashboardClient() {
                   <option value="/food-cost">Food Cost</option>
                   <option value="/par">POS Sales</option>
                   <option value="/survey-data">SMG</option>
-                  <option value="/bonus">Bonus</option>
+                  {SHOW_BONUS_TAB && <option value="/bonus">Bonus</option>}
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
