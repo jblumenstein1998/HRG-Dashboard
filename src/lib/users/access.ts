@@ -63,16 +63,14 @@ export async function getViewer(): Promise<Viewer | null> {
  * Guard for a page. Redirects rather than throwing, so an unauthorised URL
  * behaves like a wrong turn instead of an error screen.
  *
- * Order matters: not-signed-in goes to /login; signed in but owing a password
- * change goes to /change-password and can't reach anything else; signed in but
- * not entitled to this tab goes to the first tab they *can* see, so they land
- * somewhere useful rather than on a dead end.
+ * Not signed in goes to /login; signed in but not entitled to this tab goes to
+ * the first tab they *can* see, so they land somewhere useful rather than on a
+ * dead end.
  */
 export async function requireTab(tab: Tab): Promise<Viewer> {
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
 
-  if (viewer.user.mustReset) redirect("/change-password");
 
   if (!viewer.position.tabs.includes(tab)) {
     redirect(landingTab(viewer.position.tabs));
@@ -84,7 +82,6 @@ export async function requireTab(tab: Tab): Promise<Viewer> {
 export async function requireAdmin(): Promise<Viewer> {
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
-  if (viewer.user.mustReset) redirect("/change-password");
   if (!viewer.position.isAdmin) redirect(landingTab(viewer.position.tabs));
   return viewer;
 }

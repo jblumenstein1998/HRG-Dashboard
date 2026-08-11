@@ -32,8 +32,6 @@ export type SessionPayload = {
   pos: string;
   /** app_users.token_version when minted; a bump invalidates this token. */
   ver: number;
-  /** Whether the user still owes us a password change. */
-  rst: boolean;
   /** Unix seconds. */
   exp: number;
 };

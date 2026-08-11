@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCode, OAUTH_COOKIE } from "@/lib/users/google";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "@/lib/users/session";
-import { findByEmail, recordLogin, clearMustReset } from "@/lib/users/store";
+import { findByEmail, recordLogin } from "@/lib/users/store";
 
 /**
  * Where Google sends the browser back.
@@ -65,15 +65,11 @@ export async function GET(request: NextRequest) {
     return fail(request, "That account has been disabled.");
   }
 
-  // A Google account has no dashboard password, so there is nothing to force a
-  // change of. Anyone still flagged from the password era is cleared here.
-  if (user.mustReset) await clearMustReset(user.id);
 
   const token = await signSession({
     uid: user.id,
     pos: user.positionId,
     ver: user.tokenVersion,
-    rst: false,
   });
 
   const url = request.nextUrl.clone();

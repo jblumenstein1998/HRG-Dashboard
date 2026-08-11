@@ -9,7 +9,8 @@
  *                  grants access; there are no per-user overrides on purpose,
  *                  so "who can see Bonus" has exactly one answer per position.
  *
- * Note what is *not* here: nothing from BerryAI, NetChef, PAR or SMG. Those are
+ * Note what is *not* here: no password, and nothing from BerryAI, NetChef, PAR
+ * or SMG. Identity comes from Google (lib/users/google.ts). Those are
  * back-end service credentials in the environment. A dashboard account is only
  * a dashboard account — revoking one costs nobody their vendor access, and
  * adding a user needs no vendor seat.
@@ -67,15 +68,11 @@ async function createUserSchema(): Promise<void> {
       email         TEXT NOT NULL,
       name          TEXT NOT NULL,
       position_id   TEXT NOT NULL REFERENCES app_positions(id),
-      password_hash TEXT NOT NULL,
-      -- Set when an admin issues a temporary password. The app refuses to serve
-      -- anything but the change-password screen until the user clears it.
-      must_reset    BOOLEAN NOT NULL DEFAULT TRUE,
       -- Disabling rather than deleting: bonus_inputs.entered_by and similar
       -- audit trails reference people who have left.
       disabled_at   TIMESTAMPTZ,
-      -- Bumped on password change or disable. Sessions carry the value they
-      -- were minted with, so bumping it signs the person out everywhere.
+      -- Bumped when an account is disabled. Sessions carry the value they were
+      -- minted with, so bumping it signs the person out everywhere.
       token_version INTEGER NOT NULL DEFAULT 1,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_login_at TIMESTAMPTZ

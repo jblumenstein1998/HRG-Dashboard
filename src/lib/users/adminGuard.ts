@@ -14,9 +14,6 @@ import { apiViewer } from "./access";
 export async function requireAdminApi(): Promise<Response | null> {
   const viewer = await apiViewer();
   if (!viewer) return Response.json({ error: "Not signed in" }, { status: 401 });
-  if (viewer.user.mustReset) {
-    return Response.json({ error: "Password change required" }, { status: 403 });
-  }
   if (!viewer.position.isAdmin) {
     return Response.json({ error: "Not allowed" }, { status: 403 });
   }

@@ -9,7 +9,6 @@ type User = {
   email: string;
   name: string;
   positionId: string;
-  mustReset: boolean;
   disabledAt: string | null;
   lastLoginAt: string | null;
 };
@@ -19,9 +18,8 @@ type Position = { id: string; label: string; tabs: Tab[]; isAdmin: boolean };
 /**
  * Users and access.
  *
- * A temporary password is shown once, in a banner, immediately after it's
- * issued — there is no way to retrieve it later because it isn't stored. The
- * banner has to be dismissed deliberately so it can't scroll away unnoticed.
+ * Adding someone grants an address permission to sign in with Google. No
+ * password is issued, so there is nothing to hand over and nothing to reset.
  */
 export default function AdminClient({
   initialUsers,
@@ -38,11 +36,8 @@ export default function AdminClient({
 }) {
   const [users, setUsers] = useState(initialUsers);
   const [positions, setPositions] = useState(initialPositions);
-  const [issued, setIssued] = useState<{ name: string; password: string } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const positionLabel = (id: string) => positions.find((p) => p.id === id)?.label ?? id;
 
   async function refresh() {
     const res = await fetch("/api/admin/users");
@@ -99,25 +94,6 @@ export default function AdminClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
-        {issued && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3.5">
-            <div className="text-sm font-semibold text-amber-900">
-              Temporary password for {issued.name}
-            </div>
-            <div className="font-mono text-lg text-amber-950 mt-1 select-all">{issued.password}</div>
-            <div className="text-xs text-amber-800 mt-1">
-              Shown once — it isn&apos;t stored and can&apos;t be looked up again. They&apos;ll be
-              asked to choose their own at first sign-in.
-            </div>
-            <button
-              onClick={() => setIssued(null)}
-              className="text-xs mt-2 px-2.5 py-1 rounded-md border border-amber-300 hover:bg-amber-100 text-amber-900 cursor-pointer"
-            >
-              I&apos;ve copied it
-            </button>
-          </div>
-        )}
-
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
             {error}
@@ -127,16 +103,13 @@ export default function AdminClient({
         <AddUser
           positions={positions}
           busy={busy}
-          onAdd={async (form) => {
-            const j = await send("/api/admin/users", {
+          onAdd={(form) =>
+            send("/api/admin/users", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(form),
-            });
-            if (j?.tempPassword) {
-              setIssued({ name: form.name, password: String(j.tempPassword) });
-            }
-          }}
+            })
+          }
         />
 
         <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -185,8 +158,6 @@ export default function AdminClient({
                     <td className="px-4 py-3 text-xs">
                       {u.disabledAt ? (
                         <span className="text-red-600">Disabled</span>
-                      ) : u.mustReset ? (
-                        <span className="text-amber-700">Awaiting first sign-in</span>
                       ) : u.lastLoginAt ? (
                         <span className="text-gray-500">Active</span>
                       ) : (
@@ -194,22 +165,6 @@ export default function AdminClient({
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <button
-                        disabled={busy}
-                        onClick={async () => {
-                          const j = await send("/api/admin/users", {
-                            method: "PATCH",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ id: u.id, resetPassword: true }),
-                          });
-                          if (j?.tempPassword) {
-                            setIssued({ name: u.name, password: String(j.tempPassword) });
-                          }
-                        }}
-                        className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer disabled:opacity-50"
-                      >
-                        Reset password
-                      </button>{" "}
                       {/* You can't disable yourself — that's a one-way trip out
                           of the admin screen with no way back in. */}
                       {u.id !== viewerId && (

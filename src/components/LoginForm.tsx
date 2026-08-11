@@ -1,49 +1,11 @@
-"use client";
-
-import { useState, FormEvent } from "react";
-import { useRouter } from "next/navigation";
-
 /**
- * The sign-in form.
+ * The sign-in card.
  *
- * A client component only because it owns form state. The page around it is a
- * server component that reads ?error= and passes it in — reading it here with
- * useSearchParams would force the whole page behind a Suspense boundary, which
- * shipped an empty shell to production that only filled in after hydration.
+ * Google is the only way in. There is no password to type, forget or reset —
+ * see lib/users/google.ts. A server component renders this and passes any
+ * message the Google callback came back with.
  */
 export default function LoginForm({ callbackError }: { callbackError?: string }) {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Login failed");
-        return;
-      }
-      router.push(data.mustReset ? "/change-password" : "/");
-      router.refresh();
-    } catch {
-      setError("Network error — please try again");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-gray-50">
       <div className="w-full max-w-sm">
@@ -54,9 +16,9 @@ export default function LoginForm({ callbackError }: { callbackError?: string })
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
-          {(callbackError || error) && (
+          {callbackError && (
             <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 mb-5">
-              {callbackError || error}
+              {callbackError}
             </div>
           )}
 
@@ -76,61 +38,6 @@ export default function LoginForm({ callbackError }: { callbackError?: string })
           <p className="text-xs text-gray-400 text-center mt-3">
             Use your @hudsonrestaurantgroup.com account.
           </p>
-
-          {!showPassword ? (
-            <button
-              onClick={() => setShowPassword(true)}
-              className="w-full text-xs text-gray-400 hover:text-gray-600 mt-6 cursor-pointer transition"
-            >
-              Sign in with a password instead
-            </button>
-          ) : (
-            <>
-              <div className="flex items-center gap-3 my-6">
-                <div className="h-px bg-gray-200 flex-1" />
-                <span className="text-xs text-gray-400">or</span>
-                <div className="h-px bg-gray-200 flex-1" />
-              </div>
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Email
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg border border-gray-300 text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Password
-                  </label>
-                  <input
-                    id="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-lg border border-gray-300 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-600 focus:border-transparent transition"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-red-700 hover:bg-red-800 text-white font-medium text-sm rounded-lg px-4 py-2.5 transition disabled:opacity-50 cursor-pointer"
-                >
-                  {loading ? "Signing in…" : "Sign in"}
-                </button>
-              </form>
-            </>
-          )}
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6 italic">

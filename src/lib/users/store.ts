@@ -8,7 +8,6 @@
 
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { hashPassword } from "./password";
 import { ensureUserSchema } from "./schema";
 import { ALL_TABS, type Tab } from "./tabs";
 
@@ -24,25 +23,13 @@ export type User = {
   email: string;
   name: string;
   positionId: string;
-  mustReset: boolean;
   disabledAt: string | null;
   tokenVersion: number;
   createdAt: string;
   lastLoginAt: string | null;
 };
 
-type UserRow = User & { passwordHash: string };
-
-/**
- * Drops the password hash.
- *
- * Declaring a return type of `User` does **not** remove it — TypeScript's
- * structural typing is happy with the extra property and `JSON.stringify` then
- * serialises it straight to the browser. Anything that leaves the server goes
- * through here. A hash is not a password, but it is offline-crackable, and it
- * has no business in a response, a log or a cache.
- */
-export const publicUser = ({ passwordHash: _drop, ...rest }: UserRow): User => rest;
+type UserRow = User;
 
 const toPosition = (r: Record<string, unknown>): Position => ({
   id: String(r.id),
@@ -56,8 +43,6 @@ const toUser = (r: Record<string, unknown>): UserRow => ({
   email: String(r.email),
   name: String(r.name),
   positionId: String(r.position_id),
-  passwordHash: String(r.password_hash),
-  mustReset: Boolean(r.must_reset),
   disabledAt: r.disabled_at === null ? null : String(r.disabled_at),
   tokenVersion: Number(r.token_version),
   createdAt: String(r.created_at),
@@ -137,7 +122,7 @@ export async function listUsers(): Promise<User[]> {
   const rows = await sql`
     SELECT * FROM app_users ORDER BY disabled_at NULLS FIRST, name
   `;
-  return (rows as Record<string, unknown>[]).map((r) => publicUser(toUser(r)));
+  return (rows as Record<string, unknown>[]).map(toUser);
 }
 
 export async function findByEmail(email: string): Promise<UserRow | null> {
@@ -166,20 +151,14 @@ export async function createUser(u: {
   email: string;
   name: string;
   positionId: string;
-  password: string;
-  mustReset?: boolean;
 }): Promise<User> {
   await ensureUserSchema();
-  const id = randomUUID();
-  const hash = await hashPassword(u.password);
-
   const rows = await sql`
-    INSERT INTO app_users (id, email, name, position_id, password_hash, must_reset)
-    VALUES (${id}, ${u.email.trim().toLowerCase()}, ${u.name.trim()}, ${u.positionId},
-            ${hash}, ${u.mustReset ?? true})
+    INSERT INTO app_users (id, email, name, position_id)
+    VALUES (${randomUUID()}, ${u.email.trim().toLowerCase()}, ${u.name.trim()}, ${u.positionId})
     RETURNING *
   `;
-  return publicUser(toUser((rows as Record<string, unknown>[])[0]));
+  return toUser((rows as Record<string, unknown>[])[0]);
 }
 
 export async function updateUser(
@@ -196,23 +175,6 @@ export async function updateUser(
   `;
 }
 
-/**
- * Sets a password and bumps token_version, which invalidates every session the
- * user currently holds. That's the point on a reset — an admin issuing a new
- * password because someone lost theirs should end whatever sessions exist.
- */
-export async function setPassword(id: string, password: string, mustReset: boolean): Promise<void> {
-  await ensureUserSchema();
-  const hash = await hashPassword(password);
-  await sql`
-    UPDATE app_users
-    SET password_hash = ${hash},
-        must_reset    = ${mustReset},
-        token_version = token_version + 1
-    WHERE id = ${id}
-  `;
-}
-
 /** Disabling also bumps token_version, so an active session dies immediately. */
 export async function setDisabled(id: string, disabled: boolean): Promise<void> {
   await ensureUserSchema();
@@ -222,17 +184,6 @@ export async function setDisabled(id: string, disabled: boolean): Promise<void> 
         token_version = token_version + 1
     WHERE id = ${id}
   `;
-}
-
-/**
- * Clears the forced-password-change flag without touching the password.
- *
- * For Google sign-in: there is no dashboard password to change, so leaving the
- * flag set would pin the user to the change-password screen forever, asking for
- * a current password they were never given.
- */
-export async function clearMustReset(id: string): Promise<void> {
-  await sql`UPDATE app_users SET must_reset = FALSE WHERE id = ${id}`;
 }
 
 export async function recordLogin(id: string): Promise<void> {

@@ -23,7 +23,6 @@ import { SESSION_COOKIE, verifySession } from "@/lib/users/session";
 // under it that write or hit SMG check the session themselves.
 const PUBLIC_PATHS = [
   "/login",
-  "/api/auth/login",
   // Google Sign-In: both ends of the round trip run before a session exists.
   "/api/auth/google/",
   "/api/smg/",
@@ -31,8 +30,6 @@ const PUBLIC_PATHS = [
   "/api/slack",
 ];
 
-/** Reachable while signed in but still owing a password change. */
-const RESET_PATHS = ["/change-password", "/api/auth/change-password", "/api/auth/logout"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -52,16 +49,6 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // A temporary password gets you exactly one screen until it's changed.
-  if (session.rst && !RESET_PATHS.some((p) => pathname.startsWith(p))) {
-    if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Password change required" }, { status: 403 });
-    }
-    const url = request.nextUrl.clone();
-    url.pathname = "/change-password";
-    url.search = "";
-    return NextResponse.redirect(url);
-  }
 
   return NextResponse.next();
 }

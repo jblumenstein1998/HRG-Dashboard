@@ -1,4 +1,4 @@
-// Run with:  node --env-file=.env.local scripts/migrate-users.mjs [owner-email]
+// Run with:  node --env-file=.env.local scripts/migrate-users.mjs
 //
 // Creates the account tables in Neon and seeds a starter set of positions.
 // Safe to re-run: the DDL is IF NOT EXISTS and the seeds are ON CONFLICT
@@ -11,31 +11,10 @@
 //
 // Mirrors ensureUserSchema() in src/lib/users/schema.ts.
 import { neon } from "@neondatabase/serverless";
-import { randomBytes, randomUUID, scrypt as scryptCb } from "node:crypto";
-import { promisify } from "node:util";
 
-const scrypt = promisify(scryptCb);
 const sql = neon(process.env.DATABASE_URL);
 
-// Kept in step with src/lib/users/password.ts.
-const N = 65536, R = 8, P = 1, KEY_LEN = 32;
-const b64 = (b) => b.toString("base64url");
 
-async function hashPassword(password) {
-  const salt = randomBytes(16);
-  const key = await scrypt(password.normalize("NFKC"), salt, KEY_LEN, {
-    N, r: R, p: P, maxmem: 128 * N * R * 2,
-  });
-  return `scrypt$${N}$${R}$${P}$${b64(salt)}$${b64(key)}`;
-}
-
-const TEMP_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-function tempPassword(length = 12) {
-  const bytes = randomBytes(length);
-  let out = "";
-  for (let i = 0; i < length; i++) out += TEMP_ALPHABET[bytes[i] % TEMP_ALPHABET.length];
-  return out;
-}
 
 await sql`
   CREATE TABLE IF NOT EXISTS app_positions (
@@ -92,23 +71,6 @@ console.log(`positions: ${SEED_POSITIONS.length} seeded or already present`);
 const [{ n: userCount }] = await sql`SELECT COUNT(*)::int AS n FROM app_users`;
 console.log(`users: ${userCount} existing`);
 
-const ownerEmail = process.argv[2];
-if (ownerEmail && userCount === 0) {
-  const password = tempPassword();
-  await sql`
-    INSERT INTO app_users (id, email, name, position_id, password_hash, must_reset)
-    VALUES (${randomUUID()}, ${ownerEmail.toLowerCase()}, ${"Owner"}, ${"owner"},
-            ${await hashPassword(password)}, TRUE)
-  `;
-  console.log("\n──────────────────────────────────────────────");
-  console.log(`  first account created`);
-  console.log(`  email:    ${ownerEmail.toLowerCase()}`);
-  console.log(`  password: ${password}`);
-  console.log(`  You'll be asked to change it at first login.`);
-  console.log("──────────────────────────────────────────────\n");
-} else if (ownerEmail) {
-  console.log("users already exist — skipped creating the owner account");
-}
 
 const positions = await sql`SELECT id, label, tabs, is_admin FROM app_positions ORDER BY label`;
 console.log("\ncurrent positions:");
