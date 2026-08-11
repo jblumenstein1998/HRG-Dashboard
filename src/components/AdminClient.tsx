@@ -3,6 +3,7 @@
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
 import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
+import { formatSyncStamp } from "@/lib/surveyMeta";
 
 type User = {
   id: string;
@@ -126,7 +127,7 @@ export default function AdminClient({
                   <th className="px-4 py-2 text-left font-semibold">Name</th>
                   <th className="px-4 py-2 text-left font-semibold">Email</th>
                   <th className="px-4 py-2 text-left font-semibold">Position</th>
-                  <th className="px-4 py-2 text-left font-semibold">Status</th>
+                  <th className="px-4 py-2 text-left font-semibold">Last sign-in</th>
                   <th className="px-4 py-2 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
@@ -155,13 +156,19 @@ export default function AdminClient({
                         ))}
                       </select>
                     </td>
+                    {/* The date is the status: it says both that they've been
+                        in and when. "Disabled" still leads where it applies,
+                        with the last sign-in kept underneath rather than
+                        thrown away — it's the useful part when deciding
+                        whether an account was ever really used. */}
                     <td className="px-4 py-3 text-xs">
-                      {u.disabledAt ? (
-                        <span className="text-red-600">Disabled</span>
-                      ) : u.lastLoginAt ? (
-                        <span className="text-gray-500">Active</span>
+                      {u.disabledAt && <div className="text-red-600">Disabled</div>}
+                      {u.lastLoginAt ? (
+                        <div className={u.disabledAt ? "text-gray-400" : "text-gray-600"}>
+                          {formatSyncStamp(u.lastLoginAt)}
+                        </div>
                       ) : (
-                        <span className="text-gray-400">Never signed in</span>
+                        !u.disabledAt && <div className="text-gray-400">Never signed in</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
