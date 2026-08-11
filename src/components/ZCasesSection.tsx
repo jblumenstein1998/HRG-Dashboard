@@ -135,13 +135,16 @@ export default function ZCasesSection({
   end,
   label,
   refreshKey,
+  fetchKey,
   stores,
 }: {
   start: string | null;
   end: string | null;
   label: string;
-  /** Bumped by the page's Refresh button; forces a fresh pull from SMG. */
+  /** Bumped by Refresh — re-reads Postgres, no SMG traffic. */
   refreshKey: number;
+  /** Bumped by Fetch — re-pulls from SMG before re-reading. */
+  fetchKey: number;
   /**
    * Store numbers to include, from the page's TN/VA checkboxes. Null means
    * every store — the aggregates are done in SQL rather than by filtering the
@@ -161,9 +164,9 @@ export default function ZCasesSection({
     start && end && !noneSelected
       ? `start=${start}&end=${end}&type=${TYPES}${storeFilter ? `&stores=${storeFilter}` : ""}`
       : "";
-  // Refresh has to move the key too, or hitting it while the period is
+  // Both buttons have to move the key, or pressing one while the period is
   // unchanged would leave the data looking current and never reload.
-  const queryKey = query ? `${query}#${refreshKey}` : "";
+  const queryKey = query ? `${query}#${refreshKey}.${fetchKey}` : "";
 
   /**
    * Keyed by what it was loaded for, so "is this stale?" stays derived — the
@@ -189,27 +192,26 @@ export default function ZCasesSection({
     };
   }, [query, queryKey]);
 
-  /**
-   * Pull from SMG in the background — once on mount, and again each time
-   * Refresh is pressed.
-   *
-   * The pull costs ~6s against SMG, so blocking the first paint on it would
-   * trade a working table for a spinner. The stored data renders immediately
-   * and the fresh numbers swap in when they land. Keyed on `refreshKey` rather
-   * than on the window, so changing period reads the sync's data instead of
-   * hammering SMG for rows it already holds.
-   */
   // Copy-as-image targets: each card is captured on its own, so a screenshot
   // carries just that table rather than the whole section.
   const outstandingRef = useRef<HTMLDivElement>(null);
   const byStoreRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Pull from SMG in the background — once on mount, and again on Fetch.
+   *
+   * The pull costs ~6s against SMG, so blocking the first paint on it would
+   * trade a working table for a spinner. The stored data renders immediately
+   * and the fresh numbers swap in when they land. Keyed on `fetchKey`, not on
+   * the window or on Refresh: changing period reads what the sync already
+   * holds, and Refresh is explicitly the re-read-only button.
+   */
   const startedFor = useRef<number | null>(null);
   const [doneFor, setDoneFor] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!query || startedFor.current === refreshKey) return;
-    startedFor.current = refreshKey;
+    if (!query || startedFor.current === fetchKey) return;
+    startedFor.current = fetchKey;
     let cancelled = false;
     fetch(`/api/smg/zcases?${query}&refresh=1`)
       .then((r) => r.json())
@@ -218,12 +220,12 @@ export default function ZCasesSection({
       })
       .catch(() => {})
       .finally(() => {
-        if (!cancelled) setDoneFor(refreshKey);
+        if (!cancelled) setDoneFor(fetchKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [query, queryKey, refreshKey]);
+  }, [query, queryKey, fetchKey]);
 
   // Stale rows stay on screen while a new window loads, with the table's own
   // "Loading…" row as the tell — blanking the tab on every period change reads
@@ -232,7 +234,7 @@ export default function ZCasesSection({
   // the last window's numbers after the markets were unchecked.
   const data = query ? state.data : null;
   const loading = Boolean(query) && state.key !== queryKey;
-  const refreshing = Boolean(query) && doneFor !== refreshKey;
+  const refreshing = Boolean(query) && doneFor !== fetchKey;
 
   const casesByStore = useMemo(() => {
     const map = new Map<string, ZCaseRow[]>();

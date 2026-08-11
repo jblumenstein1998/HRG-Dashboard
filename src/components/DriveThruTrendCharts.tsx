@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { BranchStore } from "@/lib/berry";
 import { groupBranches, getStoreLabel, SectionedBranches } from "@/lib/stores";
+import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 
 // "period" is an HRG fiscal period (P1–P12) — what the business means when it
@@ -35,22 +36,6 @@ const GRANULARITY_OPTIONS: { key: Granularity; label: string }[] = [
   { key: "week", label: "Weekly" },
   { key: "period", label: "Period" },
 ];
-
-// Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
-const STORE_COLOR: Record<string, string> = {
-  "Columbia":       "#dc2626",
-  "Springfield":    "#2563eb",
-  "White House":    "#16a34a",
-  "Brentwood":      "#d97706",
-  "Spring Hill":    "#7c3aed",
-  "Jefferson":      "#0891b2",
-  "Oyster":         "#db2777",
-  "Hampton":        "#65a30d",
-  "College":        "#ea580c",
-  "Chesapeake":     "#0284c7",
-  "Hillcrest":      "#9333ea",
-  "Beach":          "#0d9488",
-};
 
 /**
  * The TN/VA summary lines are aggregates, not stores, so they deliberately sit

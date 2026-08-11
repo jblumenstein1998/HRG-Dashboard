@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
+import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 
 const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
@@ -526,22 +527,6 @@ function VarianceYoyTable({
 }
 
 // ── History chart ─────────────────────────────────────────────────────────────
-
-// Canonical per-store colors — kept identical across Food Cost variance, SMG, and Drive-Thru trend charts.
-const STORE_COLOR: Record<string, string> = {
-  "Springfield":  "#2563eb",
-  "White House":  "#16a34a",
-  "Brentwood":    "#d97706",
-  "Spring Hill":  "#7c3aed",
-  "Columbia":     "#dc2626",
-  "Jefferson":    "#0891b2",
-  "Oyster":       "#db2777",
-  "Hampton":      "#65a30d",
-  "College":      "#ea580c",
-  "Chesapeake":   "#0284c7",
-  "Hillcrest":    "#9333ea",
-  "Beach":        "#0d9488",
-};
 
 function YTick({ x, y, payload }: { x?: number; y?: number; payload?: { value: number } }) {
   const v = payload?.value ?? 0;
@@ -1225,7 +1210,7 @@ export default function FoodCostClient() {
       next.add(id);
       return next;
     });
-    const base = `/api/netchef/items?locationId=${id}&start=${startDate}&end=${endDate}`;
+    const base = `/api/netchef/items?locationId=${id}&start=${startDate}&end=${endDate}&limit=10`;
     if (!cogsItemsCache[id]) {
       setCogsItemsCache(prev => ({ ...prev, [id]: "loading" }));
       fetch(`${base}&mode=actual`)

@@ -1,94 +1,126 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBerryAuth } from "@/lib/auth";
-import { ingestRecentPeriods, ingestSnapshot, type SnapshotKey } from "@/lib/smgStore";
-import { smgLogin, type LevelKey } from "@/lib/smgTrend";
+import {
+  ingestSnapshot,
+  ingestTrend,
+  type DateBasis,
+  type SnapshotKey,
+} from "@/lib/smgStore";
+import { listPeriodsOfType, smgLogin, type LevelKey } from "@/lib/smgTrend";
 
-// Measured locally: the period cut is ~5s and the five snapshots ~11s, so a
-// level costs ~16s. Well under this, but SMG is the slow part and it varies.
 export const maxDuration = 300;
 
 /**
- * On-demand SMG pull for the Survey Data tab's Refresh button.
+ * Pulls one window straight from SMG, on demand, for the Fetch button on the
+ * Survey Data tab.
  *
- * The crons own the routine ingest; this is the "I don't want to wait until
- * tomorrow" path. It re-pulls exactly what the tab reads for one level — the
- * period-grain trend plus the rolling/to-date snapshots — rather than the
- * cron's full six cuts, which would spend 27s refreshing weekly data and two
- * levels the tab isn't showing.
+ * POST /api/smg/refresh  { "selection": "snap:ptd" | "period:Period 7, 2026" }
  *
- * Deliberately not called on page load, unlike the ZCase refresh: this costs
- * ~16s against SMG, and survey scores move over days, not minutes.
+ * The daily cron is the normal path; this exists because it can't be enough on
+ * its own. Scores are counted on visit date and SMG accepts responses for 14
+ * days afterwards, so every window younger than that keeps moving all day —
+ * a store gaining two surveys mid-morning shifts its market's pooled total by
+ * a point, and until the next cron run the tab disagrees with the portal with
+ * no way to catch up. Hobby-plan crons are capped at once a day, so the manual
+ * pull is the only way to close that gap.
+ *
+ * Both levels are refreshed together. The market rows are read from SMG's
+ * region-manager rows but only when their response counts match the store rows
+ * exactly (see `publishedMarketCells`), so refreshing one level and not the
+ * other would break that match and silently drop the tab back to pooling.
  */
+
+/** Levels the tab reads. Kept in step with the two cron jobs. */
+const LEVELS: LevelKey[] = ["store", "regionManager"];
+
+const SNAPSHOT_KEYS = new Set<string>(["today", "yesterday", "last_week", "t7", "wtd", "ptd"]);
 
 /**
- * Matches the snapshots cron. "today" matters most here — it's the one window
- * that's still filling, so an on-demand pull is the only way to see it current.
+ * One pull at a time, process-wide.
+ *
+ * A pull is several multi-second round trips to SMG under a single login, and
+ * the button is the kind of thing that gets clicked twice. Concurrent runs
+ * would race on the same rows and double the load on SMG for no benefit, so
+ * later callers join the run already in flight instead of starting another.
  */
-const SNAPSHOT_KEYS: SnapshotKey[] = ["today", "yesterday", "t7", "wtd", "last_week", "ptd"];
+let inFlight: Promise<RefreshResult> | null = null;
 
-const LEVELS: LevelKey[] = ["store", "regionManager", "districtManager"];
+type RefreshResult = { ok: boolean; results: Record<string, unknown>[] };
 
-/** Levels the snapshot cron populates; the tab has no tiles for the others. */
-const SNAPSHOT_LEVELS: LevelKey[] = ["store", "regionManager"];
-
-/** Same window the smg-sync cron uses for period grain. */
-const PERIODS = 6;
-
-export async function GET(req: NextRequest) {
-  // `/api/smg/` is public so the tab can paint before auth resolves (see
-  // proxy.ts), but this hits SMG and writes — it stays behind the session.
+export async function POST(req: NextRequest) {
+  // `/api/smg/` is exempt from the auth proxy so the cron can reach its
+  // siblings, which means this route has to check the session itself — without
+  // it, an unauthenticated caller could drive SMG traffic and database writes.
   const { token } = await getBerryAuth();
-  if (!token) {
-    return NextResponse.json({ error: "not signed in" }, { status: 401 });
-  }
+  if (!token) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const levelParam = req.nextUrl.searchParams.get("level") ?? "store";
-  if (!LEVELS.includes(levelParam as LevelKey)) {
-    return NextResponse.json({ error: `unknown level "${levelParam}"` }, { status: 400 });
-  }
-  const level = levelParam as LevelKey;
+  const body = (await req.json().catch(() => ({}))) as {
+    selection?: string;
+    dateBasis?: DateBasis;
+  };
+  const selection = body.selection ?? "";
+  const dateBasis = body.dateBasis ?? "visit";
 
-  const t0 = Date.now();
-  const results: Record<string, unknown>[] = [];
+  const joined = Boolean(inFlight);
+  inFlight ??= run(selection, dateBasis).finally(() => {
+    inFlight = null;
+  });
 
   try {
-    // One login shared by every pull below, same as the crons.
+    const result = await inFlight;
+    return NextResponse.json({ ...result, joined }, { status: result.ok ? 200 : 207 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[SMG] /api/smg/refresh failed:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+async function run(selection: string, dateBasis: DateBasis): Promise<RefreshResult> {
+  const results: Record<string, unknown>[] = [];
+
+  if (selection.startsWith("snap:")) {
+    const key = selection.slice(5);
+    if (!SNAPSHOT_KEYS.has(key)) throw new Error(`unknown snapshot window "${key}"`);
+
     const session = await smgLogin();
-
-    try {
-      const r = await ingestRecentPeriods({
-        level,
-        dateType: "period",
-        periods: PERIODS,
-        dateBasis: "visit",
-        session,
-      });
-      results.push({ kind: "scores", level, ...r });
-    } catch (err) {
-      results.push({ kind: "scores", level, error: err instanceof Error ? err.message : String(err) });
-    }
-
-    if (SNAPSHOT_LEVELS.includes(level)) {
-      for (const key of SNAPSHOT_KEYS) {
-        try {
-          const r = await ingestSnapshot({ key, level, session, dateBasis: "visit" });
-          // null = the window has no complete days yet (WTD on a Monday).
-          results.push(r ? { kind: "snapshot", key, ...r } : { kind: "snapshot", key, skipped: true });
-        } catch (err) {
-          results.push({ kind: "snapshot", key, error: err instanceof Error ? err.message : String(err) });
-        }
+    for (const level of LEVELS) {
+      try {
+        const r = await ingestSnapshot({ key: key as SnapshotKey, level, session, dateBasis });
+        results.push(r ? { level, key, ...r } : { level, key, skipped: "no complete days yet" });
+      } catch (err) {
+        results.push({ level, key, error: err instanceof Error ? err.message : String(err) });
       }
     }
-  } catch (err) {
-    // A failed login means nothing below could run; the tab keeps its stored data.
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[SMG] refresh failed at login: ${message}`);
-    return NextResponse.json({ ok: false, error: message, ms: Date.now() - t0 }, { status: 502 });
+  } else if (selection.startsWith("period:")) {
+    const label = selection.slice(7);
+    const session = await smgLogin();
+
+    // Period ids aren't derivable from the label — they don't extrapolate
+    // across year boundaries — so resolve against SMG's own list.
+    const periods = await listPeriodsOfType(session, "period");
+    const period = periods.find((p) => p.label === label);
+    if (!period) throw new Error(`SMG doesn't list a period called "${label}"`);
+
+    for (const level of LEVELS) {
+      try {
+        const rows = await ingestTrend({
+          level,
+          dateType: "period",
+          dateBasis,
+          session,
+          startPeriodId: period.id,
+          endPeriodId: period.id,
+          periods: 1,
+        });
+        results.push({ level, period: label, rows });
+      } catch (err) {
+        results.push({ level, period: label, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  } else {
+    throw new Error(`unrecognised selection "${selection}"`);
   }
 
-  const failed = results.filter((r) => r.error);
-  return NextResponse.json(
-    { ok: failed.length === 0, level, ms: Date.now() - t0, results },
-    { status: failed.length ? 207 : 200 },
-  );
+  return { ok: !results.some((r) => r.error), results };
 }

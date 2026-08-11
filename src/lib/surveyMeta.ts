@@ -32,7 +32,9 @@ export const STORE_LABELS: Record<string, string> = {
   "57007": "Beach",
 };
 
-// Canonical per-store colors — kept identical across SMG, Drive-Thru trend, and Food Cost variance charts.
+// Canonical per-store colors — the single source for the SMG, Drive-Thru trend and
+// Food Cost variance charts, which all import from here. Change a store's color once,
+// and it changes on every tab; don't copy this map back into a component.
 export const STORE_COLOR: Record<string, string> = {
   "Columbia":       "#dc2626",
   "Springfield":    "#2563eb",
@@ -81,6 +83,104 @@ export function marketOf(key: string, name: string): "TN" | "VA" | null {
   if (TN_STORES.includes(label)) return "TN";
   if (VA_STORES.includes(label)) return "VA";
   return null;
+}
+
+// ── Pooling ──────────────────────────────────────────────────────────────────
+
+export type PooledCell = { score: number | null; responses: number | null };
+
+/**
+ * Pooled score across units, behind the TN / VA / HRG rollup rows.
+ *
+ * Weighting by response count is the easy half — a plain average of
+ * percentages would let a store with 2 responses swing the market as hard as
+ * one with 60. The subtle half is *what* gets weighted. SMG reports each unit
+ * as a whole-percent top-box figure, so weighting those percentages
+ * re-averages numbers that have each already lost up to half a point, and the
+ * leftovers don't cancel — they accumulate into the pooled value and tip it
+ * over the next rounding boundary.
+ *
+ * Recovering each unit's top-box count first (score% x responses, back to the
+ * nearest whole respondent) and pooling counts over responses is what SMG
+ * itself does, and it reproduces SMG's own rollup rows. Checked against every
+ * Combined and region-manager row stored: 1415 of 1422 cells (99.5%) against
+ * 1292 (90.9%) for the weighted-percentage form. The seven that still differ
+ * land within 0.6 of a rounding boundary, six of them exactly on .50.
+ *
+ * VA is what exposed it — seven stores carrying 7–20 responses apiece is the
+ * worst case for accumulated rounding, and its market line disagreed with the
+ * SMG portal on 8 of 30 snapshot cells (Cleanliness 59 vs 58, OSAT 76 vs 75)
+ * while TN's five larger stores happened to land right on all 30.
+ *
+ * The count recovery is exact while a unit's response count stays under ~100,
+ * which covers any single store. It is not a general way to un-round a figure
+ * the size of the Combined row, so pool from stores, never from other rollups.
+ */
+export function pooledScore(cells: PooledCell[]): { score: number | null; responses: number | null } {
+  let topBox = 0;
+  let responses = 0;
+  for (const c of cells) {
+    if (c.score === null || !c.responses) continue;
+    topBox += Math.round((c.score / 100) * c.responses);
+    responses += c.responses;
+  }
+  return {
+    score: responses ? Math.round((topBox / responses) * 100) : null,
+    responses: responses || null,
+  };
+}
+
+export type RollupRow = {
+  unitKey: string;
+  metric: string;
+  score: number | null;
+  responses: number | null;
+};
+
+/**
+ * SMG's own published row for a market, when one provably covers exactly the
+ * stores we're rolling up.
+ *
+ * SMG publishes its region-manager rows for the same windows we show, and
+ * today each region is one market — so where such a row exists it *is* the
+ * answer, with none of the rounding loss `pooledScore` has to work around.
+ *
+ * The catch is that "region manager" is a personnel fact and "TN / VA" is a
+ * geographic one. They coincide right now, but an RM picking up a store across
+ * the state line would silently turn the market line into something else. So a
+ * row is never matched by name: a candidate qualifies only if its response
+ * count agrees with the market's own store total on every metric, which is
+ * exactly the claim "these two cover the same stores". When no candidate
+ * qualifies, or more than one does, the caller falls back to pooling and the
+ * line stays approximately right rather than confidently wrong.
+ *
+ * `marketCells` is the market's store cells keyed by metric — the same input
+ * `pooledScore` would get.
+ */
+export function publishedMarketCells(
+  published: RollupRow[],
+  marketCells: Map<string, PooledCell[]>,
+): Map<string, PooledCell> | null {
+  const byUnit = new Map<string, Map<string, PooledCell>>();
+  for (const r of published) {
+    if (!byUnit.has(r.unitKey)) byUnit.set(r.unitKey, new Map());
+    byUnit.get(r.unitKey)!.set(r.metric, { score: r.score, responses: r.responses });
+  }
+
+  // Responses counted the way pooledScore counts them, so "same denominator"
+  // means the same thing on both sides of the comparison.
+  const wanted = new Map<string, number>();
+  for (const [metric, cells] of marketCells) {
+    let n = 0;
+    for (const c of cells) if (c.score !== null && c.responses) n += c.responses;
+    if (n > 0) wanted.set(metric, n);
+  }
+  if (!wanted.size) return null;
+
+  const qualified = [...byUnit.values()].filter((cells) =>
+    [...wanted].every(([metric, n]) => cells.get(metric)?.responses === n),
+  );
+  return qualified.length === 1 ? qualified[0] : null;
 }
 
 // ── Score color scale ────────────────────────────────────────────────────────

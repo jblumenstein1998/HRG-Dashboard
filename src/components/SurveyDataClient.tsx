@@ -14,7 +14,11 @@ import {
   formatSyncStamp,
   marketOf,
   metricRank,
+  pooledScore,
   prettyUnit,
+  publishedMarketCells,
+  type PooledCell,
+  type RollupRow,
   scoreTone,
   shortMetric,
 } from "@/lib/surveyMeta";
@@ -143,27 +147,41 @@ function rangeForSelection(
 }
 
 /**
- * Pooled score across units, weighted by each unit's response count — a plain
- * average of percentages would let a store with 2 responses swing the market
- * as hard as one with 60.
+ * SMG's own row for a group of units, if one of `candidates` covers exactly
+ * those units. Adapts the table's per-unit cell maps to the shape
+ * `publishedMarketCells` compares on.
  */
-function summarise(units: UnitRow[], metrics: string[]): UnitRow | null {
+function matchPublished(candidates: RollupRow[], units: UnitRow[], metrics: string[]) {
+  if (!candidates.length || !units.length) return null;
+  return publishedMarketCells(
+    candidates,
+    new Map(metrics.map((m) => [m, units.map((u) => u.cells.get(m) ?? { score: null, responses: null })])),
+  );
+}
+
+/**
+ * One market's (or the estate's) line.
+ *
+ * `published` is SMG's own row for this group where it has one — matched by
+ * coverage, not by name, in `publishedMarketCells`. Preferring it makes the
+ * line identical to the SMG portal rather than merely very close: pooling has
+ * to reconstruct respondent counts from whole-percent store scores, which is
+ * right ~99.5% of the time but can't be better, since the fractions SMG
+ * rounded away aren't in the data we're given.
+ */
+function summarise(
+  units: UnitRow[],
+  metrics: string[],
+  published?: Map<string, PooledCell> | null,
+): UnitRow | null {
   if (!units.length) return null;
   const cells = new Map<string, Cell>();
   for (const metric of metrics) {
-    let num = 0;
-    let den = 0;
-    for (const u of units) {
-      const c = u.cells.get(metric);
-      if (!c || c.score === null || !c.responses) continue;
-      num += c.score * c.responses;
-      den += c.responses;
-    }
-    cells.set(metric, {
-      score: den ? Math.round(num / den) : null,
-      responses: den || null,
-      belowMin: false,
-    });
+    const smg = published?.get(metric);
+    const pooled = smg?.score != null
+      ? smg
+      : pooledScore(units.map((u) => u.cells.get(metric) ?? { score: null, responses: null }));
+    cells.set(metric, { score: pooled.score, responses: pooled.responses, belowMin: false });
   }
   const surveys = units.reduce((n, u) => n + (u.surveys ?? 0), 0);
   const sales = units.reduce((n, u) => n + (u.sales ?? 0), 0);
@@ -179,16 +197,21 @@ export default function SurveyDataClient() {
   // Opens on biggest-selling first, the order the table used to build in.
   const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
-  // Tracked apart from `refreshKey` because the SMG pull is slow: the re-read
-  // happens straight away, and this one fires ~16s later when the fresh rows
-  // have actually landed. Only the scores/snapshots fetch watches it, so the
-  // ZCases section doesn't pull from SMG twice for a single click.
-  const [pulling, setPulling] = useState(false);
-  const [scoresReloadKey, setScoresReloadKey] = useState(0);
+  const [fetching, setFetching] = useState(false);
+  const [fetchNote, setFetchNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // Bumped only by Fetch, so the ZCases section re-pulls from SMG when the
+  // scores do — Refresh just re-reads, and shouldn't cost an SMG round trip.
+  const [zcaseFetchKey, setZcaseFetchKey] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
   const [scores, setScores] = useState<ScoresResponse | null>(null);
   const [snapshots, setSnapshots] = useState<SnapshotsResponse | null>(null);
+  // SMG's region-manager rows, which are the TN and VA totals as SMG itself
+  // publishes them. Fetched alongside the store rows rather than replacing
+  // them: the table still lists stores, and the market lines only borrow these
+  // where they provably cover the same stores.
+  const [rmScores, setRmScores] = useState<ScoresResponse | null>(null);
+  const [rmSnapshots, setRmSnapshots] = useState<SnapshotsResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -196,18 +219,24 @@ export default function SurveyDataClient() {
     Promise.all([
       fetch(`/api/smg/scores?level=${LEVEL}&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
       fetch(`/api/smg/snapshots?level=${LEVEL}&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
+      // The region-manager rows are read even though the tab only lists stores:
+      // they carry SMG's own published market totals. See publishedRows.
+      fetch(`/api/smg/scores?level=regionManager&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
+      fetch(`/api/smg/snapshots?level=regionManager&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
     ])
-      .then(([s, snap]: [ScoresResponse, SnapshotsResponse]) => {
+      .then(([s, snap, rs, rsnap]: [ScoresResponse, SnapshotsResponse, ScoresResponse, SnapshotsResponse]) => {
         if (cancelled) return;
         setScores(s.error ? null : s);
         setSnapshots(snap.error ? null : snap);
+        setRmScores(rs.error ? null : rs);
+        setRmSnapshots(rsnap.error ? null : rsnap);
         setLoading(false);
       })
       .catch(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [refreshKey, scoresReloadKey]);
+  }, [refreshKey]);
 
   // Rolling windows first, then fiscal periods newest-first. Values are
   // prefixed so a period label can't collide with a window key.
@@ -321,9 +350,42 @@ export default function SurveyDataClient() {
   const tn = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "TN"), [rows]);
   const va = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "VA"), [rows]);
 
-  const tnSummary = useMemo(() => summarise(tn, metrics), [tn, metrics]);
-  const vaSummary = useMemo(() => summarise(va, metrics), [va, metrics]);
-  const hrgSummary = useMemo(() => summarise([...tn, ...va], metrics), [tn, va, metrics]);
+  /** SMG's region-manager rows for whichever window is selected. */
+  const publishedRows = useMemo(() => {
+    const source = selected.startsWith("snap:")
+      ? (rmSnapshots?.rows ?? []).filter((r) => r.rangeKey === selected.slice(5))
+      : selected.startsWith("period:")
+        ? (rmScores?.rows ?? []).filter((r) => r.periodLabel === selected.slice(7))
+        : [];
+    // SMG's own all-regions rollup is the HRG line, not a market candidate.
+    return source.filter((r) => r.unitKey !== COMBINED_KEY);
+  }, [selected, rmScores, rmSnapshots]);
+
+  /** SMG's own Combined row for the selected window — the estate total. */
+  const combinedRows = useMemo(() => {
+    const source: { unitKey: string; metric: string; score: number | null; responses: number | null }[] =
+      selected.startsWith("snap:")
+        ? (snapshots?.rows ?? []).filter((r) => r.rangeKey === selected.slice(5))
+        : selected.startsWith("period:")
+          ? (scores?.rows ?? []).filter((r) => r.periodLabel === selected.slice(7))
+          : [];
+    return source.filter((r) => r.unitKey === COMBINED_KEY);
+  }, [selected, scores, snapshots]);
+
+  const tnSummary = useMemo(() => summarise(tn, metrics, matchPublished(publishedRows, tn, metrics)), [tn, metrics, publishedRows]);
+  const vaSummary = useMemo(() => summarise(va, metrics, matchPublished(publishedRows, va, metrics)), [va, metrics, publishedRows]);
+
+  /**
+   * The estate line. SMG publishes Combined at period grain but not for the
+   * rolling snapshot windows, so this falls back to pooling more often than
+   * the market lines do.
+   */
+  const hrgSummary = useMemo(() => {
+    // Always store level now that the level picker is gone, so the estate is
+    // simply both markets.
+    const units = [...tn, ...va];
+    return summarise(units, metrics, matchPublished(combinedRows, units, metrics));
+  }, [tn, va, metrics, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
@@ -391,6 +453,43 @@ export default function SurveyDataClient() {
   }, [showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
 
   const colCount = metrics.length + 3;
+
+  // The note describes the window it was fetched for, so it can't outlive it.
+  useEffect(() => setFetchNote(null), [selected]);
+
+  /**
+   * Re-pull the selected window from SMG, then re-read it.
+   *
+   * Deliberately separate from Refresh, which only re-reads what's already
+   * stored. This one is a live round trip to SMG costing several seconds, so
+   * it stays an explicit act rather than something every refresh triggers.
+   */
+  const fetchFromSmg = async () => {
+    setFetching(true);
+    setFetchNote(null);
+    try {
+      const res = await fetch("/api/smg/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selection: selected, dateBasis: DATE_BASIS }),
+      });
+      const j = (await res.json()) as { error?: string; ok?: boolean };
+      if (!res.ok || j.error) {
+        setFetchNote({ ok: false, text: j.error ? `Fetch failed — ${j.error}` : "Fetch failed" });
+        return;
+      }
+      // Re-read so the table shows what was just written. ZCases pull on their
+      // own key rather than through this route — they're a different report
+      // with a different window basis, so they don't ride along on `selection`.
+      setRefreshKey((k) => k + 1);
+      setZcaseFetchKey((k) => k + 1);
+      setFetchNote({ ok: true, text: `Updated from SMG just now` });
+    } catch {
+      setFetchNote({ ok: false, text: "Fetch failed — couldn't reach the server" });
+    } finally {
+      setFetching(false);
+    }
+  };
 
   /**
    * The dates the selected window actually covers, carried in the card title so
@@ -478,30 +577,26 @@ export default function SurveyDataClient() {
               </span>
             )}
 
-            {/*
-              Refresh re-reads immediately *and* re-pulls from SMG, which takes
-              ~16s. The stored rows stay on screen throughout — blocking the tab
-              for that long to avoid showing yesterday's numbers for a few more
-              seconds would be the worse trade. The freshness it reports on sits
-              on the scores card below, next to the numbers it describes.
-            */}
-            <button
-              onClick={() => {
-                setRefreshKey((k) => k + 1);
-                if (pulling) return;
-                setPulling(true);
-                fetch(`/api/smg/refresh?level=${LEVEL}`)
-                  .catch(() => {})
-                  .finally(() => {
-                    setPulling(false);
-                    setScoresReloadKey((k) => k + 1);
-                  });
-              }}
-              disabled={busy || pulling}
-              className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-            >
-              {busy || pulling ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {fetchNote && (
+                <span className={`text-xs ${fetchNote.ok ? "text-gray-500" : "text-red-600"}`}>{fetchNote.text}</span>
+              )}
+              <button
+                onClick={fetchFromSmg}
+                disabled={fetching || !selected}
+                title="Re-pull this window from SMG. Scores keep moving for 14 days after the visit date, so a window can change between daily syncs."
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+              >
+                {fetching ? "Fetching…" : "Fetch"}
+              </button>
+              <button
+                onClick={() => setRefreshKey((k) => k + 1)}
+                disabled={busy}
+                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+              >
+                {busy ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -527,10 +622,10 @@ export default function SurveyDataClient() {
                 here rather than up in the banner — it describes these scores,
                 not the tab, and the ZCases section reports its own the same way. */}
             <span className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
-              {pulling && <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />}
+              {fetching && <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />}
               <span>
                 Updated {formatSyncStamp(scores?.syncedAt)}
-                {pulling ? " · pulling from SMG…" : ""}
+                {fetching ? " · fetching from SMG…" : ""}
               </span>
             </span>
           </div>
@@ -612,6 +707,7 @@ export default function SurveyDataClient() {
           end={range?.end ?? null}
           label={selectedLabel}
           refreshKey={refreshKey}
+          fetchKey={zcaseFetchKey}
           stores={zcaseStores}
         />
       </main>
