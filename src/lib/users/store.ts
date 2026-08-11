@@ -224,6 +224,17 @@ export async function setDisabled(id: string, disabled: boolean): Promise<void> 
   `;
 }
 
+/**
+ * Clears the forced-password-change flag without touching the password.
+ *
+ * For Google sign-in: there is no dashboard password to change, so leaving the
+ * flag set would pin the user to the change-password screen forever, asking for
+ * a current password they were never given.
+ */
+export async function clearMustReset(id: string): Promise<void> {
+  await sql`UPDATE app_users SET must_reset = FALSE WHERE id = ${id}`;
+}
+
 export async function recordLogin(id: string): Promise<void> {
   await sql`UPDATE app_users SET last_login_at = now() WHERE id = ${id}`;
 }

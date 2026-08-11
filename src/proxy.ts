@@ -24,6 +24,8 @@ import { SESSION_COOKIE, verifySession } from "@/lib/users/session";
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/login",
+  // Google Sign-In: both ends of the round trip run before a session exists.
+  "/api/auth/google/",
   "/api/smg/",
   "/api/cron/",
   "/api/slack",
