@@ -33,11 +33,14 @@ export const TAB_LABELS: Record<Tab, string> = {
 };
 
 /**
- * The position that can reach the admin screens. Seeded on first run and
- * protected from deletion, so the estate can't be locked out of its own user
- * list by an edit in the UI.
+ * Admin rights come from `app_positions.is_admin`, not from a magic id.
+ *
+ * An earlier version protected a hardcoded "owner" row, which would have
+ * broken the moment the position was renamed. The rule enforced in
+ * deletePosition is behavioural instead: a position can't be deleted while it
+ * has users, and the last admin position can't be deleted at all — so there is
+ * always someone who can reach the user list.
  */
-export const OWNER_POSITION_ID = "owner";
 
 let schemaReady: Promise<void> | null = null;
 

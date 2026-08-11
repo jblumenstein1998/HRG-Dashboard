@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { hashPassword } from "./password";
-import { ALL_TABS, ensureUserSchema, OWNER_POSITION_ID, type Tab } from "./schema";
+import { ALL_TABS, ensureUserSchema, type Tab } from "./schema";
 
 export type Position = {
   id: string;
@@ -99,19 +99,30 @@ export async function upsertPosition(p: {
 }
 
 /**
- * Refuses to delete a position that still has people in it, or the owner
- * position. Postgres' FK would reject the first case anyway; catching it here
- * turns a 500 into a sentence the UI can show.
+ * Refuses to delete a position that still has people in it, or the last one
+ * carrying admin rights.
+ *
+ * Postgres' foreign key would reject the first case anyway; catching it here
+ * turns a 500 into a sentence the UI can show. The second is the one that
+ * matters: deleting the only admin position would leave nobody able to reach
+ * the user list, and no way back in short of a database console.
  */
 export async function deletePosition(id: string): Promise<string | null> {
   await ensureUserSchema();
-  if (id === OWNER_POSITION_ID) return "The owner position can't be deleted.";
 
-  const rows = (await sql`
-    SELECT COUNT(*)::int AS n FROM app_users WHERE position_id = ${id}
-  `) as { n: number }[];
-  if ((rows[0]?.n ?? 0) > 0) {
-    return `That position still has ${rows[0].n} user(s). Move them first.`;
+  const [counts] = (await sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM app_users WHERE position_id = ${id}) AS users,
+      (SELECT COUNT(*)::int FROM app_positions WHERE is_admin) AS admin_positions,
+      (SELECT is_admin FROM app_positions WHERE id = ${id}) AS is_admin
+  `) as { users: number; admin_positions: number; is_admin: boolean | null }[];
+
+  if (counts?.is_admin === null) return "No such position.";
+  if (counts.users > 0) {
+    return `That position still has ${counts.users} user${counts.users === 1 ? "" : "s"}. Move them first.`;
+  }
+  if (counts.is_admin && counts.admin_positions <= 1) {
+    return "That's the only position with admin rights — it can't be deleted.";
   }
 
   await sql`DELETE FROM app_positions WHERE id = ${id}`;
