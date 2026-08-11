@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { TAB_LABELS, type Tab } from "@/lib/users/schema";
+import TabOptions from "@/components/TabOptions";
+import type { Tab } from "@/lib/users/schema";
 
 /**
  * The tab picker in the header.
@@ -34,12 +35,7 @@ export default function TabPicker({
         aria-label="Switch tab"
         className="appearance-none bg-transparent text-lg font-semibold text-gray-900 pr-6 cursor-pointer focus:outline-none"
       >
-        {tabs.map((t) => (
-          <option key={t} value={t}>
-            {TAB_LABELS[t]}
-          </option>
-        ))}
-        {isAdmin && <option value="/admin">Users &amp; Access</option>}
+        <TabOptions tabs={tabs} isAdmin={isAdmin} />
       </select>
       <svg
         className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none"

@@ -3,7 +3,8 @@
 import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
-import { SHOW_BONUS_TAB } from "@/lib/featureFlags";
+import TabOptions from "@/components/TabOptions";
+import type { Tab } from "@/lib/users/schema";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
@@ -1078,7 +1079,7 @@ function CogsBySalesTable({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function FoodCostClient() {
+export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
   const router = useRouter();
   const [dateOptions, setDateOptions] = useState<DateOption[]>([]);
   const [datesLoading, setDatesLoading] = useState(true);
@@ -1272,11 +1273,7 @@ export default function FoodCostClient() {
                   onChange={e => router.push(e.target.value)}
                   className="text-base font-semibold text-gray-900 leading-tight bg-transparent border-0 p-0 m-0 pr-5 w-full appearance-none cursor-pointer focus:outline-none focus:ring-0 [text-align-last:center]"
                 >
-                  <option value="/dashboard">Drive-Thru</option>
-                  <option value="/food-cost">Food Cost</option>
-                  <option value="/par">POS Sales</option>
-                  <option value="/survey-data">SMG</option>
-                  {SHOW_BONUS_TAB && <option value="/bonus">Bonus</option>}
+                  <TabOptions tabs={tabs} isAdmin={isAdmin} />
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
