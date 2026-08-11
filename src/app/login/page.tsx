@@ -24,8 +24,11 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Login failed"); return; }
+      // "/" rather than a named tab: the root resolves the landing tab from the
+      // viewer's position server-side, so this page doesn't need to know the
+      // default or whether the signer-in is allowed to see it.
       // A temporary password gets exactly one destination until it's changed.
-      router.push(data.mustReset ? "/change-password" : "/dashboard");
+      router.push(data.mustReset ? "/change-password" : "/");
       router.refresh();
     } catch {
       setError("Network error — please try again");

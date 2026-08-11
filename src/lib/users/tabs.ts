@@ -21,3 +21,22 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/survey-data": "SMG",
   "/bonus": "Bonus",
 };
+
+/** Where everyone lands after signing in, when their position allows it. */
+export const DEFAULT_TAB: Tab = "/par";
+
+/**
+ * The tab to send someone to when no particular destination is implied — after
+ * signing in, from the root, or when they've asked for a tab their position
+ * can't reach.
+ *
+ * One definition on purpose: the login page, the root route and the access
+ * guard all need this answer, and three copies would drift the first time the
+ * default changed. Falls back to whatever the position *can* see, so narrowing
+ * a position out of the default can't strand anyone on a redirect they aren't
+ * entitled to follow.
+ */
+export function landingTab(tabs: Tab[]): string {
+  if (tabs.includes(DEFAULT_TAB)) return DEFAULT_TAB;
+  return tabs[0] ?? "/no-access";
+}

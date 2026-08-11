@@ -17,7 +17,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE, verifySession } from "./session";
 import { findById, getPosition, listPositions, type Position, type User } from "./store";
-import type { Tab } from "./tabs";
+import { landingTab, type Tab } from "./tabs";
 
 const CACHE_MS = 5000;
 let cache: { at: number; byId: Map<string, Position> } | null = null;
@@ -75,7 +75,7 @@ export async function requireTab(tab: Tab): Promise<Viewer> {
   if (viewer.user.mustReset) redirect("/change-password");
 
   if (!viewer.position.tabs.includes(tab)) {
-    redirect(viewer.position.tabs[0] ?? "/no-access");
+    redirect(landingTab(viewer.position.tabs));
   }
   return viewer;
 }
@@ -85,7 +85,7 @@ export async function requireAdmin(): Promise<Viewer> {
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
   if (viewer.user.mustReset) redirect("/change-password");
-  if (!viewer.position.isAdmin) redirect(viewer.position.tabs[0] ?? "/no-access");
+  if (!viewer.position.isAdmin) redirect(landingTab(viewer.position.tabs));
   return viewer;
 }
 

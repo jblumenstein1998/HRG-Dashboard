@@ -44,7 +44,8 @@ export default function ChangePasswordPage() {
         setError(data.error ?? "Couldn't change the password");
         return;
       }
-      router.push("/dashboard");
+      // Same as login: the root picks the landing tab for this position.
+      router.push("/");
       router.refresh();
     } catch {
       setError("Network error — please try again");

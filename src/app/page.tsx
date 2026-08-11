@@ -1,14 +1,16 @@
 import { redirect } from "next/navigation";
 import { getViewer } from "@/lib/users/access";
+import { landingTab } from "@/lib/users/tabs";
 
 /**
- * The root sends you to the first tab your position can reach, rather than
- * assuming /dashboard — a position without Drive-Thru would otherwise land on
- * a redirect loop through a tab it isn't allowed to see.
+ * The root resolves where someone should start. Both the login page and the
+ * change-password page send you here rather than naming a tab themselves, so
+ * the landing rule lives in one place and always reflects the viewer's
+ * position.
  */
 export default async function Home() {
   const viewer = await getViewer();
   if (!viewer) redirect("/login");
   if (viewer.user.mustReset) redirect("/change-password");
-  redirect(viewer.position.tabs[0] ?? "/no-access");
+  redirect(landingTab(viewer.position.tabs));
 }
