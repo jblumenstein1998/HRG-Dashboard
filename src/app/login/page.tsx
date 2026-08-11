@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("josh@hudsonrestaurantgroup.com");
+  // No longer prefilled: this is now a per-person login rather than one shared
+  // account, so a hardcoded address would be the wrong one for most people.
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,7 +24,8 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? "Login failed"); return; }
-      router.push("/dashboard");
+      // A temporary password gets exactly one destination until it's changed.
+      router.push(data.mustReset ? "/change-password" : "/dashboard");
       router.refresh();
     } catch {
       setError("Network error — please try again");
