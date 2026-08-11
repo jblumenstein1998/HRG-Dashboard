@@ -27,6 +27,8 @@ import { queryScores } from "../smgStore";
 import { getPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
+import { rollupByStore } from "@/lib/smgCaseStore";
+import { BONUS_ZCASE_TYPES } from "./goals";
 import { BONUS_RULES } from "./rules";
 import { passesGate, resolveGates, type MetricValues } from "./engine";
 import type { Condition } from "./types";
@@ -101,6 +103,8 @@ export type ResolveDiagnostics = {
   smgWeeklyRows: number;
   dailyDriveThruDays: number;
   storesWithCost: number;
+  /** ZCases found in the window, estate-wide. Zero means missing data. */
+  zcases: number;
   warnings: string[];
 };
 
@@ -277,6 +281,52 @@ export async function resolvePeriodMetrics(
     }
   }
 
+  // ── ZCases ─────────────────────────────────────────────────────────────────
+  //
+  // The same two guest-facing types and the same event-date window the SMG tab
+  // reports on, so a manager checking the tab sees the number their scorecard
+  // was built from. The team-member hotline is excluded, as it is there.
+  let zcaseRows = 0;
+  try {
+    const rollup = await rollupByStore({
+      start: window.start,
+      end: window.end,
+      types: [...BONUS_ZCASE_TYPES],
+    });
+    zcaseRows = rollup.reduce((n, r) => n + r.cases, 0);
+
+    if (zcaseRows === 0) {
+      // Zero ZCases estate-wide is not a perfect period, it's an empty table —
+      // the norm is dozens per period. Left pending rather than scored, because
+      // defaulting to "no complaints" would hand every store full marks on
+      // missing data, which is precisely the failure the cached-metric guards
+      // elsewhere in this file exist to prevent.
+      warnings.push(
+        `No ZCases stored for ${window.periodLabel} — Guest Recovery left pending rather than scored as zero`,
+      );
+    } else {
+      const byStoreId = new Map(rollup.map((r) => [r.store ?? "", r]));
+
+      for (const store of BONUS_STORES) {
+        const v = vals(store.storeId);
+        if (!v) continue;
+        const row = byStoreId.get(store.storeId);
+
+        // A store with no ZCases has to be an explicit 0, not an absent value:
+        // the engine reads `undefined` as pending, which would leave the whole
+        // category unscored for exactly the stores that did best.
+        put(v, "hosp_zcase_count", row?.cases ?? 0);
+
+        // The doc asks for "% resolved within 24 hrs"; the store reports the
+        // complement. No cases means nothing was left unresolved, which scores
+        // as 100 rather than as a 0/0 that would read like a total failure.
+        put(v, "hosp_zcase_resolution", row?.over24Pct == null ? 100 : 100 - row.over24Pct);
+      }
+    }
+  } catch (err) {
+    warnings.push(`ZCase fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   return {
     byStore,
     diagnostics: {
@@ -285,6 +335,7 @@ export async function resolvePeriodMetrics(
       smgWeeklyRows: weeklyRows.length,
       dailyDriveThruDays: dailyDays,
       storesWithCost: costs.size,
+      zcases: zcaseRows,
       warnings,
     },
   };

@@ -10,6 +10,13 @@
  * doesn't pull all six scorecards into its bundle to read four numbers.
  */
 
+/**
+ * The ZCase types the bonus counts — the two guest-facing ones, matching what
+ * the SMG tab reports. The team-member hotline is a different conversation and
+ * is excluded from both.
+ */
+export const BONUS_ZCASE_TYPES = ["unsolicited", "locationSurvey"] as const;
+
 export const ZCASE_GOALS = {
   /** Z-Cases opened in the period, per store. Fewer is better. */
   count: { target: 4, threshold: 8 },
