@@ -17,7 +17,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE, verifySession } from "./session";
 import { findById, getPosition, listPositions, type Position, type User } from "./store";
-import type { Tab } from "./schema";
+import type { Tab } from "./tabs";
 
 const CACHE_MS = 5000;
 let cache: { at: number; byId: Map<string, Position> } | null = null;

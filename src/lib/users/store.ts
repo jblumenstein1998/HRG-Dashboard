@@ -9,7 +9,8 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { hashPassword } from "./password";
-import { ALL_TABS, ensureUserSchema, type Tab } from "./schema";
+import { ensureUserSchema } from "./schema";
+import { ALL_TABS, type Tab } from "./tabs";
 
 export type Position = {
   id: string;

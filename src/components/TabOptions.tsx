@@ -1,6 +1,6 @@
 "use client";
 
-import { TAB_LABELS, type Tab } from "@/lib/users/schema";
+import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
 
 /**
  * The options inside the header's tab picker.

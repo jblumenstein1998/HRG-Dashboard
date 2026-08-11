@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";

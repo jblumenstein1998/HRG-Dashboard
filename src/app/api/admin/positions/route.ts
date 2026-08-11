@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
 import { invalidatePositions } from "@/lib/users/access";
-import { ALL_TABS } from "@/lib/users/schema";
+import { ALL_TABS } from "@/lib/users/tabs";
 import { deletePosition, listPositions, upsertPosition } from "@/lib/users/store";
 
 /**

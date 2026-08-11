@@ -6,7 +6,7 @@ import LocationCard from "./LocationCard";
 import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel, getStoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";

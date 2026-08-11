@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 
 /**
  * The tab picker in the header.

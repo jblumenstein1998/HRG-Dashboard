@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import type { PARLocation } from "@/lib/par";
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";

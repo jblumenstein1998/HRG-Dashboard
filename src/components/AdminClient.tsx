@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
-import { TAB_LABELS, type Tab } from "@/lib/users/schema";
+import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
 
 type User = {
   id: string;

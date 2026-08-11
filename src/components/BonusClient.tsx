@@ -1,7 +1,7 @@
 "use client";
 
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 
 /**
  * Bonus attainment — the grid, with each scorecard expanding in place.

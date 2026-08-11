@@ -20,17 +20,13 @@
 
 import { sql } from "@/lib/db";
 
-/** Every tab the nav can offer. Positions hold a subset of these. */
-export const ALL_TABS = ["/dashboard", "/food-cost", "/par", "/survey-data", "/bonus"] as const;
-export type Tab = (typeof ALL_TABS)[number];
-
-export const TAB_LABELS: Record<Tab, string> = {
-  "/dashboard": "Drive-Thru",
-  "/food-cost": "Food Cost",
-  "/par": "POS Sales",
-  "/survey-data": "SMG",
-  "/bonus": "Bonus",
-};
+/**
+ * The tab constants live in ./tabs, which imports nothing server-only.
+ *
+ * They are NOT re-exported from here on purpose: a client component importing
+ * them through this module would pull in `sql` — and therefore `neon()` — and
+ * blow up in the browser, which is exactly what happened once already.
+ */
 
 /**
  * Admin rights come from `app_positions.is_admin`, not from a magic id.

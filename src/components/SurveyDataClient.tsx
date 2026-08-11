@@ -6,7 +6,7 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
 import TabOptions from "@/components/TabOptions";
-import type { Tab } from "@/lib/users/schema";
+import type { Tab } from "@/lib/users/tabs";
 import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
 import {
   COMBINED_KEY,

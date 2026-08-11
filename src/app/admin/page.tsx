@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/users/access";
 import { listPositions, listUsers } from "@/lib/users/store";
-import { ALL_TABS } from "@/lib/users/schema";
+import { ALL_TABS } from "@/lib/users/tabs";
 import AdminClient from "@/components/AdminClient";
 
 /**
