@@ -4,11 +4,10 @@ import { smgLogin } from "@/lib/smgTrend";
 
 export const maxDuration = 300;
 
-// "today" is dropped: on a once-daily schedule its window is still filling when
-// the cron runs and then sits frozen, so it read near-empty all day and isn't
-// surfaced any more (see the snapshots route). Skipping it also saves two of
-// the ten SMG report round-trips per run.
-const KEYS: SnapshotKey[] = ["yesterday", "t7", "wtd", "last_week", "ptd"];
+// "today" is included so the tab has something to show before anyone presses
+// Refresh; on a once-daily schedule it's only current as of this run, and the
+// Refresh button (/api/smg/refresh) is what brings it up to the minute.
+const KEYS: SnapshotKey[] = ["today", "yesterday", "t7", "wtd", "last_week", "ptd"];
 
 /**
  * Refreshes the rolling / to-date tiles. Every window here ends yesterday, so

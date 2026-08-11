@@ -55,6 +55,27 @@ export function prettyUnit(name: string, key: string): string {
   return `${m[1].charAt(0)}${m[1].slice(1).toLowerCase()} ${m[2]}`;
 }
 
+/**
+ * Freshness stamp for the "Updated …" labels — "8/10/26, 6:07 PM".
+ *
+ * An absolute time rather than "6 min ago": these numbers are compared against
+ * SMG's own screens, and "which pull am I looking at" is the question being
+ * asked. A relative age also goes stale on a tab left open, while a timestamp
+ * stays true.
+ */
+export function formatSyncStamp(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "never";
+  return d.toLocaleString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function marketOf(key: string, name: string): "TN" | "VA" | null {
   const label = prettyUnit(name, key);
   if (TN_STORES.includes(label)) return "TN";

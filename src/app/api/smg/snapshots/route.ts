@@ -9,12 +9,19 @@ import type { LevelKey } from "@/lib/smgTrend";
  * Reads stored snapshots only — the cron owns fetching, since each window costs
  * a multi-second round trip to SMG.
  */
-// "today" is deliberately absent. Every other window ends yesterday, so a
-// once-daily cron captures them whole; today's is still filling when the cron
-// runs and then sits frozen for the rest of the day, reading near-empty. It
-// stays in SnapshotKey so it can be restored by adding it back here (and to
-// the cron's KEYS) if the snapshot job ever runs more than once a day.
-const ORDER: SnapshotKey[] = ["yesterday", "t7", "wtd", "last_week", "ptd"];
+/**
+ * "today" used to be excluded here: every other window ends yesterday, so the
+ * once-daily cron captures them whole, while today's was still filling when the
+ * cron ran and then sat frozen for the rest of the day.
+ *
+ * It's back because Refresh now re-pulls from SMG on demand, so today's window
+ * can be brought current whenever it's asked for. Two caveats stand, and the
+ * tab's own footnote already explains the first: scores count on **visit date**
+ * and guests answer days after visiting, so today's survey numbers are thin by
+ * nature — and between refreshes they're only as fresh as the last pull. The
+ * ZCases section is the one that genuinely moves intraday.
+ */
+const ORDER: SnapshotKey[] = ["today", "yesterday", "t7", "wtd", "last_week", "ptd"];
 
 export async function GET(req: NextRequest) {
   const level = (req.nextUrl.searchParams.get("level") ?? "store") as LevelKey;

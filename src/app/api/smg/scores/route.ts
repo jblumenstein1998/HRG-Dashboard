@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listStoredMetrics, queryScores, type DateBasis } from "@/lib/smgStore";
+import { lastScoreSyncAt, listStoredMetrics, queryScores, type DateBasis } from "@/lib/smgStore";
 import type { DateTypeKey, LevelKey } from "@/lib/smgTrend";
 
 /**
@@ -24,9 +24,10 @@ export async function GET(req: NextRequest) {
   const limit = Math.max(1, Math.min(Number(p.get("limit") ?? 12) || 12, 260));
 
   try {
-    const [rows, metrics] = await Promise.all([
+    const [rows, metrics, syncedAt] = await Promise.all([
       queryScores({ level, periodType, dateBasis, units: csv("units"), metrics: csv("metrics"), limit }),
       listStoredMetrics(level, periodType),
+      lastScoreSyncAt(level, periodType, dateBasis),
     ]);
 
     // Period ordering is defined by the data, not by the client re-deriving it.
@@ -48,13 +49,17 @@ export async function GET(req: NextRequest) {
       periods,
       units,
       availableMetrics: metrics,
+      syncedAt,
       rows,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // An empty/missing table just means the cron hasn't run yet.
     if (/relation "smg_scores" does not exist/i.test(msg)) {
-      return NextResponse.json({ level, periodType, dateBasis, periods: [], units: [], availableMetrics: [], rows: [] });
+      return NextResponse.json({
+        level, periodType, dateBasis,
+        periods: [], units: [], availableMetrics: [], syncedAt: null, rows: [],
+      });
     }
     console.error("[SMG] /api/smg/scores failed:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });

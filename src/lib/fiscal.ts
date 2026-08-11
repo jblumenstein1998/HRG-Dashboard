@@ -13,6 +13,17 @@ export type FiscalPeriod = {
 
 export const FISCAL_YEAR_START = "2025-12-29"; // Dec 29, 2025
 
+/**
+ * Earliest fiscal year the dashboard reports on. Anything older is dropped on
+ * read (see smgStore.queryScores), so it can't reach a period picker or a
+ * trend chart even if an old backfill left it in the table.
+ *
+ * FY2025 begins 2024-12-30 — 364 days before FISCAL_YEAR_START, the same
+ * retail-calendar shift getPriorYearDate uses.
+ */
+export const EARLIEST_FISCAL_YEAR = 2025;
+export const EARLIEST_FISCAL_YEAR_START = "2024-12-30";
+
 export const PERIODS: FiscalPeriod[] = [
   { period: 1,  quarter: 1, start: "2025-12-29", end: "2026-01-25", weeks: 4 },
   { period: 2,  quarter: 1, start: "2026-01-26", end: "2026-02-22", weeks: 4 },

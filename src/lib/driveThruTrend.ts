@@ -36,10 +36,25 @@ const ROLLING_TTL_MS = 6 * 60 * 60 * 1000;
  * with how the books close, so they'd be a second, conflicting answer to the
  * same question.
  */
-export type Granularity = "week" | "period";
+/**
+ * "day" exists for bonus attainment, which needs to count how many individual
+ * days in a period missed the Drive-Thru target ("> 5 days in a pay-period
+ * missing the target goals for the day" zeroes that category). It is
+ * deliberately NOT part of GRANULARITIES: a fiscal year holds ~365 daily
+ * buckets against 52 weekly ones, and sweeping them all nightly would turn one
+ * cron into hundreds of Superset queries. Days are fetched a period at a time
+ * via getDailyTrend(), and cache permanently once closed.
+ */
+export type Granularity = "week" | "period" | "day";
 
+/** The granularities the trend chart offers and the nightly cron warms. */
 export const GRANULARITIES: Granularity[] = ["week", "period"];
 
+/**
+ * Guards the public chart route's query param. Intentionally rejects "day" —
+ * that granularity is reached through getDailyTrend() with an explicit bounded
+ * range, never by asking for the whole fiscal year a day at a time.
+ */
 export function isGranularity(v: string | null): v is Granularity {
   return v === "week" || v === "period";
 }
@@ -154,6 +169,32 @@ export function buildBuckets(granularity: Granularity): BucketDef[] {
 
   // Drop buckets that haven't begun yet (a period horizon can run past today).
   return buckets.filter(b => toDate(b.start) <= today);
+}
+
+/**
+ * One bucket per calendar day across an explicit range, for the bonus tab's
+ * daily Drive-Thru test. Days that haven't happened yet are dropped, so asking
+ * for a period that's still in progress returns only its completed days.
+ *
+ * The bucket key is the ISO date, which is unique across fiscal years — unlike
+ * the week and period keys, which are scoped by a two-digit year prefix.
+ */
+export function buildDayBuckets(startISO: string, endISO: string): BucketDef[] {
+  const today = todayCentral();
+  const last = toDate(endISO);
+  const buckets: BucketDef[] = [];
+  for (let cursor = toDate(startISO); cursor <= last; cursor.setDate(cursor.getDate() + 1)) {
+    if (cursor > today) break;
+    const iso = fmt(cursor);
+    buckets.push({
+      granularity: "day",
+      bucketKey: iso,
+      label: `${cursor.getMonth() + 1}/${cursor.getDate()}`,
+      start: iso,
+      end: iso,
+    });
+  }
+  return buckets;
 }
 
 /** A bucket whose end date is already past can never change again. */
@@ -382,15 +423,34 @@ type StoredRow = {
   fetched_at: string;
 };
 
-async function readStored(granularity: Granularity): Promise<Map<string, StoredRow>> {
-  const rows = (await sql`
-    SELECT granularity, bucket_key, bucket_label,
-           to_char(start_date, 'YYYY-MM-DD') AS start_date,
-           to_char(end_date,   'YYYY-MM-DD') AS end_date,
-           stores, closed, fetched_at
-    FROM drive_thru_trend
-    WHERE granularity = ${granularity}
-  `) as StoredRow[];
+/**
+ * `range` bounds the read by start_date. Week and period reads don't need it —
+ * a fiscal year is at most 52 rows — but daily reads would otherwise drag back
+ * every day ever stored, each carrying a twelve-store JSON blob, to answer a
+ * question about one 28-day period.
+ */
+async function readStored(
+  granularity: Granularity,
+  range?: { start: string; end: string }
+): Promise<Map<string, StoredRow>> {
+  const rows = (range
+    ? await sql`
+        SELECT granularity, bucket_key, bucket_label,
+               to_char(start_date, 'YYYY-MM-DD') AS start_date,
+               to_char(end_date,   'YYYY-MM-DD') AS end_date,
+               stores, closed, fetched_at
+        FROM drive_thru_trend
+        WHERE granularity = ${granularity}
+          AND start_date >= ${range.start} AND start_date <= ${range.end}
+      `
+    : await sql`
+        SELECT granularity, bucket_key, bucket_label,
+               to_char(start_date, 'YYYY-MM-DD') AS start_date,
+               to_char(end_date,   'YYYY-MM-DD') AS end_date,
+               stores, closed, fetched_at
+        FROM drive_thru_trend
+        WHERE granularity = ${granularity}
+      `) as StoredRow[];
   return new Map(rows.map(r => [r.bucket_key, r]));
 }
 
@@ -431,10 +491,41 @@ export async function getTrend(
   granularity: Granularity,
   opts: { refresh?: boolean } = {},
 ): Promise<TrendPoint[]> {
+  return resolveBuckets(berryToken, granularity, buildBuckets(granularity), opts);
+}
+
+/**
+ * Daily drive-thru numbers across an explicit range, for bonus attainment's
+ * "days missing the target" test.
+ *
+ * Costs one Superset query per day the first time a range is asked for — a
+ * 28-day period is 28 queries, throttled by the same 4-permit semaphore as
+ * everything else here. Every closed day then caches permanently, so the
+ * expense is once per period rather than once per page load. This is why the
+ * bonus scores are computed by a cron into bonus_results rather than live.
+ */
+export async function getDailyTrend(
+  berryToken: string,
+  startISO: string,
+  endISO: string,
+  opts: { refresh?: boolean } = {},
+): Promise<TrendPoint[]> {
+  return resolveBuckets(berryToken, "day", buildDayBuckets(startISO, endISO), opts, {
+    start: startISO,
+    end: endISO,
+  });
+}
+
+async function resolveBuckets(
+  berryToken: string,
+  granularity: Granularity,
+  buckets: BucketDef[],
+  opts: { refresh?: boolean } = {},
+  readRange?: { start: string; end: string },
+): Promise<TrendPoint[]> {
   await ensureTrendSchema();
 
-  const buckets = buildBuckets(granularity);
-  const stored = await readStored(granularity);
+  const stored = await readStored(granularity, readRange);
 
   const missing = opts.refresh ? buckets : buckets.filter(b => !isFresh(stored.get(b.bucketKey)));
 

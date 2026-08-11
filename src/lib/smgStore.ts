@@ -9,7 +9,13 @@
  * metric is added.
  */
 import { sql } from "@/lib/db";
-import { getLastWeekRange, getPeriodForDate, getT7Range, getTodayRange } from "@/lib/fiscal";
+import {
+  EARLIEST_FISCAL_YEAR,
+  getLastWeekRange,
+  getPeriodForDate,
+  getT7Range,
+  getTodayRange,
+} from "@/lib/fiscal";
 import {
   fetchComparison,
   fetchTrend,
@@ -438,6 +444,9 @@ export async function queryScores(q: ScoreQuery = {}): Promise<ScoreRow[]> {
   const metrics = q.metrics?.length ? q.metrics : null;
   const limit = q.limit ?? 52;
 
+  // The fiscal-year floor is applied in both halves: leaving it off the inner
+  // query would let old periods eat slots in the `limit`, so asking for the
+  // most recent 26 could return fewer than 26 visible ones.
   const rows = await sql`
     SELECT unit_key, unit_name, period_label, period_year, period_number,
            metric, score, responses, below_min
@@ -445,12 +454,14 @@ export async function queryScores(q: ScoreQuery = {}): Promise<ScoreRow[]> {
     WHERE level = ${level}
       AND date_basis = ${dateBasis}
       AND period_type = ${periodType}
+      AND period_year >= ${EARLIEST_FISCAL_YEAR}
       AND (${units}::text[] IS NULL OR unit_key = ANY(${units}::text[]))
       AND (${metrics}::text[] IS NULL OR metric = ANY(${metrics}::text[]))
       AND (period_year, period_number) IN (
         SELECT DISTINCT period_year, period_number
         FROM smg_scores
         WHERE level = ${level} AND date_basis = ${dateBasis} AND period_type = ${periodType}
+          AND period_year >= ${EARLIEST_FISCAL_YEAR}
         ORDER BY period_year DESC NULLS LAST, period_number DESC NULLS LAST
         LIMIT ${limit}
       )
@@ -468,6 +479,23 @@ export async function queryScores(q: ScoreQuery = {}): Promise<ScoreRow[]> {
     responses: r.responses === null ? null : Number(r.responses),
     belowMin: Boolean(r.below_min),
   }));
+}
+
+/**
+ * When a cut was last written by an ingest. Drives the tab's "Updated N ago"
+ * label, so a stale table is visible rather than something you'd only catch by
+ * noticing the numbers hadn't moved.
+ */
+export async function lastScoreSyncAt(
+  level: LevelKey = "store",
+  periodType: DateTypeKey = "weekly",
+  dateBasis: DateBasis = "visit",
+): Promise<string | null> {
+  const rows = (await sql`
+    SELECT MAX(updated_at) AS at FROM smg_scores
+    WHERE level = ${level} AND period_type = ${periodType} AND date_basis = ${dateBasis}
+  `) as { at: string | null }[];
+  return rows[0]?.at ?? null;
 }
 
 /** Distinct metrics present for a cut — drives the column set in the UI. */

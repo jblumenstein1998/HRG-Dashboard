@@ -383,6 +383,20 @@ export default function SurveyTrendChart({
     return { start: start === -1 ? 0 : start, end: last };
   }, [points]);
 
+  /**
+   * The From/To lists read newest-first — the recent periods are the ones
+   * anyone reaches for, and it matches the page's own period picker.
+   *
+   * The option `value` stays the index into `points`, which is chronological
+   * and is what `range` and the chart itself are expressed in. Only the display
+   * order flips; reversing `points` itself would invert every comparison in
+   * `effectiveRange` and the drawing code.
+   */
+  const pickerOptions = useMemo(
+    () => points.map((p, index) => ({ label: p.label, index })).reverse(),
+    [points],
+  );
+
   // Clamped so an explicit selection survives a grain switch returning fewer periods.
   const effectiveRange = useMemo(() => {
     if (points.length === 0) return null;
@@ -519,8 +533,8 @@ export default function SurveyTrendChart({
             disabled={points.length === 0}
             onChange={(e) => setStart(Number(e.target.value))}
           >
-            {points.map((p, i) => (
-              <option key={p.label} value={i} disabled={i > (effectiveRange?.end ?? 0)}>{p.label}</option>
+            {pickerOptions.map(({ label, index }) => (
+              <option key={label} value={index} disabled={index > (effectiveRange?.end ?? 0)}>{label}</option>
             ))}
           </select>
 
@@ -532,8 +546,8 @@ export default function SurveyTrendChart({
             disabled={points.length === 0}
             onChange={(e) => setEnd(Number(e.target.value))}
           >
-            {points.map((p, i) => (
-              <option key={p.label} value={i} disabled={i < (effectiveRange?.start ?? 0)}>{p.label}</option>
+            {pickerOptions.map(({ label, index }) => (
+              <option key={label} value={index} disabled={index < (effectiveRange?.start ?? 0)}>{label}</option>
             ))}
           </select>
         </div>

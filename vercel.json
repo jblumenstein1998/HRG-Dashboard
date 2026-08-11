@@ -15,6 +15,14 @@
     {
       "path": "/api/cron/smg-snapshots",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/bonus-rollup",
+      "schedule": "30 13 * * *"
+    },
+    {
+      "path": "/api/cron/zcase-sync",
+      "schedule": "0 14 * * *"
     }
   ]
 }

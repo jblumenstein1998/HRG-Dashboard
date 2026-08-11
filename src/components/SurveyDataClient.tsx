@@ -4,12 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import SurveyTrendChart from "@/components/SurveyTrendChart";
+import ZCasesSection from "@/components/ZCasesSection";
 import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
   STORE_LABELS,
   TONE_BG,
   TONE_TEXT,
+  formatSyncStamp,
   marketOf,
   metricRank,
   prettyUnit,
@@ -31,6 +33,8 @@ type ScoresResponse = {
   periods: string[];
   units: { key: string; name: string }[];
   availableMetrics: string[];
+  /** When the ingest last wrote this cut; drives the freshness label. */
+  syncedAt: string | null;
   rows: ScoreRow[];
   error?: string;
 };
@@ -53,14 +57,11 @@ type SnapshotsResponse = {
   error?: string;
 };
 
-const LEVELS = [
-  { value: "store", label: "Store" },
-  { value: "regionManager", label: "Regional Manager" },
-  { value: "districtManager", label: "District Manager" },
-] as const;
-
-// Fixed rather than exposed: the tab always reads visit date at period grain.
-// Weeks are still ingested and queryable — the picker just doesn't list them.
+// Fixed rather than exposed: the tab always reads store level, visit date, at
+// period grain. The regional/district-manager cuts are still ingested by the
+// cron and queryable through /api/smg/scores — the picker just doesn't offer
+// them, since TN/VA is the split HRG actually reads the tab by.
+const LEVEL = "store";
 const GRAIN = "period";
 const DATE_BASIS = "visit";
 const PERIOD_LOOKBACK = 26;
@@ -172,13 +173,18 @@ function summarise(units: UnitRow[], metrics: string[]): UnitRow | null {
 export default function SurveyDataClient() {
   const router = useRouter();
 
-  const [level, setLevel] = useState<string>("store");
   const [periodSel, setPeriodSel] = useState<string>("");
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
   // Opens on biggest-selling first, the order the table used to build in.
   const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
+  // Tracked apart from `refreshKey` because the SMG pull is slow: the re-read
+  // happens straight away, and this one fires ~16s later when the fresh rows
+  // have actually landed. Only the scores/snapshots fetch watches it, so the
+  // ZCases section doesn't pull from SMG twice for a single click.
+  const [pulling, setPulling] = useState(false);
+  const [scoresReloadKey, setScoresReloadKey] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
   const [scores, setScores] = useState<ScoresResponse | null>(null);
@@ -188,8 +194,8 @@ export default function SurveyDataClient() {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch(`/api/smg/scores?level=${level}&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
-      fetch(`/api/smg/snapshots?level=${level}&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
+      fetch(`/api/smg/scores?level=${LEVEL}&periodType=${GRAIN}&dateBasis=${DATE_BASIS}&limit=${PERIOD_LOOKBACK}`).then((r) => r.json()),
+      fetch(`/api/smg/snapshots?level=${LEVEL}&dateBasis=${DATE_BASIS}`).then((r) => r.json()),
     ])
       .then(([s, snap]: [ScoresResponse, SnapshotsResponse]) => {
         if (cancelled) return;
@@ -201,7 +207,7 @@ export default function SurveyDataClient() {
     return () => {
       cancelled = true;
     };
-  }, [level, refreshKey]);
+  }, [refreshKey, scoresReloadKey]);
 
   // Rolling windows first, then fiscal periods newest-first. Values are
   // prefixed so a period label can't collide with a window key.
@@ -298,8 +304,6 @@ export default function SurveyDataClient() {
    */
   const rows = useMemo(() => {
     const withSales = unitRows.map((u) => ({ ...u, sales: salesByStore[u.key] ?? null }));
-    if (level !== "store") return withSales;
-
     const seen = new Set(withSales.map((u) => u.key));
     const missing = Object.keys(STORE_LABELS)
       .filter((key) => !seen.has(key))
@@ -312,33 +316,48 @@ export default function SurveyDataClient() {
         cells: new Map<string, Cell>(),
       }));
     return [...withSales, ...missing];
-  }, [unitRows, salesByStore, level]);
+  }, [unitRows, salesByStore]);
 
-  const isStoreLevel = level === "store";
   const tn = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "TN"), [rows]);
   const va = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "VA"), [rows]);
 
   const tnSummary = useMemo(() => summarise(tn, metrics), [tn, metrics]);
   const vaSummary = useMemo(() => summarise(va, metrics), [va, metrics]);
-  const hrgSummary = useMemo(
-    () => summarise(isStoreLevel ? [...tn, ...va] : rows, metrics),
-    [isStoreLevel, tn, va, rows, metrics],
-  );
+  const hrgSummary = useMemo(() => summarise([...tn, ...va], metrics), [tn, va, metrics]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
    * bottom now, so the whole estate can be ranked against itself in one go.
    * The TN/VA checkboxes still filter which stores are listed.
    */
-  const listed = useMemo(() => {
-    if (!isStoreLevel) return rows;
-    return rows.filter((u) => {
-      const m = marketOf(u.key, u.name);
+  const listed = useMemo(
+    () =>
+      rows.filter((u) => {
+        const m = marketOf(u.key, u.name);
+        if (m === "TN") return showTN;
+        if (m === "VA") return showVA;
+        return true;
+      }),
+    [rows, showTN, showVA],
+  );
+
+  /**
+   * Store numbers the ZCases section should cover, from the TN/VA checkboxes.
+   * Null means no filter.
+   *
+   * Built from STORE_LABELS rather than from `listed`, because a store with no
+   * surveys in the window can still have ZCases — filtering by what the survey
+   * table happens to list would hide them.
+   */
+  const zcaseStores = useMemo(() => {
+    if (showTN && showVA) return null;
+    return Object.keys(STORE_LABELS).filter((key) => {
+      const m = marketOf(key, "");
       if (m === "TN") return showTN;
       if (m === "VA") return showVA;
       return true;
     });
-  }, [rows, isStoreLevel, showTN, showVA]);
+  }, [showTN, showVA]);
 
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
@@ -365,11 +384,11 @@ export default function SurveyDataClient() {
 
   const summaryRows = useMemo(() => {
     const out: { label: string; row: UnitRow }[] = [];
-    if (isStoreLevel && showTN && tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
-    if (isStoreLevel && showVA && vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
+    if (showTN && tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
+    if (showVA && vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
     if (hrgSummary && showTN && showVA) out.push({ label: "HRG", row: hrgSummary });
     return out;
-  }, [isStoreLevel, showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
+  }, [showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
 
   const colCount = metrics.length + 3;
 
@@ -405,6 +424,7 @@ export default function SurveyDataClient() {
                   <option value="/food-cost">Food Cost</option>
                   <option value="/par">POS Sales</option>
                   <option value="/survey-data">SMG</option>
+                  <option value="/bonus">Bonus</option>
                 </select>
                 <svg className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -439,30 +459,18 @@ export default function SurveyDataClient() {
               ))}
             </select>
 
-            <select
-              value={level}
-              onChange={(e) => setLevel(e.target.value)}
-              className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-            >
-              {LEVELS.map((l) => (
-                <option key={l.value} value={l.value}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-
-            {isStoreLevel && (
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showVA} onChange={(e) => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-                  VA
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showTN} onChange={(e) => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-                  TN
-                </label>
-              </div>
-            )}
+            {/* The only cut the tab offers. Both the scores table and the
+                ZCases section follow these. */}
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" checked={showVA} onChange={(e) => setShowVA(e.target.checked)} className="rounded border-gray-300" />
+                VA
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" checked={showTN} onChange={(e) => setShowTN(e.target.checked)} className="rounded border-gray-300" />
+                TN
+              </label>
+            </div>
 
             {selectedWindow && (
               <span className="text-xs text-gray-500">
@@ -470,12 +478,29 @@ export default function SurveyDataClient() {
               </span>
             )}
 
+            {/*
+              Refresh re-reads immediately *and* re-pulls from SMG, which takes
+              ~16s. The stored rows stay on screen throughout — blocking the tab
+              for that long to avoid showing yesterday's numbers for a few more
+              seconds would be the worse trade. The freshness it reports on sits
+              on the scores card below, next to the numbers it describes.
+            */}
             <button
-              onClick={() => setRefreshKey((k) => k + 1)}
-              disabled={busy}
+              onClick={() => {
+                setRefreshKey((k) => k + 1);
+                if (pulling) return;
+                setPulling(true);
+                fetch(`/api/smg/refresh?level=${LEVEL}`)
+                  .catch(() => {})
+                  .finally(() => {
+                    setPulling(false);
+                    setScoresReloadKey((k) => k + 1);
+                  });
+              }}
+              disabled={busy || pulling}
               className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
             >
-              {busy ? "Refreshing…" : "Refresh"}
+              {busy || pulling ? "Refreshing…" : "Refresh"}
             </button>
           </div>
         </div>
@@ -498,7 +523,16 @@ export default function SurveyDataClient() {
               )}
             </div>
             {/* The dates used to sit here as well; they're in the title now, and
-                only snapshot selections ever had them. */}
+                only snapshot selections ever had them. Freshness does belong
+                here rather than up in the banner — it describes these scores,
+                not the tab, and the ZCases section reports its own the same way. */}
+            <span className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
+              {pulling && <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />}
+              <span>
+                Updated {formatSyncStamp(scores?.syncedAt)}
+                {pulling ? " · pulling from SMG…" : ""}
+              </span>
+            </span>
           </div>
           <div className={`overflow-x-auto transition-opacity ${busy ? "opacity-50" : "opacity-100"}`}>
             {/* text-sm cells / text-xs headers / py-3 rows — same metrics as the
@@ -518,7 +552,7 @@ export default function SurveyDataClient() {
                     sort={sort}
                     onSort={setSort}
                     align="left"
-                    label={isStoreLevel ? "Location" : LEVELS.find((l) => l.value === level)?.label ?? ""}
+                    label="Location"
                   />
                   <SortHeader col="sales" sort={sort} onSort={setSort} label="Sales" />
                   <SortHeader col="surveys" sort={sort} onSort={setSort} label="Surveys" />
@@ -568,6 +602,18 @@ export default function SurveyDataClient() {
         <div className="mt-5">
           <SurveyTrendChart dateBasis={DATE_BASIS} showTN={showTN} showVA={showVA} />
         </div>
+
+        {/* Shares the page's period picker. ZCases window on the guest's visit
+            date, the same basis as the scores above, so the two answer the same
+            question about the same days. `range` is null for a period fiscal.ts
+            can't resolve, which the section renders as an empty state. */}
+        <ZCasesSection
+          start={range?.start ?? null}
+          end={range?.end ?? null}
+          label={selectedLabel}
+          refreshKey={refreshKey}
+          stores={zcaseStores}
+        />
       </main>
     </div>
   );

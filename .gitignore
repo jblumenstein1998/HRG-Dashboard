@@ -29,6 +29,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+# dev-server logs (dev3000.log, dev-bonus.log)
+*.log
+
+# claude code — local settings and worktrees, not shared config
+.claude/
 
 # env files (can opt-in for committing if needed)
 .env*
