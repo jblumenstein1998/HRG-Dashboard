@@ -458,15 +458,20 @@ export default function SurveyDataClient() {
   useEffect(() => setFetchNote(null), [selected]);
 
   /**
-   * Re-pull the selected window from SMG, then re-read it.
+   * The tab's one refresh: re-pull the selected window from SMG, then re-read.
    *
-   * Deliberately separate from Refresh, which only re-reads what's already
-   * stored. This one is a live round trip to SMG costing several seconds, so
-   * it stays an explicit act rather than something every refresh triggers.
+   * Previously two buttons — Fetch for the SMG round trip, Refresh for a plain
+   * re-read. One button covers both, since re-reading without pulling only
+   * ever showed the same rows again.
+   *
+   * The ZCase pull is kicked off first so it runs alongside the scores pull
+   * rather than after it; ZCases are a separate report on a different window
+   * basis, so they can't ride along on `selection`.
    */
-  const fetchFromSmg = async () => {
+  const refreshAll = async () => {
     setFetching(true);
     setFetchNote(null);
+    setZcaseFetchKey((k) => k + 1);
     try {
       const res = await fetch("/api/smg/refresh", {
         method: "POST",
@@ -478,11 +483,8 @@ export default function SurveyDataClient() {
         setFetchNote({ ok: false, text: j.error ? `Fetch failed — ${j.error}` : "Fetch failed" });
         return;
       }
-      // Re-read so the table shows what was just written. ZCases pull on their
-      // own key rather than through this route — they're a different report
-      // with a different window basis, so they don't ride along on `selection`.
+      // Re-read so the table shows what was just written.
       setRefreshKey((k) => k + 1);
-      setZcaseFetchKey((k) => k + 1);
       setFetchNote({ ok: true, text: `Updated from SMG just now` });
     } catch {
       setFetchNote({ ok: false, text: "Fetch failed — couldn't reach the server" });
@@ -582,19 +584,12 @@ export default function SurveyDataClient() {
                 <span className={`text-xs ${fetchNote.ok ? "text-gray-500" : "text-red-600"}`}>{fetchNote.text}</span>
               )}
               <button
-                onClick={fetchFromSmg}
-                disabled={fetching || !selected}
+                onClick={refreshAll}
+                disabled={fetching || busy || !selected}
                 title="Re-pull this window from SMG. Scores keep moving for 14 days after the visit date, so a window can change between daily syncs."
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
               >
-                {fetching ? "Fetching…" : "Fetch"}
-              </button>
-              <button
-                onClick={() => setRefreshKey((k) => k + 1)}
-                disabled={busy}
-                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-              >
-                {busy ? "Refreshing…" : "Refresh"}
+                {fetching || busy ? "Refreshing…" : "Refresh"}
               </button>
             </div>
           </div>
