@@ -25,6 +25,10 @@ const PUBLIC_PATHS = [
   "/login",
   // Google Sign-In: both ends of the round trip run before a session exists.
   "/api/auth/google/",
+  // Password sign-in for shared device accounts, likewise pre-session. The
+  // route itself only resolves usernames, so no Google account is reachable
+  // through it.
+  "/api/auth/login",
   "/api/smg/",
   "/api/cron/",
   "/api/slack",

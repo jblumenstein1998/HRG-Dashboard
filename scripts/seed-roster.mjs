@@ -1,12 +1,18 @@
 // Run with:  node --env-file=.env.local scripts/seed-roster.mjs
 //
 // Creates the account tables if they don't exist, then loads the HRG roster:
-// three positions and the people in them. Idempotent — re-running only fixes up
+// the positions and the people in them. Idempotent — re-running only fixes up
 // names, and leaves positions and their edited tab lists alone.
 //
-// Nobody gets a password: everyone signs in with their Google account. A row
-// here only records that an address is allowed to sign in and which position it
-// holds. See src/lib/users/google.ts.
+// Nobody here gets a password: every person signs in with their Google account,
+// and a row only records that an address is allowed to sign in and which
+// position it holds. See src/lib/users/google.ts.
+//
+// The one account that does carry a password is the shared "HRG Store" device
+// login, which has no person behind it. It is created by
+// scripts/migrate-store-login.mjs, not here, so the credential lives in exactly
+// one script — but the Store *position* is listed below so a fresh database has
+// somewhere to put it and so the sweep at the end never removes it.
 import { neon } from "@neondatabase/serverless";
 import { randomUUID } from "node:crypto";
 
@@ -26,16 +32,22 @@ await sql`
 await sql`
   CREATE TABLE IF NOT EXISTS app_users (
     id            TEXT PRIMARY KEY,
-    email         TEXT NOT NULL,
+    email         TEXT,
+    username      TEXT,
+    password_hash TEXT,
     name          TEXT NOT NULL,
     position_id   TEXT NOT NULL REFERENCES app_positions(id),
     disabled_at   TIMESTAMPTZ,
     token_version INTEGER NOT NULL DEFAULT 1,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_login_at TIMESTAMPTZ
+    last_login_at TIMESTAMPTZ,
+    CONSTRAINT app_users_has_login CHECK (
+      email IS NOT NULL OR (username IS NOT NULL AND password_hash IS NOT NULL)
+    )
   )
 `;
 await sql`CREATE UNIQUE INDEX IF NOT EXISTS app_users_email_key ON app_users (lower(email))`;
+await sql`CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_key ON app_users (lower(username))`;
 
 const ALL = ["/dashboard", "/food-cost", "/par", "/survey-data", "/bonus"];
 const OPS = ["/dashboard", "/food-cost", "/par", "/survey-data"];
@@ -46,6 +58,8 @@ const POSITIONS = [
   { id: "administrator", label: "Administrator", tabs: ALL, isAdmin: true },
   { id: "director_of_operations", label: "Director of Operations", tabs: OPS, isAdmin: false },
   { id: "district_manager", label: "District Manager", tabs: OPS, isAdmin: false },
+  // Its user comes from migrate-store-login.mjs; this is only the position.
+  { id: "store", label: "Store", tabs: OPS, isAdmin: false },
 ];
 
 // Emails must match the person's Google account — that's what sign-in matches

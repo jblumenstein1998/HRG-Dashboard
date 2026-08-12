@@ -20,7 +20,10 @@ export type Position = {
 
 export type User = {
   id: string;
-  email: string;
+  /** Null for a shared device account; see lib/users/schema.ts. */
+  email: string | null;
+  /** Null for a person, who signs in with Google. */
+  username: string | null;
   name: string;
   positionId: string;
   disabledAt: string | null;
@@ -29,7 +32,36 @@ export type User = {
   lastLoginAt: string | null;
 };
 
-type UserRow = User;
+/**
+ * The hash never leaves this module's callers by accident: it's on the row type
+ * the lookups return, not on `User`, so anything handed to a component or a
+ * JSON response can't carry it.
+ */
+type UserRow = User & { passwordHash: string | null };
+
+/** What to show for an account in a list: whichever handle it signs in with. */
+export const loginHandle = (u: Pick<User, "email" | "username">): string =>
+  u.email ?? u.username ?? "—";
+
+/**
+ * A row with the password digest dropped, for everything that isn't the login
+ * route — which is everything but `findByUsername`.
+ *
+ * Names the fields it keeps rather than spreading and deleting the hash. A
+ * column added to the table later is then invisible here until someone chooses
+ * to expose it, instead of arriving in every JSON response by default.
+ */
+const publicUser = (u: UserRow): User => ({
+  id: u.id,
+  email: u.email,
+  username: u.username,
+  name: u.name,
+  positionId: u.positionId,
+  disabledAt: u.disabledAt,
+  tokenVersion: u.tokenVersion,
+  createdAt: u.createdAt,
+  lastLoginAt: u.lastLoginAt,
+});
 
 const toPosition = (r: Record<string, unknown>): Position => ({
   id: String(r.id),
@@ -40,7 +72,9 @@ const toPosition = (r: Record<string, unknown>): Position => ({
 
 const toUser = (r: Record<string, unknown>): UserRow => ({
   id: String(r.id),
-  email: String(r.email),
+  email: r.email == null ? null : String(r.email),
+  username: r.username == null ? null : String(r.username),
+  passwordHash: r.password_hash == null ? null : String(r.password_hash),
   name: String(r.name),
   positionId: String(r.position_id),
   disabledAt: r.disabled_at === null ? null : String(r.disabled_at),
@@ -117,12 +151,17 @@ export async function deletePosition(id: string): Promise<string | null> {
 
 // ── users ────────────────────────────────────────────────────────────────────
 
+/**
+ * Returns `User`, not `UserRow` — the hash is dropped here rather than at the
+ * caller, because this feeds the admin API and a spread of the raw row would
+ * put a password digest in a JSON response.
+ */
 export async function listUsers(): Promise<User[]> {
   await ensureUserSchema();
   const rows = await sql`
     SELECT * FROM app_users ORDER BY disabled_at NULLS FIRST, name
   `;
-  return (rows as Record<string, unknown>[]).map(toUser);
+  return (rows as Record<string, unknown>[]).map((r) => publicUser(toUser(r)));
 }
 
 export async function findByEmail(email: string): Promise<UserRow | null> {
@@ -134,11 +173,33 @@ export async function findByEmail(email: string): Promise<UserRow | null> {
   return r ? toUser(r) : null;
 }
 
-export async function findById(id: string): Promise<UserRow | null> {
+/**
+ * The username lookup, for password sign-in.
+ *
+ * Trimmed but not otherwise normalised: "HRGSTORE" is stored with its capitals
+ * and the index matches case-insensitively, so a manager typing "hrgstore" on a
+ * tablet keyboard gets in. The trim matters more than it looks — a handle read
+ * off a card and pasted usually arrives with a trailing space.
+ */
+export async function findByUsername(username: string): Promise<UserRow | null> {
+  await ensureUserSchema();
+  const rows = await sql`
+    SELECT * FROM app_users WHERE lower(username) = lower(${username.trim()})
+  `;
+  const r = (rows as Record<string, unknown>[])[0];
+  return r ? toUser(r) : null;
+}
+
+/**
+ * Also drops the hash: this one backs `getViewer`, whose result reaches server
+ * components that pass pieces of it to the client. Only the login route has any
+ * business seeing a digest, and it looks accounts up by username.
+ */
+export async function findById(id: string): Promise<User | null> {
   await ensureUserSchema();
   const rows = await sql`SELECT * FROM app_users WHERE id = ${id}`;
   const r = (rows as Record<string, unknown>[])[0];
-  return r ? toUser(r) : null;
+  return r ? publicUser(toUser(r)) : null;
 }
 
 export async function countUsers(): Promise<number> {
@@ -147,18 +208,48 @@ export async function countUsers(): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
+/**
+ * Creates a Google account (email) or a shared device account (username and
+ * password). The CHECK constraint rejects a call that supplies neither, so a
+ * caller that forgets both gets a database error rather than a silently
+ * unusable row.
+ */
 export async function createUser(u: {
-  email: string;
+  email?: string;
+  username?: string;
+  passwordHash?: string;
   name: string;
   positionId: string;
 }): Promise<User> {
   await ensureUserSchema();
   const rows = await sql`
-    INSERT INTO app_users (id, email, name, position_id)
-    VALUES (${randomUUID()}, ${u.email.trim().toLowerCase()}, ${u.name.trim()}, ${u.positionId})
+    INSERT INTO app_users (id, email, username, password_hash, name, position_id)
+    VALUES (
+      ${randomUUID()},
+      ${u.email ? u.email.trim().toLowerCase() : null},
+      ${u.username ? u.username.trim() : null},
+      ${u.passwordHash ?? null},
+      ${u.name.trim()},
+      ${u.positionId}
+    )
     RETURNING *
   `;
-  return toUser((rows as Record<string, unknown>[])[0]);
+  return publicUser(toUser((rows as Record<string, unknown>[])[0]));
+}
+
+/**
+ * Rotating a shared credential. Bumps token_version with it, so changing the
+ * password signs out every device still holding the old one — which is the
+ * entire point of changing it.
+ */
+export async function setPassword(id: string, passwordHash: string): Promise<void> {
+  await ensureUserSchema();
+  await sql`
+    UPDATE app_users
+    SET password_hash = ${passwordHash},
+        token_version = token_version + 1
+    WHERE id = ${id}
+  `;
 }
 
 export async function updateUser(

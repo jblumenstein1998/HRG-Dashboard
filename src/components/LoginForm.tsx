@@ -1,18 +1,30 @@
+import StoreLogin from "@/components/StoreLogin";
+
 /**
  * The sign-in card.
  *
- * Google is the only way in. There is no password to type, forget or reset —
- * see lib/users/google.ts. A server component renders this and passes any
- * message the Google callback came back with.
+ * Google is how every person gets in — there is no password to forget or reset;
+ * see lib/users/google.ts. The one exception is a shared store account on a
+ * back-office machine, which has no person behind it to hold a Google identity.
+ * Both routes are offered plainly, separated by an "or": someone on a store
+ * device is mid-shift and shouldn't have to go looking. Which one a given
+ * person needs is not ambiguous — you either were handed a store credential or
+ * you weren't.
+ *
+ * A server component renders this and passes any message the Google callback
+ * came back with.
  */
 export default function LoginForm({ callbackError }: { callbackError?: string }) {
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-gray-50">
+    // A column, so the tagline can sit at its own width rather than the card's.
+    // At 11pt bold it is wider than max-w-sm and would otherwise wrap with a
+    // single word stranded on the second line.
+    <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-gray-50">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
+        <div className="text-center mb-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/hrglogo.png" alt="HRG" className="h-20 w-auto mx-auto mb-4" />
-          <h1 className="text-2xl font-semibold text-gray-900">HRG Dashboard</h1>
+          <img src="/hrglogo.png" alt="Hudson Restaurant Group" className="h-20 w-auto mx-auto mb-4" />
+          <h1 className="text-2xl font-extrabold text-gray-900 tracking-wide">DASHBOARD</h1>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
@@ -38,12 +50,19 @@ export default function LoginForm({ callbackError }: { callbackError?: string })
           <p className="text-xs text-gray-400 text-center mt-3">
             Use your @hudsonrestaurantgroup.com account.
           </p>
-        </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6 italic">
-          Take care of the little things to accomplish the big things
-        </p>
+          <StoreLogin />
+        </div>
       </div>
+
+      {/* 11pt bold in the HRG maroon from the logo, per Josh. Point units
+          rather than a Tailwind size step: the size was specified in points,
+          and the scale has no step that matches. Outside the card's wrapper so
+          it gets the width it needs to stay on one line; max-w-full still lets
+          it wrap on a phone rather than overflow. */}
+      <p className="text-center text-[11pt] font-bold text-[#5F1D1B] mt-6 italic max-w-full">
+        Take care of the little things to accomplish the big things
+      </p>
     </div>
   );
 }

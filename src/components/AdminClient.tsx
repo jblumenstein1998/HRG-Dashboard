@@ -7,7 +7,9 @@ import { formatSyncStamp } from "@/lib/surveyMeta";
 
 type User = {
   id: string;
-  email: string;
+  /** Null for a shared store account, which signs in by username. */
+  email: string | null;
+  username: string | null;
   name: string;
   positionId: string;
   disabledAt: string | null;
@@ -125,7 +127,9 @@ export default function AdminClient({
               <thead>
                 <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-400">
                   <th className="px-4 py-2 text-left font-semibold">Name</th>
-                  <th className="px-4 py-2 text-left font-semibold">Email</th>
+                  {/* Not "Email": a shared store account signs in with a
+                      username, and the column shows whichever it uses. */}
+                  <th className="px-4 py-2 text-left font-semibold">Signs in as</th>
                   <th className="px-4 py-2 text-left font-semibold">Position</th>
                   <th className="px-4 py-2 text-left font-semibold">Last sign-in</th>
                   <th className="px-4 py-2 text-right font-semibold">Actions</th>
@@ -135,7 +139,12 @@ export default function AdminClient({
                 {users.map((u) => (
                   <tr key={u.id} className="border-b border-gray-100 last:border-b-0">
                     <td className="px-4 py-3 font-medium text-gray-900">{u.name}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.email}</td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {u.email ?? u.username}
+                      {!u.email && (
+                        <span className="ml-2 text-[11px] text-gray-400">shared password</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <select
                         value={u.positionId}
