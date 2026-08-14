@@ -436,6 +436,82 @@ export async function fetchZCases(
   return [...byKey.values()];
 }
 
+// ── case detail ───────────────────────────────────────────────────────────────
+
+/**
+ * What a guest actually said, plus the context around it.
+ *
+ * Deliberately **not** part of ZCase and never written to the database. The
+ * narrative is free text a guest typed about a specific visit — it's what you
+ * need in front of you while the case is open and worth nothing once it's
+ * closed, so it's fetched live, per case, and kept only for as long as the tab
+ * is on screen. Storing it would turn a 40-minute operational need into a
+ * permanent archive of guest complaints.
+ */
+export type ZCaseDetail = {
+  caseKey: string;
+  /**
+   * The guest's own words. SMG returns one entry per free-text question on the
+   * form and nulls the ones they didn't answer, so this holds only the answered
+   * ones — usually exactly one. The label is the question ("Complaint", "Why
+   * Not Satisfied") and carries real meaning, so it's kept.
+   */
+  narrative: { label: string; text: string }[];
+  /** Visit context and survey answers: "Visit Type: Drive Thru" and the like. */
+  details: { label: string; value: string }[];
+};
+
+type InfoItem = { display?: string | null; value?: string | null };
+
+type CaseDetailResponse = {
+  additionalInformation?: InfoItem[] | null;
+  supplementaryInformation?: InfoItem[] | null;
+  mainInformation?: InfoItem[] | null;
+};
+
+/**
+ * One case's detail, as smg360's own case-detail screen loads it.
+ *
+ * `GET /api/caseManagement/{caseKey}` — the raw-data report behind the case
+ * list has no verbatim field at all (all 26 of its measures are ids, dates and
+ * flags), so the text only exists here.
+ *
+ * The response also carries the guest's name, email and phone. They're dropped
+ * on the way out, same as in `toZCase`: nothing PII-shaped leaves this module.
+ */
+export async function fetchCaseDetail(auth: CaseAuth, caseKey: string): Promise<ZCaseDetail> {
+  const res = await fetch(`${API}/api/caseManagement/${encodeURIComponent(caseKey)}`, {
+    headers: apiHeaders(auth),
+  });
+
+  if (!res.ok) {
+    throw new Error(`SMG case detail failed for ${caseKey}: ${res.status}`);
+  }
+
+  const body = (await res.json()) as CaseDetailResponse;
+
+  const narrative: { label: string; text: string }[] = [];
+  for (const item of body.mainInformation ?? []) {
+    const text = str(item?.value);
+    if (text) narrative.push({ label: str(item?.display) ?? "Feedback", text });
+  }
+
+  // The two lists overlap — on an unsolicited case they're identical — so
+  // they're merged on the label rather than rendered twice.
+  const details: { label: string; value: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of [...(body.additionalInformation ?? []), ...(body.supplementaryInformation ?? [])]) {
+    const label = str(item?.display);
+    const value = str(item?.value);
+    // Unanswered questions come back with a null value; they say nothing.
+    if (!label || !value || seen.has(label)) continue;
+    seen.add(label);
+    details.push({ label, value });
+  }
+
+  return { caseKey, narrative, details };
+}
+
 /** Convenience: log in, resolve units, and pull a window in one call. */
 export async function pullZCases(opts: {
   start: Date;

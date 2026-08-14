@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getBerryAuth } from "@/lib/auth";
+import { apiViewer } from "@/lib/users/access";
 import { caseDeepLink, getCaseToken } from "@/lib/smgCases";
 
 // A v5 login plus the SSO handoff, ~3s. Well inside the default, but the SMG
@@ -35,8 +35,8 @@ const CASE_KEY = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[
 export async function GET(_req: NextRequest, ctx: RouteContext<"/api/smg/zcase/[caseKey]">) {
   const { caseKey } = await ctx.params;
 
-  const { token } = await getBerryAuth();
-  if (!token) {
+  const viewer = await apiViewer();
+  if (!viewer?.position.tabs.includes("/survey-data")) {
     return NextResponse.json({ error: "not signed in" }, { status: 401 });
   }
 

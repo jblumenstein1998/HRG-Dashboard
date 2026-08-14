@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBerryAuth } from "@/lib/auth";
+import { apiViewer } from "@/lib/users/access";
 import { resolveRange, type RangeKey } from "@/lib/fiscal";
 import {
   ingestZCases,
@@ -134,8 +134,8 @@ export async function GET(req: NextRequest) {
       // resolves, but a refresh costs a v5 login and a full SMG pull — that
       // stays behind the session cookie. Reads are unaffected, and so is the
       // cron, which calls ingestZCases directly.
-      const { token } = await getBerryAuth();
-      if (!token) throw new Error("not signed in");
+      const viewer = await apiViewer();
+      if (!viewer?.position.tabs.includes("/survey-data")) throw new Error("not signed in");
 
       const now = new Date();
       const from = new Date(now.getTime() - REFRESH_DAYS * 24 * 60 * 60 * 1000);

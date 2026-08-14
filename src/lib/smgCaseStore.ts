@@ -404,6 +404,27 @@ export async function queryOutstanding(
   return (rows as Record<string, unknown>[]).map(toStored);
 }
 
+/**
+ * Narrows a list of case keys to the ones that are open right now.
+ *
+ * Guards the detail route: descriptions are fetched live and never stored, and
+ * they're only meant to be readable while a case still needs working. Doing the
+ * check here rather than trusting the caller means the route can't be turned
+ * into a way to read back the text of every case SMG has ever raised.
+ */
+export async function filterOutstandingKeys(caseKeys: string[]): Promise<string[]> {
+  if (caseKeys.length === 0) return [];
+
+  const rows = (await sql`
+    SELECT case_key
+    FROM smg_zcases
+    WHERE resolved_at IS NULL
+      AND case_key = ANY(${caseKeys}::text[])
+  `) as { case_key: string }[];
+
+  return rows.map((r) => String(r.case_key));
+}
+
 /** When the data was last refreshed — feeds the "updated N min ago" label. */
 export async function lastSyncedAt(): Promise<string | null> {
   const rows = (await sql`SELECT MAX(synced_at) AS at FROM smg_zcases`) as { at: string | null }[];

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { ZCASE_GOALS } from "@/lib/bonus/goals";
 import { formatSyncStamp, prettyUnit, STORE_LABELS, TONE_TEXT, type ScoreTone } from "@/lib/surveyMeta";
@@ -30,6 +30,20 @@ type StoreRollup = {
   outstanding: number;
   escalated: number;
 };
+
+/**
+ * What the guest wrote, fetched live per open case — see
+ * /api/smg/zcases/details. Deliberately absent from ZCaseRow: it isn't stored,
+ * so it can't arrive with the case list.
+ */
+type ZCaseDetail = {
+  caseKey: string;
+  narrative: { label: string; text: string }[];
+  details: { label: string; value: string }[];
+};
+
+/** No "idle": the fetch starts with the open list, so it's always underway. */
+type DetailState = "loading" | "loaded" | "error";
 
 type ZCaseResponse = {
   window: { start: string; end: string; label: string; types: string[] };
@@ -321,6 +335,95 @@ export default function ZCasesSection({
   const totals = data?.totals;
   const outstanding = data?.outstanding ?? [];
 
+  /**
+   * Descriptions for the open cases.
+   *
+   * Fetched in the background as soon as the open list lands, so a row opens
+   * with its text already there. It's a live call to SMG (a login plus one
+   * request per case, ~4s), which is exactly why it can't sit on the click: a
+   * dropdown that spins for four seconds is one you stop opening. The whole
+   * list is fetched in one go because essentially all of that cost is the
+   * login — the second description is free.
+   *
+   * It runs alongside the render rather than blocking it, same as the ZCase
+   * refresh above. A row opened before the text lands shows "Loading…" and
+   * fills in; in practice the list is a handful of cases and it's there first.
+   *
+   * Held only in this component, deliberately. The route doesn't store the text
+   * and neither do we; leaving the tab drops it.
+   */
+  // Off `data` rather than `outstanding`, which is a fresh array every render.
+  const outstandingKeys = useMemo(
+    () => (data?.outstanding ?? []).map((c) => c.caseKey).join(","),
+    [data],
+  );
+
+  /**
+   * Only ever holds a *settled* result, tagged with the open list it belongs
+   * to. "Still loading" is the absence of a matching result rather than a state
+   * of its own — which keeps it honest when the open list changes (the previous
+   * list's descriptions can't leak into the new one) and means nothing has to
+   * be set synchronously when the fetch starts.
+   */
+  const [details, setDetails] = useState<{
+    key: string;
+    map: Record<string, ZCaseDetail>;
+    state: "loaded" | "error";
+  }>({ key: "", map: {}, state: "loaded" });
+
+  const settled = details.key === outstandingKeys;
+  const detailMap = settled ? details.map : {};
+  const detailState: DetailState = settled ? details.state : "loading";
+
+  // One request per open list, however many times this is called. Cleared on
+  // failure so opening a row retries rather than showing a permanent error.
+  const detailsFetchedFor = useRef("");
+
+  const loadDetails = useCallback(() => {
+    if (!outstandingKeys || detailsFetchedFor.current === outstandingKeys) return;
+    detailsFetchedFor.current = outstandingKeys;
+
+    const failed = () => {
+      detailsFetchedFor.current = "";
+      setDetails({ key: outstandingKeys, map: {}, state: "error" });
+    };
+
+    fetch(`/api/smg/zcases/details?keys=${outstandingKeys}`)
+      .then((r) => r.json())
+      .then((j: { details?: Record<string, ZCaseDetail>; error?: string }) => {
+        if (j.error) return failed();
+        setDetails({ key: outstandingKeys, map: j.details ?? {}, state: "loaded" });
+      })
+      .catch(failed);
+  }, [outstandingKeys]);
+
+  /**
+   * Prefetch, on the open list rather than on the click.
+   *
+   * `outstandingKeys` is a string, so this fires once per distinct set of open
+   * cases: the first read, then again only if a refresh actually opens or
+   * closes one. Changing period doesn't retrigger it — the open list ignores
+   * the window.
+   */
+  useEffect(() => {
+    loadDetails();
+  }, [loadDetails]);
+
+  const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
+
+  const toggleCase = (caseKey: string) => {
+    setExpandedCases((prev) => {
+      const next = new Set(prev);
+      if (next.has(caseKey)) next.delete(caseKey);
+      else next.add(caseKey);
+      return next;
+    });
+    // Normally a no-op — the prefetch above has already run. This is the retry
+    // path: after a failed fetch the guard is cleared, so opening a row asks
+    // again.
+    loadDetails();
+  };
+
   return (
     <section className="mt-6">
       {/* Boxed like the cards below it, so the section reads as its own block
@@ -390,32 +493,16 @@ export default function ZCasesSection({
             <div className="text-xs text-gray-500 mt-0.5">Every ZCase has been resolved.</div>
           </div>
         ) : (
-          outstanding.map((c) => {
-            const hrs = c.openHours ?? 0;
-            const stripe = hrs >= 24 ? "bg-red-600" : hrs >= 12 ? "bg-amber-600" : "bg-gray-300";
-            return (
-              <div key={c.caseKey} className="flex items-center gap-3.5 px-4 py-3 border-b border-gray-100 last:border-b-0">
-                <span className={`w-1 h-8 rounded-sm shrink-0 ${stripe}`} />
-                <div className="min-w-0">
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-gray-900">{storeLabel(c.store, c.unitName)}</span>
-                    <CaseLink row={c} />
-                    <TypeTag type={c.type} />
-                    {hrs >= 24 && (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
-                        Past 24 hrs
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5">Opened {shortDate(c.receivedAt)}</div>
-                </div>
-                <div className="ml-auto text-right shrink-0">
-                  <div className="text-[15px] font-semibold tabular-nums text-gray-900">{hrs} hrs</div>
-                  <div className="text-[11px] text-gray-400">open</div>
-                </div>
-              </div>
-            );
-          })
+          outstanding.map((c) => (
+            <OutstandingRow
+              key={c.caseKey}
+              row={c}
+              expanded={expandedCases.has(c.caseKey)}
+              onToggle={() => toggleCase(c.caseKey)}
+              detail={detailMap[c.caseKey] ?? null}
+              state={detailState}
+            />
+          ))
         )}
       </div>
 
@@ -562,10 +649,140 @@ function CaseLink({ row }: { row: ZCaseRow }) {
       href={`/api/smg/zcase/${row.caseKey}`}
       target="_blank"
       rel="noopener noreferrer"
+      // Both places this appears sit inside a row that expands on click; opening
+      // the case in smg360 shouldn't also toggle the row behind it.
+      onClick={(e) => e.stopPropagation()}
       className="text-sm font-medium text-blue-700 hover:underline focus-visible:outline-2 focus-visible:outline-blue-700 rounded-sm"
     >
       ZCase {row.displayKey} <span className="text-[10px] text-gray-400">↗</span>
     </a>
+  );
+}
+
+/**
+ * One open ZCase, expanding to what the guest actually wrote.
+ *
+ * The description is behind a click rather than always on screen because the
+ * list's job is triage — which stores have something waiting, and for how long
+ * — and a wall of paragraphs would bury that. Opening one is how you decide
+ * whether to work it here or follow the link into smg360.
+ */
+function OutstandingRow({
+  row,
+  expanded,
+  onToggle,
+  detail,
+  state,
+}: {
+  row: ZCaseRow;
+  expanded: boolean;
+  onToggle: () => void;
+  detail: ZCaseDetail | null;
+  state: DetailState;
+}) {
+  const hrs = row.openHours ?? 0;
+  const stripe = hrs >= 24 ? "bg-red-600" : hrs >= 12 ? "bg-amber-600" : "bg-gray-300";
+
+  return (
+    <div className="border-b border-gray-100 last:border-b-0">
+      {/* Same pattern as the store rows below: the whole row is the control, so
+          a div with a button role rather than a button wrapping the layout. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        className={`flex items-center gap-3.5 px-4 py-3 cursor-pointer transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-gray-400 ${
+          expanded ? "bg-gray-50" : "hover:bg-gray-50"
+        }`}
+      >
+        <span className={`w-1 h-8 rounded-sm shrink-0 ${stripe}`} />
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-gray-900">{storeLabel(row.store, row.unitName)}</span>
+            <CaseLink row={row} />
+            <TypeTag type={row.type} />
+            {hrs >= 24 && (
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+                Past 24 hrs
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-gray-500 mt-0.5">Opened {shortDate(row.receivedAt)}</div>
+        </div>
+        <div className="ml-auto text-right shrink-0">
+          <div className="text-[15px] font-semibold tabular-nums text-gray-900">{hrs} hrs</div>
+          <div className="text-[11px] text-gray-400">open</div>
+        </div>
+        <span
+          aria-hidden="true"
+          className={`text-[9px] leading-none text-gray-400 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+        >
+          ▼
+        </span>
+      </div>
+      {expanded && (
+        // Indented to line up with the store name, past the stripe.
+        <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3.5 pt-0.5">
+          <CaseDescription detail={detail} state={state} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The body of an expanded row.
+ *
+ * A missing description isn't an error: SMG returns one entry per free-text
+ * question on the form and the guest may have filled in none of them, so
+ * "nothing written" and "we couldn't fetch it" are told apart explicitly.
+ */
+function CaseDescription({ detail, state }: { detail: ZCaseDetail | null; state: DetailState }) {
+  if (!detail) {
+    if (state === "loading") {
+      return <div className="py-2 text-xs text-gray-400 animate-pulse">Loading description…</div>;
+    }
+    if (state === "error") {
+      return (
+        <div className="py-2 text-xs text-amber-700">
+          Couldn&apos;t load the description from SMG. Open the case to read it there.
+        </div>
+      );
+    }
+    return <div className="py-2 text-xs text-gray-500">No description on this case.</div>;
+  }
+
+  return (
+    <div className="py-1">
+      {detail.narrative.length === 0 ? (
+        <div className="py-1 text-xs text-gray-500">The guest didn&apos;t leave a written description.</div>
+      ) : (
+        detail.narrative.map((n) => (
+          <div key={n.label} className="mb-2 last:mb-0">
+            {/* The question is worth keeping — "Complaint" and "Why Not
+                Satisfied" are different prompts and read differently. */}
+            <div className="text-[10px] uppercase tracking-wide text-gray-400">{n.label}</div>
+            <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">{n.text}</p>
+          </div>
+        ))
+      )}
+      {detail.details.length > 0 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 pt-2 border-t border-gray-200">
+          {detail.details.map((d) => (
+            <span key={d.label} className="text-[11.5px] text-gray-500">
+              {d.label}: <span className="font-medium text-gray-700">{d.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
