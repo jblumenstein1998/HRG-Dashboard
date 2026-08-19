@@ -572,24 +572,41 @@ function LinkCard({
  */
 function Favicon({ src, label }: { src: string; label: string }) {
   const [failed, setFailed] = useState(false);
-  const initials = label
-    .replace(/[^A-Za-z0-9 ]/g, "")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
+
+  /**
+   * Catches the failure `onError` alone misses.
+   *
+   * The image is in the server-rendered HTML, so the browser can request it —
+   * and get its 404 — before React hydrates. The error event is then long gone
+   * by the time a handler exists, and an image that has already finished never
+   * fires anything again, so the JSX handler waits forever for an event that
+   * already happened. This runs on commit, when the node is real and its
+   * outcome may already be known: a finished image with no intrinsic width is
+   * one that failed.
+   *
+   * A ref callback rather than an effect because that is what it is — a
+   * reaction to a node appearing, not to a render. It also keeps the state
+   * update out of an effect body, which the lint rule rightly objects to.
+   *
+   * The symptom when this is missing is not subtle: the card keeps a blank
+   * 32px box forever instead of showing its initials, which is exactly what
+   * GPAC and GV Cloud were doing.
+   */
+  const checkOnMount = (el: HTMLImageElement | null) => {
+    if (el?.complete && el.naturalWidth === 0) setFailed(true);
+  };
 
   if (failed) {
     return (
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gray-100 text-[11px] font-semibold text-gray-500">
-        {initials || "?"}
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gray-100 text-[10px] font-semibold uppercase text-gray-500">
+        {initialsFor(label)}
       </span>
     );
   }
 
   return (
     <img
+      ref={checkOnMount}
       src={src}
       alt=""
       width={32}
@@ -599,4 +616,20 @@ function Favicon({ src, label }: { src: string; label: string }) {
       className="h-8 w-8 shrink-0 rounded-md bg-gray-50 object-contain p-1"
     />
   );
+}
+
+/**
+ * The two-letter stand-in for a missing logo.
+ *
+ * Two letters rather than one per word: a single-word name like "GPAC" or
+ * "Jolt" reduced to "G" or "J" is barely an identifier, and these tiles now sit
+ * beside real marks where a lone letter reads as a rendering failure rather
+ * than a deliberate label. Multi-word names still take an initial from each,
+ * so "GV Cloud" is "GC" and not "GV".
+ */
+function initialsFor(label: string): string {
+  const words = label.replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
 }
