@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
@@ -15,7 +15,7 @@ import {
 
 /**
  * The Admin tab: every back-office system, grouped, with a filter — and, for
- * admins, the controls to add and remove cards.
+ * admins, the controls to add, edit and remove cards.
  *
  * The header is the same shape as the other tabs' (logo, tab picker, log out)
  * rather than shared with them — see TabOptions for why only the `<option>`
@@ -27,9 +27,11 @@ import {
  * `router.refresh()` and lets the same server read produce the new list, which
  * is why there is no client-side copy of the directory to keep in step.
  *
- * The filter is client state over the props: at ~50 entries there is nothing to
- * gain from indexing, and a round trip per keystroke would make finding a link
- * slower than scrolling.
+ * Cards deliberately carry no prose: a name, the host, and nothing else. The
+ * descriptions that used to sit under each name, and the subtitle under each
+ * group heading, were what you had to read past to find what you came for.
+ * What replaced them is `search` — invisible aliases the filter matches, so
+ * the information is still there when you need it and absent when you don't.
  */
 export default function AdminLinksClient({
   tabs,
@@ -45,7 +47,13 @@ export default function AdminLinksClient({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
+  // The card and the group it currently sits in. The group travels alongside
+  // rather than on the link, because the server nests links inside groups
+  // instead of repeating the title on all fifty-one rows — so the only place
+  // that knows a card's group is the section rendering it.
+  const [editing, setEditing] = useState<{ link: AdminLink; groupTitle: string } | null>(null);
   const [pending, startTransition] = useTransition();
+  const formRef = useRef<HTMLDivElement>(null);
 
   const total = useMemo(() => groups.reduce((n, g) => n + g.links.length, 0), [groups]);
 
@@ -62,6 +70,27 @@ export default function AdminLinksClient({
   const shown = shownGroups.reduce((n, g) => n + g.links.length, 0);
 
   const refresh = () => startTransition(() => router.refresh());
+
+  const closeForm = () => {
+    setAdding(false);
+    setEditing(null);
+  };
+
+  /**
+   * Editing opens the same panel adding uses, at the top of the list. The
+   * alternative — an editor inside the card — has to fit five fields into a
+   * quarter-width tile, and the group field is the one that most needs room
+   * since recategorising is the reason the button exists at all. The scroll is
+   * what makes that bearable: the panel is above the fold and the card you
+   * clicked may not be, so jumping to the form keeps the two connected.
+   */
+  const openEdit = (link: AdminLink, groupTitle: string) => {
+    setAdding(false);
+    setEditing({ link, groupTitle });
+    requestAnimationFrame(() =>
+      formRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }),
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -139,7 +168,10 @@ export default function AdminLinksClient({
             )}
             {isAdmin && (
               <button
-                onClick={() => setAdding((v) => !v)}
+                onClick={() => {
+                  setEditing(null);
+                  setAdding((v) => !v);
+                }}
                 aria-expanded={adding}
                 className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-300 bg-gray-900 text-white hover:bg-gray-700 transition"
               >
@@ -151,35 +183,44 @@ export default function AdminLinksClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-8">
-        {isAdmin && adding && (
-          <AddLinkForm
-            groupTitles={groupTitles}
-            onDone={() => {
-              setAdding(false);
-              refresh();
-            }}
-            onCancel={() => setAdding(false)}
-          />
-        )}
+        <div ref={formRef}>
+          {isAdmin && (adding || editing) && (
+            <LinkForm
+              // Remounts when the target changes, so switching straight from
+              // one card's editor to another's refills the fields instead of
+              // leaving the first card's values in place.
+              key={editing?.link.id ?? "new"}
+              link={editing?.link ?? null}
+              initialGroup={editing?.groupTitle ?? groupTitles[0] ?? ""}
+              groupTitles={groupTitles}
+              onDone={() => {
+                closeForm();
+                refresh();
+              }}
+              onCancel={closeForm}
+            />
+          )}
+        </div>
 
         {shownGroups.length === 0 ? (
           <p className="text-sm text-gray-500 py-12 text-center">
-            {total === 0
-              ? "No systems yet."
-              : `Nothing matches “${query.trim()}”.`}
+            {total === 0 ? "No systems yet." : `Nothing matches “${query.trim()}”.`}
           </p>
         ) : (
           shownGroups.map((group) => (
             <section key={group.title}>
-              <div className="flex items-baseline gap-3 mb-3">
-                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
-                  {group.title}
-                </h2>
-                {group.blurb && <p className="text-xs text-gray-500">{group.blurb}</p>}
-              </div>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-900">
+                {group.title}
+              </h2>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {group.links.map((link) => (
-                  <LinkCard key={link.id} link={link} canEdit={isAdmin} onRemoved={refresh} />
+                  <LinkCard
+                    key={link.id}
+                    link={link}
+                    canEdit={isAdmin}
+                    isEditing={editing?.link.id === link.id}
+                    onEdit={() => openEdit(link, group.title)}
+                  />
                 ))}
               </div>
             </section>
@@ -196,49 +237,74 @@ export default function AdminLinksClient({
 }
 
 /**
- * The add-a-card form.
+ * The add / edit panel. One component for both, because the fields and the
+ * validation are identical and the only real difference is which verb the
+ * button uses and whether Remove is offered.
  *
  * Group is a free-text input backed by a `<datalist>` of the groups already in
  * use, rather than a `<select>`. A select would make inventing a group
- * impossible and a text box alone would make typos silently create near-
- * duplicate headings; the datalist is the one control that offers the existing
- * answers without refusing a new one.
+ * impossible and a plain text box would let a typo quietly create a near-
+ * duplicate heading; the datalist is the one control that offers the existing
+ * answers without refusing a new one. It is also what makes recategorising
+ * work: moving a card is picking a different group here.
  *
- * Validation shown here is a courtesy — the button greys out on an unusable
- * URL so nobody fills in four fields to be told no. The server validates
+ * The validation shown is a courtesy — the button greys out on an unusable URL
+ * so nobody fills in four fields to be told no. The server validates
  * independently, and its answer is what gets rendered on failure.
  */
-function AddLinkForm({
+function LinkForm({
+  link,
+  initialGroup,
   groupTitles,
   onDone,
   onCancel,
 }: {
+  link: AdminLink | null;
+  initialGroup: string;
   groupTitles: string[];
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const [groupTitle, setGroupTitle] = useState(groupTitles[0] ?? "");
-  const [label, setLabel] = useState("");
-  const [url, setUrl] = useState("");
-  const [note, setNote] = useState("");
-  const [search, setSearch] = useState("");
+  const editing = link !== null;
+  const [groupTitle, setGroupTitle] = useState(initialGroup);
+  const [label, setLabel] = useState(link?.label ?? "");
+  const [url, setUrl] = useState(link?.url ?? "");
+  const [search, setSearch] = useState(link?.search ?? "");
   const [busy, setBusy] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const ready = groupTitle.trim() !== "" && label.trim() !== "" && isSafeUrl(url);
 
-  async function submit() {
+  async function save() {
     setBusy(true);
     setError(null);
     const res = await fetch("/api/admin-links", {
-      method: "POST",
+      method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ groupTitle, label, url, note, search }),
+      body: JSON.stringify({ id: link?.id, groupTitle, label, url, search }),
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
-    setBusy(false);
     if (!res.ok) {
-      setError(data.error ?? "Couldn't add that card.");
+      setError(data.error ?? "Couldn't save that card.");
+      setBusy(false);
+      return;
+    }
+    onDone();
+  }
+
+  async function remove() {
+    if (!link) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/admin-links?id=${encodeURIComponent(link.id)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(data.error ?? "Couldn't remove that card.");
+      setBusy(false);
+      setConfirmingRemove(false);
       return;
     }
     onDone();
@@ -246,9 +312,11 @@ function AddLinkForm({
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-      <h2 className="text-sm font-semibold text-gray-900 mb-3">Add a link</h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Group">
+      <h2 className="text-sm font-semibold text-gray-900 mb-3">
+        {editing ? `Edit ${link.label}` : "Add a link"}
+      </h2>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Group" hint="Pick one, or type a new name to move it there.">
           <input
             value={groupTitle}
             onChange={(e) => setGroupTitle(e.target.value)}
@@ -279,15 +347,7 @@ function AddLinkForm({
             className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
           />
         </Field>
-        <Field label="Description" hint="One line, shown under the name.">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="What it's for"
-            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-          />
-        </Field>
-        <Field label="Also search for" hint="Other names people might type.">
+        <Field label="Also search for" hint="Other names people might type. Never shown.">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -299,22 +359,58 @@ function AddLinkForm({
 
       {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
 
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <button
-          onClick={submit}
+          onClick={save}
           disabled={!ready || busy}
           className="text-xs px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
         >
-          {busy ? "Adding…" : "Add link"}
+          {busy ? "Saving…" : editing ? "Save changes" : "Add link"}
         </button>
         <button
           onClick={onCancel}
+          disabled={busy}
           className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
         >
           Cancel
         </button>
         {!ready && url.trim() !== "" && !isSafeUrl(url) && (
           <span className="text-xs text-gray-400">Needs a full http:// or https:// address.</span>
+        )}
+
+        {/* Removal lives at the far end of the row, behind a second click.
+            It is the one action here that can't be undone, and the row is
+            otherwise all safe verbs. */}
+        {editing && (
+          <span className="ml-auto flex items-center gap-2">
+            {confirmingRemove ? (
+              <>
+                <span className="text-xs text-gray-600">Remove this card?</span>
+                <button
+                  onClick={remove}
+                  disabled={busy}
+                  className="text-xs px-2.5 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300 transition"
+                >
+                  {busy ? "Removing…" : "Remove"}
+                </button>
+                <button
+                  onClick={() => setConfirmingRemove(false)}
+                  disabled={busy}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
+                >
+                  Keep
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmingRemove(true)}
+                disabled={busy}
+                className="text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition"
+              >
+                Remove
+              </button>
+            )}
+          </span>
         )}
       </div>
     </section>
@@ -340,53 +436,30 @@ function Field({
 }
 
 /**
- * One system.
+ * One system: its mark, its name, the host it points at.
  *
  * `target="_blank"` on purpose: these are sessions people keep open all day,
  * and replacing the dashboard with a vendor portal would cost them whatever
  * they had loaded on another tab. `rel="noopener noreferrer"` goes with it, so
  * the opened page gets neither a handle back on this window nor the referrer.
  *
- * The remove control is a sibling of the anchor rather than a child: a button
+ * The edit control is a sibling of the anchor rather than a child: a button
  * inside an `<a>` is invalid HTML, and browsers resolve it by firing the
  * navigation too — which would open the vendor's site every time someone tried
- * to delete the card.
- *
- * Removal confirms in place instead of through `confirm()`. A native dialog
- * blocks the page, and this is a destructive action a mis-aimed click can
- * reach, so it's worth the second click.
+ * to edit the card.
  */
 function LinkCard({
   link,
   canEdit,
-  onRemoved,
+  isEditing,
+  onEdit,
 }: {
   link: AdminLink;
   canEdit: boolean;
-  onRemoved: () => void;
+  isEditing: boolean;
+  onEdit: () => void;
 }) {
   const host = linkHost(link.url);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function remove() {
-    setBusy(true);
-    setError(null);
-    const res = await fetch(`/api/admin-links?id=${encodeURIComponent(link.id)}`, {
-      method: "DELETE",
-    });
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(data.error ?? "Couldn't remove that card.");
-      setBusy(false);
-      setConfirming(false);
-      return;
-    }
-    // Left busy on purpose: the card stays disabled until the refresh replaces
-    // it, rather than flicking back to normal for the frame before it vanishes.
-    onRemoved();
-  }
 
   return (
     <div className="group relative">
@@ -394,14 +467,16 @@ function LinkCard({
         href={link.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:border-gray-300 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300"
+        className={`flex items-center gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 ${
+          isEditing ? "border-gray-900" : "border-gray-200 hover:border-gray-300"
+        }`}
       >
         <Favicon domain={faviconDomain(link.url)} label={link.label} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm font-semibold text-gray-900 truncate">{link.label}</span>
+            <span className="truncate text-sm font-semibold text-gray-900">{link.label}</span>
             <svg
-              className="w-3 h-3 text-gray-300 shrink-0 transition group-hover:text-gray-500"
+              className="h-3 w-3 shrink-0 text-gray-300 transition group-hover:text-gray-500"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -410,53 +485,23 @@ function LinkCard({
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 5h5v5M19 5l-8 8M17 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V9a2 2 0 012-2h4" />
             </svg>
           </div>
-          {link.note && <p className="mt-0.5 text-xs leading-snug text-gray-500">{link.note}</p>}
-          <p className="mt-1 text-[11px] text-gray-400 truncate">{host}</p>
+          <p className="mt-0.5 truncate text-[11px] text-gray-400">{host}</p>
         </div>
       </a>
 
-      {canEdit && !confirming && (
+      {canEdit && (
         <button
-          onClick={() => setConfirming(true)}
-          aria-label={`Remove ${link.label}`}
-          title={`Remove ${link.label}`}
-          className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-gray-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 group-hover:opacity-100"
+          onClick={onEdit}
+          aria-label={`Edit ${link.label}`}
+          title={`Edit ${link.label}`}
+          className={`absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-gray-300 transition hover:bg-gray-100 hover:text-gray-700 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-gray-300 group-hover:opacity-100 ${
+            isEditing ? "opacity-100 text-gray-700" : "opacity-0"
+          }`}
         >
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.86 4.49a2.1 2.1 0 112.97 2.97L8.5 18.79l-4 1 1-4 11.36-11.3z" />
           </svg>
         </button>
-      )}
-
-      {canEdit && confirming && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-red-200 bg-white/95 px-3 text-center">
-          <p className="text-xs text-gray-700">
-            {error ?? (
-              <>
-                Remove <span className="font-semibold">{link.label}</span>?
-              </>
-            )}
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={remove}
-              disabled={busy}
-              className="text-xs px-2.5 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300 transition"
-            >
-              {busy ? "Removing…" : "Remove"}
-            </button>
-            <button
-              onClick={() => {
-                setConfirming(false);
-                setError(null);
-              }}
-              disabled={busy}
-              className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -464,7 +509,8 @@ function LinkCard({
 
 /**
  * The vendor's own favicon, which is how people recognise these portals — far
- * faster to scan than fifty identical tiles.
+ * faster to scan than fifty identical tiles, and the only thing distinguishing
+ * one card from another now that the descriptions are gone.
  *
  * Fetched from Google's favicon service rather than committed to /public: at
  * this count that would be fifty binaries to keep in sync with rebrands, for a

@@ -21,7 +21,6 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import {
   SEED_LINK_GROUPS,
-  groupBlurb,
   groupRank,
   isSafeUrl,
   type AdminLink,
@@ -67,9 +66,15 @@ async function createAdminLinkSchema(): Promise<void> {
       group_title TEXT NOT NULL,
       label       TEXT NOT NULL,
       url         TEXT NOT NULL,
+      -- Retired: cards used to show a one-line description and no longer do.
+      -- Kept rather than dropped because dropping is one-way on a live
+      -- database and reclaims nothing, and the DEFAULT means no write has to
+      -- mention it. No read mentions it either -- see toLink. If it is still
+      -- here and still unread in a year, that is the time to drop it.
       note        TEXT NOT NULL DEFAULT '',
-      -- Aliases the filter should match beyond the label and note. Free text,
-      -- space separated; empty when whoever added the card supplied none.
+      -- Aliases the filter should match beyond the label. Free text, space
+      -- separated; empty when whoever added the card supplied none. This is
+      -- the only way a card is findable by anything but its own name.
       search      TEXT NOT NULL DEFAULT '',
       -- Position within the group. Seeded rows keep the catalog's order; a card
       -- added later sorts after them, which is also the order it was added in.
@@ -88,13 +93,12 @@ async function createAdminLinkSchema(): Promise<void> {
   for (const group of SEED_LINK_GROUPS) {
     for (const [i, link] of group.links.entries()) {
       await sql`
-        INSERT INTO app_admin_links (id, group_title, label, url, note, search, sort_order)
+        INSERT INTO app_admin_links (id, group_title, label, url, search, sort_order)
         VALUES (
           ${seedId(group.title, link.label)},
           ${group.title},
           ${link.label},
           ${link.url},
-          ${link.note},
           ${link.search ?? ""},
           ${i}
         )
@@ -121,7 +125,6 @@ const toLink = (r: Record<string, unknown>): AdminLink => ({
   id: String(r.id),
   label: String(r.label),
   url: String(r.url),
-  note: String(r.note ?? ""),
   search: String(r.search ?? ""),
 });
 
@@ -149,7 +152,7 @@ export async function listAdminLinkGroups(): Promise<AdminLinkGroup[]> {
 
   return [...byTitle.entries()]
     .sort(([a], [b]) => groupRank(a) - groupRank(b) || a.localeCompare(b))
-    .map(([title, links]) => ({ title, blurb: groupBlurb(title), links }));
+    .map(([title, links]) => ({ title, links }));
 }
 
 /** The group names already in use, for the add form's suggestions. */
@@ -163,16 +166,17 @@ export async function listAdminLinkGroupTitles(): Promise<string[]> {
     .sort((a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b));
 }
 
-export type NewAdminLink = {
+export type AdminLinkInput = {
   groupTitle: string;
   label: string;
   url: string;
-  note?: string;
   search?: string;
 };
 
+type CleanInput = { groupTitle: string; label: string; url: string; search: string };
+
 /**
- * Adds a card, or returns why it can't.
+ * Trims and checks the fields both writes share.
  *
  * Returns the problem as a string rather than throwing, matching
  * `deletePosition` in lib/users/store.ts: the caller is an API route that has
@@ -181,48 +185,101 @@ export type NewAdminLink = {
  *
  * The URL check is not cosmetic — see `isSafeUrl`. It runs here as well as in
  * the browser because the browser's copy is a convenience and this one is the
- * control.
+ * control, and it has to run on the *edit* path too: a card that was safe when
+ * it was added is not thereby safe after someone changes its address.
  */
-export async function createAdminLink(
-  input: NewAdminLink,
-): Promise<{ link: AdminLink } | { error: string }> {
-  await ensureAdminLinkSchema();
-
+function clean(input: AdminLinkInput): { ok: CleanInput } | { error: string } {
   const groupTitle = input.groupTitle.trim();
   const label = input.label.trim();
   const url = input.url.trim();
-  const note = (input.note ?? "").trim();
   const search = (input.search ?? "").trim();
 
   if (!groupTitle) return { error: "Pick or name a group." };
   if (!label) return { error: "Give the card a name." };
-  if (!isSafeUrl(url)) return { error: "Enter a full http:// or https:// address." };
   if (label.length > 60) return { error: "Name is too long (60 characters max)." };
-  if (note.length > 200) return { error: "Description is too long (200 characters max)." };
+  if (!isSafeUrl(url)) return { error: "Enter a full http:// or https:// address." };
+  if (groupTitle.length > 60) return { error: "Group name is too long (60 characters max)." };
 
-  // Appended to its group rather than inserted anywhere clever: the person
-  // adding it hasn't been asked where it goes, and the bottom is the only
-  // answer that doesn't silently reorder what's already there.
-  const [tail] = (await sql`
-    SELECT COALESCE(MAX(sort_order), -1) AS last
-    FROM app_admin_links WHERE group_title = ${groupTitle}
-  `) as { last: number }[];
+  return { ok: { groupTitle, label, url, search } };
+}
+
+/** Adds a card, or returns why it can't. */
+export async function createAdminLink(
+  input: AdminLinkInput,
+): Promise<{ link: AdminLink } | { error: string }> {
+  await ensureAdminLinkSchema();
+
+  const checked = clean(input);
+  if ("error" in checked) return checked;
+  const { groupTitle, label, url, search } = checked.ok;
 
   const rows = (await sql`
-    INSERT INTO app_admin_links (id, group_title, label, url, note, search, sort_order)
+    INSERT INTO app_admin_links (id, group_title, label, url, search, sort_order)
     VALUES (
       ${randomUUID()},
       ${groupTitle},
       ${label},
       ${url},
-      ${note},
       ${search},
-      ${Number(tail?.last ?? -1) + 1}
+      ${await tailOf(groupTitle)}
     )
     RETURNING *
   `) as Record<string, unknown>[];
 
   return { link: toLink(rows[0]) };
+}
+
+/**
+ * Edits a card — including moving it to another group, which is the reason
+ * this exists rather than remove-and-re-add.
+ *
+ * Recategorising has to renumber, not just relabel: `sort_order` is only
+ * meaningful within a group, so a card keeping its old number would land at an
+ * arbitrary point in the new group — quite possibly interleaved with cards it
+ * has nothing to do with. Moving one therefore appends it to the end of its
+ * destination, the same place a newly added card goes, which is the only
+ * position that doesn't silently reorder what was already there. A card staying
+ * put keeps its number, so editing a name never makes a card jump.
+ */
+export async function updateAdminLink(
+  id: string,
+  input: AdminLinkInput,
+): Promise<{ link: AdminLink } | { error: string }> {
+  await ensureAdminLinkSchema();
+
+  const checked = clean(input);
+  if ("error" in checked) return checked;
+  const { groupTitle, label, url, search } = checked.ok;
+
+  const [current] = (await sql`
+    SELECT group_title, sort_order FROM app_admin_links WHERE id = ${id}
+  `) as { group_title: string; sort_order: number }[];
+  if (!current) return { error: "That card no longer exists." };
+
+  const moved = current.group_title !== groupTitle;
+  const sortOrder = moved ? await tailOf(groupTitle) : current.sort_order;
+
+  const rows = (await sql`
+    UPDATE app_admin_links
+    SET group_title = ${groupTitle},
+        label       = ${label},
+        url         = ${url},
+        search      = ${search},
+        sort_order  = ${sortOrder}
+    WHERE id = ${id}
+    RETURNING *
+  `) as Record<string, unknown>[];
+
+  return { link: toLink(rows[0]) };
+}
+
+/** The next free position at the bottom of a group. */
+async function tailOf(groupTitle: string): Promise<number> {
+  const [row] = (await sql`
+    SELECT COALESCE(MAX(sort_order), -1) AS last
+    FROM app_admin_links WHERE group_title = ${groupTitle}
+  `) as { last: number }[];
+  return Number(row?.last ?? -1) + 1;
 }
 
 /** Removes a card. Returns false when the id matched nothing. */
