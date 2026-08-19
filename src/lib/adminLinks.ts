@@ -358,27 +358,56 @@ export function linkHost(url: string): string {
   }
 }
 
-/**
- * The domain to ask for a favicon, which is not the same as the host to show.
- *
- * Nearly every link here is a tenant subdomain — `zaxbys.franly.com`,
- * `hudsonrestaurantgrou.restaurant365.com`, `signon.us.storedvalue.com` — and
- * the favicon service has only crawled the vendor's public root, so asking for
- * the subdomain returns its generic globe placeholder. Asking for the last two
- * labels gets the vendor's real mark, which is the whole point of showing an
- * icon: recognising the portal without reading.
- *
- * Two labels is deliberately naive. It is wrong for a multi-part public suffix
- * (`example.co.uk` would become `co.uk`) and for a platform host that fronts
- * many tenants (`…my.site.com` becomes Salesforce's `site.com`), and it can't
- * be right for both without shipping a public-suffix list for a decoration.
- * The cost of being wrong is one wrong-looking icon; the card still says what
- * it is, and `linkHost` still shows the true host underneath.
- */
-export function faviconDomain(url: string): string {
-  const host = linkHost(url);
+/** The registrable domain: the last two labels of a host. */
+function registrableDomain(host: string): string {
   const labels = host.split(".");
   return labels.length > 2 ? labels.slice(-2).join(".") : host;
+}
+
+/**
+ * Portals whose host tells you nothing about whose logo belongs on the card.
+ *
+ * Deliberately tiny, and only for the case no rule can solve: a vendor billing
+ * through someone else's system. NuCO2's bill pay runs on Billerq, and no
+ * amount of host-munging gets from `billeriq.com` to NuCO2's mark because the
+ * relationship isn't in the name — it's in the URL's own `/ebpp/NuCO2/` path.
+ *
+ * The bar for an entry is that the mapping is *evidenced*, not guessed. A
+ * `gvaicloud.com -> geovision.com` guess lived here briefly and pulled what
+ * looked like an unrelated WordPress site's icon onto the GV Cloud card, which
+ * is worse than no icon: initials say "I don't know", a wrong logo says
+ * something false. When in doubt, leave it out and let it fall back.
+ */
+const BRAND_DOMAINS: Record<string, string> = {
+  "billeriq.com": "nuco2.com",
+};
+
+/**
+ * The domains worth asking about for a host, most specific first.
+ *
+ * Full host before registrable domain, because plenty of these portals publish
+ * their icon on the exact subdomain — `admin24.brinkpos.net`,
+ * `trimark.pincat.com`, `secure.paymentech.com` all have one, and an earlier
+ * version that shortened every host to two labels threw away the very thing
+ * that had the icon. The root is worth trying second because the opposite case
+ * is just as common: a tenant subdomain like `zaxbys.franly.com` whose icon
+ * exists only at `franly.com`.
+ *
+ * Two labels for the root is deliberately naive — wrong for a multi-part
+ * public suffix, and wrong for a platform host that fronts many tenants
+ * (`…my.site.com` becomes Salesforce's `site.com`). Shipping a public-suffix
+ * list to decorate a link would be a poor trade; the cost of being wrong is
+ * one odd-looking icon on a card that still says what it is.
+ */
+export function iconDomains(host: string): string[] {
+  if (!host) return [];
+  const brand = BRAND_DOMAINS[host];
+  return [...new Set([brand, host, registrableDomain(host)].filter(Boolean))] as string[];
+}
+
+/** Where the page asks for a card's icon. See app/api/icon/route.ts. */
+export function iconUrl(url: string): string {
+  return `/api/icon?host=${encodeURIComponent(linkHost(url))}`;
 }
 
 /**

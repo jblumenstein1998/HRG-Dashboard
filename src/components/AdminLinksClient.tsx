@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import {
-  faviconDomain,
+  iconUrl,
   isSafeUrl,
   linkHost,
   matchesQuery,
@@ -27,11 +27,11 @@ import {
  * `router.refresh()` and lets the same server read produce the new list, which
  * is why there is no client-side copy of the directory to keep in step.
  *
- * Cards deliberately carry no prose: a name, the host, and nothing else. The
- * descriptions that used to sit under each name, and the subtitle under each
- * group heading, were what you had to read past to find what you came for.
- * What replaced them is `search` — invisible aliases the filter matches, so
- * the information is still there when you need it and absent when you don't.
+ * Cards deliberately carry no prose: a mark, a name, the host, nothing else.
+ * The descriptions that used to sit under each name and the subtitle under
+ * each group heading were what you had to read past to find what you came for.
+ * With the words gone the logo does most of the recognising, which is why
+ * Favicon works as hard as it does to find a real one.
  */
 export default function AdminLinksClient({
   tabs,
@@ -514,7 +514,7 @@ function LinkCard({
           isEditing ? "border-gray-900" : "border-gray-200 hover:border-gray-300"
         }`}
       >
-        <Favicon domain={faviconDomain(link.url)} label={link.label} />
+        <Favicon src={iconUrl(link.url)} label={link.label} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-sm font-semibold text-gray-900">{link.label}</span>
@@ -555,14 +555,22 @@ function LinkCard({
  * faster to scan than fifty identical tiles, and the only thing distinguishing
  * one card from another now that the descriptions are gone.
  *
- * Fetched from Google's favicon service rather than committed to /public: at
- * this count that would be fifty binaries to keep in sync with rebrands, for a
- * page that is already only useful with a network. When it fails — a domain
- * with no icon, or the service blocked — `onError` swaps in the label's
- * initials so the card still reads as itself instead of showing a broken-image
- * glyph.
+ * Fetched rather than committed to /public: at this count that would be fifty
+ * binaries to keep in sync with rebrands, for a page that is already only
+ * useful with a network.
+ *
+ * The src points at our own /api/icon, not at a favicon service directly. The
+ * choice of service has to be made where the bytes can be inspected — both
+ * public services answer an unknown domain with a placeholder image sent under
+ * a 404, and browsers render a 404's body when it decodes, so nothing here
+ * could tell a logo from an apology. See app/api/icon/route.ts.
+ *
+ * That leaves this component with one job: the route 404s with an empty body
+ * when no service has a real icon, which does fire `error`, and the card falls
+ * back to the label's initials — which reads as the card rather than as a
+ * broken image.
  */
-function Favicon({ domain, label }: { domain: string; label: string }) {
+function Favicon({ src, label }: { src: string; label: string }) {
   const [failed, setFailed] = useState(false);
   const initials = label
     .replace(/[^A-Za-z0-9 ]/g, "")
@@ -572,7 +580,7 @@ function Favicon({ domain, label }: { domain: string; label: string }) {
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 
-  if (!domain || failed) {
+  if (failed) {
     return (
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gray-100 text-[11px] font-semibold text-gray-500">
         {initials || "?"}
@@ -582,7 +590,7 @@ function Favicon({ domain, label }: { domain: string; label: string }) {
 
   return (
     <img
-      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`}
+      src={src}
       alt=""
       width={32}
       height={32}
