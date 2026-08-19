@@ -241,12 +241,21 @@ export default function AdminLinksClient({
  * validation are identical and the only real difference is which verb the
  * button uses and whether Remove is offered.
  *
- * Group is a free-text input backed by a `<datalist>` of the groups already in
- * use, rather than a `<select>`. A select would make inventing a group
- * impossible and a plain text box would let a typo quietly create a near-
- * duplicate heading; the datalist is the one control that offers the existing
- * answers without refusing a new one. It is also what makes recategorising
- * work: moving a card is picking a different group here.
+ * Group is a `<select>` of the groups in use plus one "New group…" entry.
+ *
+ * It was an `<input list=…>` over a `<datalist>`, which reads well and is
+ * wrong: browsers treat a datalist as autocomplete, so they filter the
+ * suggestions against whatever the input already contains. That is invisible
+ * while adding — the box is empty, so every option shows — and useless while
+ * editing, where the box is prefilled with the card's current group and the
+ * only suggestion offered is therefore the group it is already in. Which is
+ * precisely the list you don't need: recategorising means choosing one of the
+ * others, and none of the others were reachable.
+ *
+ * A select always shows every option, at the cost of not accepting a name that
+ * isn't in it — hence the explicit "New group…" entry, which swaps in a text
+ * box. Inventing a group is now a deliberate act rather than a side effect of
+ * mistyping an existing one, which is the better default anyway.
  *
  * The validation shown is a courtesy — the button greys out on an unusable URL
  * so nobody fills in four fields to be told no. The server validates
@@ -266,7 +275,17 @@ function LinkForm({
   onCancel: () => void;
 }) {
   const editing = link !== null;
-  const [groupTitle, setGroupTitle] = useState(initialGroup);
+
+  // A card always starts in a group that exists, so "pick" is the normal case;
+  // "new" is only reachable by choosing it. The initial split still handles an
+  // initialGroup that isn't in the list, which is what a card whose group was
+  // emptied by a concurrent edit would look like.
+  const known = groupTitles.includes(initialGroup);
+  const [choosingNew, setChoosingNew] = useState(initialGroup !== "" && !known);
+  const [picked, setPicked] = useState(known ? initialGroup : groupTitles[0] ?? "");
+  const [newGroup, setNewGroup] = useState(known ? "" : initialGroup);
+  const groupTitle = choosingNew ? newGroup : picked;
+
   const [label, setLabel] = useState(link?.label ?? "");
   const [url, setUrl] = useState(link?.url ?? "");
   const [search, setSearch] = useState(link?.search ?? "");
@@ -316,19 +335,36 @@ function LinkForm({
         {editing ? `Edit ${link.label}` : "Add a link"}
       </h2>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Group" hint="Pick one, or type a new name to move it there.">
-          <input
-            value={groupTitle}
-            onChange={(e) => setGroupTitle(e.target.value)}
-            list="admin-link-groups"
-            placeholder="Pick one or type a new name"
+        <Field label="Group" hint="Pick where it belongs, or start a new group.">
+          <select
+            value={choosingNew ? NEW_GROUP : picked}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === NEW_GROUP) {
+                setChoosingNew(true);
+              } else {
+                setChoosingNew(false);
+                setPicked(v);
+              }
+            }}
             className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-          />
-          <datalist id="admin-link-groups">
+          >
             {groupTitles.map((t) => (
-              <option key={t} value={t} />
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
-          </datalist>
+            <option value={NEW_GROUP}>New group…</option>
+          </select>
+          {choosingNew && (
+            <input
+              value={newGroup}
+              onChange={(e) => setNewGroup(e.target.value)}
+              autoFocus
+              placeholder="Name the new group"
+              className="mt-2 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+            />
+          )}
         </Field>
         <Field label="Name">
           <input
@@ -416,6 +452,16 @@ function LinkForm({
     </section>
   );
 }
+
+/**
+ * The select's stand-in for "not one of these".
+ *
+ * The empty string, because the store rejects an empty group name outright —
+ * so this is the one value that provably cannot also be a real title. A
+ * plausible-looking sentinel ("__new__", "new-group") only looks safe until
+ * someone names a group that.
+ */
+const NEW_GROUP = "";
 
 function Field({
   label,
