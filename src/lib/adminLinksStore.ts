@@ -66,15 +66,17 @@ async function createAdminLinkSchema(): Promise<void> {
       group_title TEXT NOT NULL,
       label       TEXT NOT NULL,
       url         TEXT NOT NULL,
-      -- Retired: cards used to show a one-line description and no longer do.
-      -- Kept rather than dropped because dropping is one-way on a live
-      -- database and reclaims nothing, and the DEFAULT means no write has to
-      -- mention it. No read mentions it either -- see toLink. If it is still
-      -- here and still unread in a year, that is the time to drop it.
+      -- Both retired. note was a one-line description shown under the name;
+      -- search was hidden aliases the filter matched. Neither is written or
+      -- read any more -- see toLink and clean() -- and a card is now just a
+      -- name and an address. (No backticks in here: this is a JS template
+      -- literal, and one would end the string mid-statement.)
+      --
+      -- Kept rather than dropped because dropping a column is one-way on a
+      -- live database and reclaims nothing here, and the DEFAULTs mean no
+      -- write has to mention them. If they are still unread in a year, that is
+      -- the time to drop them.
       note        TEXT NOT NULL DEFAULT '',
-      -- Aliases the filter should match beyond the label. Free text, space
-      -- separated; empty when whoever added the card supplied none. This is
-      -- the only way a card is findable by anything but its own name.
       search      TEXT NOT NULL DEFAULT '',
       -- Position within the group. Seeded rows keep the catalog's order; a card
       -- added later sorts after them, which is also the order it was added in.
@@ -93,13 +95,12 @@ async function createAdminLinkSchema(): Promise<void> {
   for (const group of SEED_LINK_GROUPS) {
     for (const [i, link] of group.links.entries()) {
       await sql`
-        INSERT INTO app_admin_links (id, group_title, label, url, search, sort_order)
+        INSERT INTO app_admin_links (id, group_title, label, url, sort_order)
         VALUES (
           ${seedId(group.title, link.label)},
           ${group.title},
           ${link.label},
           ${link.url},
-          ${link.search ?? ""},
           ${i}
         )
         ON CONFLICT (id) DO NOTHING
@@ -125,7 +126,6 @@ const toLink = (r: Record<string, unknown>): AdminLink => ({
   id: String(r.id),
   label: String(r.label),
   url: String(r.url),
-  search: String(r.search ?? ""),
 });
 
 /**
@@ -170,10 +170,9 @@ export type AdminLinkInput = {
   groupTitle: string;
   label: string;
   url: string;
-  search?: string;
 };
 
-type CleanInput = { groupTitle: string; label: string; url: string; search: string };
+type CleanInput = AdminLinkInput;
 
 /**
  * Trims and checks the fields both writes share.
@@ -192,7 +191,6 @@ function clean(input: AdminLinkInput): { ok: CleanInput } | { error: string } {
   const groupTitle = input.groupTitle.trim();
   const label = input.label.trim();
   const url = input.url.trim();
-  const search = (input.search ?? "").trim();
 
   if (!groupTitle) return { error: "Pick or name a group." };
   if (!label) return { error: "Give the card a name." };
@@ -200,7 +198,7 @@ function clean(input: AdminLinkInput): { ok: CleanInput } | { error: string } {
   if (!isSafeUrl(url)) return { error: "Enter a full http:// or https:// address." };
   if (groupTitle.length > 60) return { error: "Group name is too long (60 characters max)." };
 
-  return { ok: { groupTitle, label, url, search } };
+  return { ok: { groupTitle, label, url } };
 }
 
 /** Adds a card, or returns why it can't. */
@@ -211,16 +209,15 @@ export async function createAdminLink(
 
   const checked = clean(input);
   if ("error" in checked) return checked;
-  const { groupTitle, label, url, search } = checked.ok;
+  const { groupTitle, label, url } = checked.ok;
 
   const rows = (await sql`
-    INSERT INTO app_admin_links (id, group_title, label, url, search, sort_order)
+    INSERT INTO app_admin_links (id, group_title, label, url, sort_order)
     VALUES (
       ${randomUUID()},
       ${groupTitle},
       ${label},
       ${url},
-      ${search},
       ${await tailOf(groupTitle)}
     )
     RETURNING *
@@ -249,7 +246,7 @@ export async function updateAdminLink(
 
   const checked = clean(input);
   if ("error" in checked) return checked;
-  const { groupTitle, label, url, search } = checked.ok;
+  const { groupTitle, label, url } = checked.ok;
 
   const [current] = (await sql`
     SELECT group_title, sort_order FROM app_admin_links WHERE id = ${id}
@@ -264,7 +261,6 @@ export async function updateAdminLink(
     SET group_title = ${groupTitle},
         label       = ${label},
         url         = ${url},
-        search      = ${search},
         sort_order  = ${sortOrder}
     WHERE id = ${id}
     RETURNING *

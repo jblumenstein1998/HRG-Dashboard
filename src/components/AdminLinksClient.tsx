@@ -146,11 +146,17 @@ export default function AdminLinksClient({
               >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
               </svg>
+              {/* The placeholder names examples that still work. It used to
+                  read "payroll, food cost, insurance", which was true while
+                  cards carried hidden aliases and became a lie when they
+                  stopped: "food cost" now matches nothing, and a placeholder
+                  suggesting a search that returns nothing reads as a broken
+                  filter rather than an empty result. */}
               <input
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search systems — payroll, food cost, insurance…"
+                placeholder="Search by name — ADP, Olo, Steritech…"
                 aria-label="Filter systems"
                 className="w-full text-sm border border-gray-200 rounded-lg pl-8 pr-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
               />
@@ -288,7 +294,6 @@ function LinkForm({
 
   const [label, setLabel] = useState(link?.label ?? "");
   const [url, setUrl] = useState(link?.url ?? "");
-  const [search, setSearch] = useState(link?.search ?? "");
   const [busy, setBusy] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -301,7 +306,7 @@ function LinkForm({
     const res = await fetch("/api/admin-links", {
       method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: link?.id, groupTitle, label, url, search }),
+      body: JSON.stringify({ id: link?.id, groupTitle, label, url }),
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
@@ -334,7 +339,7 @@ function LinkForm({
       <h2 className="text-sm font-semibold text-gray-900 mb-3">
         {editing ? `Edit ${link.label}` : "Add a link"}
       </h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="Group" hint="Pick where it belongs, or start a new group.">
           <select
             value={choosingNew ? NEW_GROUP : picked}
@@ -380,14 +385,6 @@ function LinkForm({
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://…"
             inputMode="url"
-            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-          />
-        </Field>
-        <Field label="Also search for" hint="Other names people might type. Never shown.">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="vendor name, nickname, what it does"
             className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
           />
         </Field>

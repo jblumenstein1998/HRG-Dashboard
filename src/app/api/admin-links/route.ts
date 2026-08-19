@@ -27,7 +27,6 @@ export async function POST(request: NextRequest) {
     groupTitle: body.groupTitle ?? "",
     label: body.label ?? "",
     url: body.url ?? "",
-    search: body.search,
   });
 
   // The store validates and reports; this route only chooses the status. 400
@@ -57,7 +56,6 @@ export async function PUT(request: NextRequest) {
     groupTitle: body.groupTitle ?? "",
     label: body.label ?? "",
     url: body.url ?? "",
-    search: body.search,
   });
 
   if ("error" in result) return Response.json({ error: result.error }, { status: 400 });
@@ -68,7 +66,6 @@ type LinkBody = {
   groupTitle: string;
   label: string;
   url: string;
-  search: string;
 };
 
 export async function DELETE(request: NextRequest) {
