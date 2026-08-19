@@ -17,6 +17,7 @@ export const ALL_TABS = [
   "/par",
   "/survey-data",
   "/bonus",
+  "/zu",
   "/admin-links",
 ] as const;
 export type Tab = (typeof ALL_TABS)[number];
@@ -27,6 +28,8 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/par": "POS Sales",
   "/survey-data": "SMG",
   "/bonus": "Bonus",
+  // Zaxby's University — training compliance, out of Schoox.
+  "/zu": "ZU",
   // The route is /admin-links because /admin is the Users & Access screen; the
   // label is what people see, and this tab is "Admin".
   "/admin-links": "Admin",
