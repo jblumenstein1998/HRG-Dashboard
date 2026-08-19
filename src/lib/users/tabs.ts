@@ -11,7 +11,14 @@
  * must not transitively reach lib/db.
  */
 
-export const ALL_TABS = ["/dashboard", "/food-cost", "/par", "/survey-data", "/bonus"] as const;
+export const ALL_TABS = [
+  "/dashboard",
+  "/food-cost",
+  "/par",
+  "/survey-data",
+  "/bonus",
+  "/admin-links",
+] as const;
 export type Tab = (typeof ALL_TABS)[number];
 
 export const TAB_LABELS: Record<Tab, string> = {
@@ -20,6 +27,9 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/par": "POS Sales",
   "/survey-data": "SMG",
   "/bonus": "Bonus",
+  // The route is /admin-links because /admin is the Users & Access screen; the
+  // label is what people see, and this tab is "Admin".
+  "/admin-links": "Admin",
 };
 
 /** Where everyone lands after signing in, when their position allows it. */
