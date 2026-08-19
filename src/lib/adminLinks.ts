@@ -1,11 +1,18 @@
 /**
- * The Admin tab's link directory.
+ * The Admin tab's link directory: types, the seed catalog, and the pure
+ * helpers the page renders with.
  *
  * Every back-office system HRG signs into, in one place, because the answer to
  * "where do I go to do X" was previously a shared Google Doc that only some
  * people had open. Data only — no server imports — so the client component can
  * import it without dragging anything into the browser bundle that doesn't
  * belong there (see lib/users/tabs.ts for the rule this follows).
+ *
+ * The list below is a *seed*, not the live list. Admins add and remove cards
+ * from the tab itself, so the rows live in Postgres (lib/adminLinksStore.ts)
+ * and this array is only what a brand-new database starts with. Editing an
+ * entry here will not change a database that has already been seeded — change
+ * it in the UI.
  *
  * What is deliberately NOT here: credentials. The source doc carried a username
  * and password for one vendor inline. Putting those in the repo would publish
@@ -19,15 +26,24 @@
  * filter finds a system by any name it goes by.
  */
 
+/** A link as stored: same shape as a seed entry, plus the row's identity. */
 export type AdminLink = {
+  id: string;
   /** What it's called here — usually the vendor name people say out loud. */
   label: string;
   url: string;
   /** One line on what it's for. Shown under the label. */
   note: string;
-  /** Extra terms the filter should match. */
-  search?: string;
+  /** Extra terms the filter should match. Empty when nobody supplied any. */
+  search: string;
 };
+
+/**
+ * A seed entry. `search` stays optional here and required on `AdminLink` so
+ * the fifty-odd entries below don't each need an empty string, while
+ * everything downstream can treat it as a plain string.
+ */
+export type SeedLink = Omit<AdminLink, "id" | "search"> & { search?: string };
 
 export type AdminLinkGroup = {
   title: string;
@@ -36,7 +52,13 @@ export type AdminLinkGroup = {
   links: AdminLink[];
 };
 
-export const ADMIN_LINK_GROUPS: AdminLinkGroup[] = [
+export type SeedLinkGroup = {
+  title: string;
+  blurb: string;
+  links: SeedLink[];
+};
+
+export const SEED_LINK_GROUPS: SeedLinkGroup[] = [
   {
     title: "Reporting & Analytics",
     blurb: "Where the numbers on the other tabs come from.",
@@ -393,8 +415,47 @@ export const ADMIN_LINK_GROUPS: AdminLinkGroup[] = [
   },
 ];
 
-/** Every link, flattened — for counts and for the "no matches" copy. */
-export const ADMIN_LINK_COUNT = ADMIN_LINK_GROUPS.reduce((n, g) => n + g.links.length, 0);
+/**
+ * Where a group sits, and what its subtitle says.
+ *
+ * The seed's order is meaningful — Reporting first because it's what people
+ * open most, Insurance last because it's touched twice a year — so groups keep
+ * that order rather than sorting alphabetically. A group an admin invents
+ * later has no place in that ranking, so it sorts after all the seeded ones,
+ * alphabetically among its peers, and shows no subtitle. Better an unexplained
+ * heading than a made-up explanation of someone else's grouping.
+ */
+const SEED_GROUP_TITLES = SEED_LINK_GROUPS.map((g) => g.title);
+
+export function groupRank(title: string): number {
+  const i = SEED_GROUP_TITLES.indexOf(title);
+  return i === -1 ? SEED_GROUP_TITLES.length : i;
+}
+
+export function groupBlurb(title: string): string {
+  return SEED_LINK_GROUPS.find((g) => g.title === title)?.blurb ?? "";
+}
+
+/**
+ * Whether a URL is safe to put in an `href`.
+ *
+ * This is the one piece of validation that is not about tidiness. Anyone who
+ * can add a card can choose its URL, and `javascript:` in an href runs as this
+ * origin the moment a colleague clicks the card — session cookie and all. Only
+ * http and https are allowed, and the check parses rather than pattern-matches
+ * so it can't be walked past with whitespace or mixed case.
+ *
+ * Exported and used on the server; the client calls it too, but only to grey
+ * out the submit button. The server check is the one that counts.
+ */
+export function isSafeUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url.trim());
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The host a link points at, for the favicon lookup and the caption under the
