@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Customized, LabelList, usePlotArea, useXAxisTicks, useYAxisScale } from "recharts";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
@@ -1077,6 +1077,491 @@ function CogsBySalesTable({
   );
 }
 
+// ── Category × location matrix ────────────────────────────────────────────────
+
+type CategoryCell = {
+  cogsPct: number | null;
+  cogsDollars: number | null;
+  variancePct: number | null;
+  varianceDollars: number | null;
+};
+
+type CategoryRow = {
+  name: string;
+  group: string;
+  sort: string;
+  cells: Record<number, CategoryCell>;
+};
+
+type CategoryMatrix = {
+  categories: CategoryRow[];
+  locations: { locationId: number; locationName: string }[];
+  salesByLocation: Record<number, number | null>;
+  startDate: string;
+  endDate: string;
+};
+
+type MatrixMetric = "cogs" | "variance";
+type LoadStatus = "loading" | "done" | "error";
+
+// Title-case the SHOUTED gl descriptions Net-Chef returns.
+function prettyCategory(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b[a-z]/g, c => c.toUpperCase())
+    .replace(/\bAnd\b/g, "and");
+}
+
+// One fetch feeds both the exceptions list and the grid below it.
+function useCategoryMatrix(startDate: string, endDate: string): { data: CategoryMatrix | null; status: LoadStatus } {
+  // Keyed by range so a stale result never paints over a newer one — and so the
+  // loading state is derived rather than set synchronously inside the effect.
+  const [loaded, setLoaded] = useState<{ key: string; data: CategoryMatrix | null } | null>(null);
+  const rangeKey = `${startDate}__${endDate}`;
+
+  useEffect(() => {
+    const [start, end] = rangeKey.split("__");
+    if (!start || !end) return;
+    let cancelled = false;
+    fetch(`/api/netchef/categories?start=${start}&end=${end}`)
+      .then(r => r.json())
+      .then((d: unknown) => {
+        if (cancelled) return;
+        if (d && typeof d === "object" && "categories" in d) {
+          setLoaded({ key: rangeKey, data: d as CategoryMatrix });
+        } else {
+          console.warn("[CategoryMatrix] unexpected:", d);
+          setLoaded({ key: rangeKey, data: null });
+        }
+      })
+      .catch(() => { if (!cancelled) setLoaded({ key: rangeKey, data: null }); });
+    return () => { cancelled = true; };
+  }, [rangeKey]);
+
+  const current = loaded?.key === rangeKey ? loaded : null;
+  const data = current?.data ?? null;
+  return { data, status: !current ? "loading" : data ? "done" : "error" };
+}
+
+function visibleLocations(data: CategoryMatrix, showVA: boolean, showTN: boolean) {
+  const visible = new Set([...(showVA ? VA_STORES : []), ...(showTN ? TN_STORES : [])]);
+  return data.locations.filter(l => visible.has(l.locationName));
+}
+
+function MetricToggle({ metric, setMetric }: { metric: MatrixMetric; setMetric: (m: MatrixMetric) => void }) {
+  return (
+    <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
+      {([["cogs", "COGS"], ["variance", "Variance"]] as const).map(([key, label]) => (
+        <button
+          key={key}
+          onClick={() => setMetric(key)}
+          className={`text-xs px-3 py-1.5 transition ${
+            metric === key ? "bg-red-700 text-white font-medium" : "bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Category bar chart ────────────────────────────────────────────────────────
+// Categories across the x axis, one bar per store, and a dotted line per group
+// at that category's straight (unweighted) average across the visible stores.
+//
+// Transportation In is dropped outright — it's 0.3% of COGS and varies 0.02pp
+// across all twelve stores, and leaving it out makes the remaining 15 divide
+// evenly into three pages of five.
+
+const CHART_EXCLUDED_CATEGORY = "TRANSPORTATION IN";
+const CATEGORIES_PER_TAB = 5;
+
+/** Straight mean, ignoring stores with no figure. */
+function straightMean(values: (number | null | undefined)[]): number | null {
+  const v = values.filter((x): x is number => x != null);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+function niceCeil(v: number): number {
+  if (!(v > 0)) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    if (v <= m * mag) return m * mag;
+  }
+  return 10 * mag;
+}
+
+type ChartRow = { category: string; __avg: number | null } & Record<string, number | null | string>;
+
+// Rendered inside <Customized> so it can read the chart's own scales through
+// Recharts' hooks — the band scale places each line over its category group and
+// the y scale positions it, so the lines stay put whatever the axis does.
+function AverageMarkers({ rows }: { rows?: ChartRow[] }) {
+  const plot = usePlotArea();
+  const ticks = useXAxisTicks() as { value?: unknown; coordinate?: number }[] | undefined;
+  const yScale = useYAxisScale() as ((v: number) => number) | undefined;
+
+  if (!rows?.length || !plot || !yScale) return null;
+
+  // Categories are evenly spaced across the plot, so the band geometry is
+  // knowable outright; the axis ticks are preferred when they line up.
+  const band = plot.width / rows.length;
+
+  return (
+    <g>
+      {rows.map((r, i) => {
+        if (r.__avg == null) return null;
+        const tick = ticks?.find(t => String(t.value) === r.category);
+        const centre = Number.isFinite(tick?.coordinate)
+          ? (tick!.coordinate as number)
+          : plot.x + band * (i + 0.5);
+        const y = yScale(r.__avg);
+        if (!Number.isFinite(y)) return null;
+        const half = band * 0.45;
+        return (
+          <line
+            key={r.category}
+            x1={centre - half}
+            x2={centre + half}
+            y1={y}
+            y2={y}
+            stroke="#111827"
+            strokeWidth={2}
+            strokeDasharray="6 4"
+          />
+        );
+      })}
+    </g>
+  );
+}
+
+const TOOLTIP_WIDTH = 260;
+// Enough to clear half a category's bars, so the group being read stays visible
+// behind the popup rather than under it.
+const TOOLTIP_CLEARANCE = 135;
+
+function CategoryBarTooltip({
+  active,
+  payload,
+  label,
+  decimals,
+  avg,
+  coordinate,
+  viewBox,
+}: {
+  active?: boolean;
+  payload?: { dataKey: string; value: number | null; color: string }[];
+  label?: string;
+  decimals: number;
+  avg?: number | null;
+  coordinate?: { x?: number };
+  viewBox?: { x?: number };
+}) {
+  if (!active || !payload?.length) return null;
+  const sorted = [...payload].filter(p => p.value != null && p.dataKey !== "__avg")
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+
+  // Sit to the left of the cursor by default; flip right only when the left
+  // side has no room, so the popup never lands on the bars it describes.
+  const cx = coordinate?.x ?? 0;
+  const plotLeft = viewBox?.x ?? 0;
+  const fitsLeft = cx - TOOLTIP_CLEARANCE - TOOLTIP_WIDTH >= plotLeft - 48;
+  const transform = fitsLeft
+    ? `translateX(calc(-100% - ${TOOLTIP_CLEARANCE}px))`
+    : `translateX(${TOOLTIP_CLEARANCE}px)`;
+
+  return (
+    <div
+      style={{ transform, width: TOOLTIP_WIDTH }}
+      className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs"
+    >
+      <p className="font-semibold text-gray-700 mb-2 uppercase tracking-wide">{label}</p>
+      {sorted.map(p => {
+        // Both metrics are costs, so above the average is the bad direction.
+        const rel = avg != null && p.value != null ? p.value - avg : null;
+        return (
+          <div key={p.dataKey} className="flex items-center gap-1.5 py-0.5">
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
+            <span className="text-gray-600 flex-1 truncate">{p.dataKey}</span>
+            <span className="font-medium tabular-nums text-gray-800">{fmtPct(p.value ?? null, decimals)}</span>
+            <span className="text-gray-300">/</span>
+            <span
+              className={`tabular-nums font-medium w-16 text-right ${
+                rel == null ? "text-gray-400" : rel > 0 ? "text-red-600" : rel < 0 ? "text-green-600" : "text-gray-500"
+              }`}
+            >
+              {rel == null ? "—" : fmtPct(rel, 2)}
+            </span>
+          </div>
+        );
+      })}
+      {avg != null && (
+        <div className="flex items-center gap-1.5 py-0.5 mt-1 pt-1.5 border-t border-gray-100">
+          <span className="w-2 h-0.5 shrink-0 bg-gray-900" />
+          <span className="text-gray-600 flex-1">Average</span>
+          <span className="font-semibold tabular-nums text-gray-900">{fmtPct(avg, decimals)}</span>
+          <span className="text-transparent">/</span>
+          <span className="w-16" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Two-line label over each bar of the highlighted store: the value, then its
+// gap from that category's average, coloured the same way as the popup.
+function HighlightLabel(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  value?: number | string;
+  index?: number;
+  rows?: ChartRow[];
+}) {
+  const { x, y, width, value, index, rows } = props;
+  if (typeof value !== "number" || x == null || y == null || width == null) return null;
+  const avg = index != null ? rows?.[index]?.__avg : null;
+  const rel = avg != null ? value - avg : null;
+  const cx = x + width / 2;
+  // White halo keeps both lines readable where they cross the average line.
+  const halo = { stroke: "#ffffff", strokeWidth: 3, paintOrder: "stroke" as const };
+  return (
+    <g>
+      <text x={cx} y={y - 14} textAnchor="middle" fontSize={10} fontWeight={600} fill="#111827" {...halo}>
+        {fmtPct(value, 2)}
+      </text>
+      {rel != null && (
+        <text
+          x={cx}
+          y={y - 4}
+          textAnchor="middle"
+          fontSize={9}
+          fontWeight={600}
+          fill={rel > 0 ? "#dc2626" : rel < 0 ? "#16a34a" : "#6b7280"}
+          {...halo}
+        >
+          {fmtPct(rel, 2)}
+        </text>
+      )}
+    </g>
+  );
+}
+
+function CategoryBarChart({
+  startDate,
+  endDate,
+  showVA,
+  showTN,
+}: {
+  startDate: string;
+  endDate: string;
+  showVA: boolean;
+  showTN: boolean;
+}) {
+  const { data, status } = useCategoryMatrix(startDate, endDate);
+  const [metric, setMetric] = useState<MatrixMetric>("cogs");
+  const [tab, setTab] = useState(0);
+  const [hoverStore, setHoverStore] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const shell = (body: React.ReactNode, controls?: React.ReactNode) => (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <CopyableTitle
+            title={metric === "cogs" ? "COGS by Category — by Store" : "Variance by Category — by Store"}
+            targetRef={cardRef}
+            className="text-sm font-semibold text-gray-800"
+          />
+          {data && (
+            <span className="ml-1.5 text-sm font-normal text-gray-400">
+              {fmtDate(data.startDate)} – {fmtDate(data.endDate)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {controls}
+          <MetricToggle metric={metric} setMetric={setMetric} />
+        </div>
+      </div>
+      {body}
+    </div>
+  );
+
+  if (status === "loading") return shell(
+    <div className="h-72 flex items-center justify-center">
+      <span className="text-xs text-gray-400 animate-pulse">Loading chart…</span>
+    </div>
+  );
+  if (status === "error" || !data) return shell(
+    <div className="h-20 flex items-center justify-center">
+      <span className="text-xs text-gray-400">Chart failed to load — check server logs</span>
+    </div>
+  );
+
+  const columns = visibleLocations(data, showVA, showTN);
+  if (!columns.length) return shell(
+    <div className="h-20 flex items-center justify-center">
+      <span className="text-xs text-gray-400">Select VA or TN to show locations</span>
+    </div>
+  );
+
+  // Paging is ordered by average COGS across *every* store and never by the
+  // displayed metric, so a category keeps its page as the filters change.
+  const ordered = data.categories
+    .filter(c => c.name !== CHART_EXCLUDED_CATEGORY)
+    .map(c => ({ cat: c, rank: straightMean(data.locations.map(l => c.cells[l.locationId]?.cogsPct)) ?? -1 }))
+    .sort((a, b) => b.rank - a.rank)
+    .map(x => x.cat);
+
+  const tabs: CategoryRow[][] = [];
+  for (let i = 0; i < ordered.length; i += CATEGORIES_PER_TAB) tabs.push(ordered.slice(i, i + CATEGORIES_PER_TAB));
+  if (!tabs.length) return shell(
+    <div className="h-20 flex items-center justify-center">
+      <span className="text-xs text-gray-400">No category data for this range</span>
+    </div>
+  );
+
+  const page = Math.min(tab, tabs.length - 1);
+  const value = (cat: CategoryRow, locationId: number): number | null => {
+    const cell = cat.cells[locationId];
+    if (metric === "cogs") return cell?.cogsPct ?? null;
+    return cell?.variancePct != null ? Math.abs(cell.variancePct) : null;
+  };
+
+  const rows: ChartRow[] = tabs[page].map(cat => {
+    const row: ChartRow = { category: prettyCategory(cat.name), __avg: null };
+    for (const c of columns) row[c.locationName] = value(cat, c.locationId);
+    row.__avg = straightMean(columns.map(c => value(cat, c.locationId)));
+    return row;
+  });
+
+  const allValues = rows.flatMap(r => columns.map(c => r[c.locationName]).filter((v): v is number => typeof v === "number"));
+  const yMax = niceCeil(Math.max(...allValues, 0) * 1.08);
+  const decimals = yMax < 1 ? 2 : 1;
+
+  const controls = (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => setTab(p => Math.max(0, p - 1))}
+        disabled={page === 0}
+        aria-label="Previous categories"
+        className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition"
+      >
+        ←
+      </button>
+      <span className="text-xs text-gray-500 tabular-nums px-1">{page + 1} / {tabs.length}</span>
+      <button
+        onClick={() => setTab(p => Math.min(tabs.length - 1, p + 1))}
+        disabled={page === tabs.length - 1}
+        aria-label="Next categories"
+        className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition"
+      >
+        →
+      </button>
+    </div>
+  );
+
+  return shell(
+    <div className="p-4">
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart data={rows} margin={{ top: 22, right: 8, left: 0, bottom: 0 }} barCategoryGap="16%" barGap={1}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+          <XAxis dataKey="category" tick={{ fontSize: 11, fill: "#6b7280" }} interval={0} tickLine={false} />
+          <YAxis
+            domain={[0, yMax]}
+            tickCount={6}
+            width={46}
+            tickLine={false}
+            tick={{ fontSize: 10, fill: "#9ca3af" }}
+            tickFormatter={(v: number) => `${v.toFixed(decimals)}%`}
+          />
+          <Tooltip
+            cursor={{ fill: "rgba(0,0,0,0.03)" }}
+            offset={0}
+            isAnimationActive={false}
+            // The popup places itself relative to the cursor, so Recharts must
+            // not also clamp the wrapper or the two fight over the x position.
+            allowEscapeViewBox={{ x: true, y: false }}
+            content={(props) => {
+              const { active, payload, label, coordinate, viewBox } = props as unknown as {
+                active?: boolean;
+                payload?: { dataKey: string; value: number | null; color: string }[];
+                label?: string;
+                coordinate?: { x?: number };
+                viewBox?: { x?: number };
+              };
+              return (
+                <CategoryBarTooltip
+                  active={active}
+                  payload={payload}
+                  label={label}
+                  decimals={2}
+                  avg={rows.find(r => r.category === label)?.__avg}
+                  coordinate={coordinate}
+                  viewBox={viewBox}
+                />
+              );
+            }}
+          />
+          {columns.map(c => (
+            <Bar
+              key={c.locationId}
+              dataKey={c.locationName}
+              fill={STORE_COLOR[c.locationName] ?? "#9ca3af"}
+              // Hovering a store in the key fades the rest so its bars read as
+              // one series across the categories.
+              fillOpacity={hoverStore && hoverStore !== c.locationName ? 0.15 : 1}
+              radius={[2, 2, 0, 0]}
+              isAnimationActive={false}
+            >
+              {hoverStore === c.locationName && (
+                <LabelList dataKey={c.locationName} content={<HighlightLabel rows={rows} />} />
+              )}
+            </Bar>
+          ))}
+          <Customized component={<AverageMarkers rows={rows} />} />
+        </BarChart>
+      </ResponsiveContainer>
+
+      <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {columns.map(c => {
+          const dimmed = hoverStore != null && hoverStore !== c.locationName;
+          return (
+            <button
+              key={c.locationId}
+              onMouseEnter={() => setHoverStore(c.locationName)}
+              onMouseLeave={() => setHoverStore(null)}
+              onFocus={() => setHoverStore(c.locationName)}
+              onBlur={() => setHoverStore(null)}
+              className={`flex items-center gap-1.5 text-xs transition cursor-default ${
+                dimmed ? "text-gray-300" : hoverStore === c.locationName ? "text-gray-900 font-semibold" : "text-gray-600"
+              }`}
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-sm shrink-0 transition"
+                style={{
+                  background: STORE_COLOR[c.locationName] ?? "#9ca3af",
+                  opacity: dimmed ? 0.25 : 1,
+                }}
+              />
+              {c.locationName}
+            </button>
+          );
+        })}
+        <span className="flex items-center gap-1.5 text-xs text-gray-600 ml-auto">
+          <svg width="20" height="4" className="shrink-0">
+            <line x1="0" y1="2" x2="20" y2="2" stroke="#111827" strokeWidth={2} strokeDasharray="6 4" />
+          </svg>
+          Average
+        </span>
+      </div>
+    </div>,
+    controls
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
@@ -1262,7 +1747,8 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <div className="sticky top-0 z-20">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
@@ -1351,7 +1837,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         </div>
       </header>
 
-      <div className="bg-gray-50 border-b border-gray-200">
+      <div className="bg-gray-50 border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
           {allLocations.length > 0 && (
             <>
@@ -1389,6 +1875,8 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             </label>
           </div>
         </div>
+      </div>
+
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
@@ -1442,6 +1930,17 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               expandedIds={expandedIds}
               itemsCache={varItemsCache}
               onToggle={handleToggle}
+            />
+          </div>
+        )}
+
+        {(allLocations.length > 0 || loading) && startDate && endDate && (
+          <div className="mt-6">
+            <CategoryBarChart
+              startDate={startDate}
+              endDate={endDate}
+              showVA={showVA}
+              showTN={showTN}
             />
           </div>
         )}

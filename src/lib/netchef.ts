@@ -338,13 +338,19 @@ export type ItemData = {
   variancePct: number | null;
 };
 
-export async function fetchLocationItems(
+const detailCache = new Map<string, { rows: Record<string, unknown>[]; fetchedAt: number }>();
+
+// Raw Actual-vs-Theoretical detail rows for one location, cached so the item
+// breakdown and the category matrix share a single Net-Chef round trip.
+async function fetchLocationDetailRows(
   locationId: number,
   startDate: string,
-  endDate: string,
-  mode: "actual" | "variance" = "variance",
-  limit = 5
-): Promise<ItemData[]> {
+  endDate: string
+): Promise<Record<string, unknown>[]> {
+  const cKey = `${locationId}__${startDate}__${endDate}`;
+  const cached = detailCache.get(cKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.rows;
+
   const toMMDDYYYY = (iso: string) => {
     const [y, m, d] = iso.split("-");
     return `${m}/${d}/${y}`;
@@ -360,13 +366,24 @@ export async function fetchLocationItems(
     pagingInfo: { page: 1, start: 0, limit: 1000000 },
   }) as Record<string, unknown>;
 
-  const rows = data.rows as Record<string, unknown>[] | undefined;
-  if (!rows?.length) {
-    console.log("[NC] no rows for location", locationId);
-    return [];
+  const rows = (data.rows as Record<string, unknown>[] | undefined) ?? [];
+  if (!rows.length) {
+    console.log("[NC] no detail rows for location", locationId);
+    return rows; // don't cache an empty result — NC returns [] transiently
   }
+  detailCache.set(cKey, { rows, fetchedAt: Date.now() });
+  return rows;
+}
 
-  console.log("[NC] sample row for", locationId, ":", JSON.stringify(rows[0]));
+export async function fetchLocationItems(
+  locationId: number,
+  startDate: string,
+  endDate: string,
+  mode: "actual" | "variance" = "variance",
+  limit = 5
+): Promise<ItemData[]> {
+  const rows = await fetchLocationDetailRows(locationId, startDate, endDate);
+  if (!rows.length) return [];
 
   const mapped = rows.map(r => ({
     name:              String(r.glDescription ?? r.glSubstructure ?? r.name ?? ""),
@@ -386,6 +403,107 @@ export async function fetchLocationItems(
     .filter(r => r.name && r.variancePct !== null)
     .sort((a, b) => Math.abs(b.variancePct ?? 0) - Math.abs(a.variancePct ?? 0))
     .slice(0, limit);
+}
+
+// ── Category × location matrix ────────────────────────────────────────────────
+// Every COGS category down the side, every location across the top. Cells carry
+// both metrics so the client can flip between COGS and Variance without refetching.
+
+export type CategoryCell = {
+  cogsPct: number | null;
+  cogsDollars: number | null;
+  variancePct: number | null;
+  varianceDollars: number | null;
+};
+
+export type CategoryRow = {
+  name: string;   // glDescription, e.g. "TENDERS"
+  group: string;  // glSubstructure, e.g. "Food & Beverages"
+  sort: string;   // glSort, e.g. "40002 - OIL AND SHORTENING"
+  cells: Record<number, CategoryCell>;  // keyed by locationId
+};
+
+export type CategoryMatrix = {
+  categories: CategoryRow[];
+  locations: { locationId: number; locationName: string }[];
+  /** Net sales per location — the divisor behind every percent, used for weighted averages. */
+  salesByLocation: Record<number, number | null>;
+  startDate: string;
+  endDate: string;
+  fetchedAt: number;
+};
+
+const matrixCache = new Map<string, CategoryMatrix>();
+
+export async function fetchCategoryMatrix(startDate: string, endDate: string): Promise<CategoryMatrix> {
+  const cKey = `${startDate}__${endDate}`;
+  const cached = matrixCache.get(cKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached;
+
+  const locs = getLocations();
+
+  const perLocation = await Promise.all(locs.map(async loc => {
+    try {
+      return { loc, rows: await fetchLocationDetailRows(loc.id, startDate, endDate) };
+    } catch (err) {
+      console.error("[NC] category matrix failed for", loc.name, ":", err);
+      return { loc, rows: [] as Record<string, unknown>[] };
+    }
+  }));
+
+  const byName = new Map<string, CategoryRow>();
+  const salesByLocation: Record<number, number | null> = {};
+
+  for (const { loc, rows } of perLocation) {
+    salesByLocation[loc.id] = null;
+    for (const r of rows) {
+      const name = String(r.glDescription ?? "").trim();
+      if (!name) continue;
+
+      let cat = byName.get(name);
+      if (!cat) {
+        cat = {
+          name,
+          group: String(r.glSubstructure ?? "").trim() || "Other",
+          sort: String(r.glSort ?? name),
+          cells: {},
+        };
+        byName.set(name, cat);
+      }
+
+      cat.cells[loc.id] = {
+        cogsPct:         r.actualCostPercent    != null ? Number(r.actualCostPercent)    : null,
+        cogsDollars:     r.actualCost           != null ? Number(r.actualCost)           : null,
+        variancePct:     r.valueVariancePercent != null ? Number(r.valueVariancePercent) : null,
+        varianceDollars: r.valueVariance        != null ? Number(r.valueVariance)        : null,
+      };
+
+      // divisorValue is the location's net sales, repeated on every row
+      const divisor = r.divisorValue != null ? Number(r.divisorValue) : 0;
+      if (divisor > 0) salesByLocation[loc.id] = divisor;
+    }
+  }
+
+  // Order categories by glSort (GL number), then group by substructure in the
+  // order each group first appears so the groups stay contiguous.
+  const categories = [...byName.values()].sort((a, b) => a.sort.localeCompare(b.sort));
+  const groupOrder = new Map<string, number>();
+  for (const c of categories) if (!groupOrder.has(c.group)) groupOrder.set(c.group, groupOrder.size);
+  categories.sort((a, b) => {
+    const g = (groupOrder.get(a.group) ?? 0) - (groupOrder.get(b.group) ?? 0);
+    return g !== 0 ? g : a.sort.localeCompare(b.sort);
+  });
+
+  const matrix: CategoryMatrix = {
+    categories,
+    locations: locs.map(l => ({ locationId: l.id, locationName: l.name })),
+    salesByLocation,
+    startDate,
+    endDate,
+    fetchedAt: Date.now(),
+  };
+  matrixCache.set(cKey, matrix);
+  return matrix;
 }
 
 // ── Period-level history (per-store, last N periods + last week) ──────────────
@@ -425,6 +543,8 @@ export function invalidateNcCache(): void {
   historyCache.clear();
   periodHistoryCache.clear();
   locationReportCache.clear();
+  detailCache.clear();
+  matrixCache.clear();
 }
 
 // ── 12-month history ──────────────────────────────────────────────────────────
