@@ -133,7 +133,10 @@ async function login(): Promise<Session> {
     ev: "",
   });
 
-  const authRes = await fetch(`${BASE}/login.php`, {
+  // Note the path: the page is served from /login.php but its <form> targets
+  // /login/index.php. Posting back to /login.php answers a cheerful 200 and
+  // authenticates nothing, which then surfaces as a 403 on the first data call.
+  const authRes = await fetch(`${BASE}/login/index.php`, {
     method: "POST",
     headers: {
       "User-Agent": UA,
@@ -148,10 +151,10 @@ async function login(): Promise<Session> {
 
   const cookies = mergeCookies(initial, cookiesFromHeaders(authRes.headers));
 
-  // Deliberately not asserting on the status or the redirect target: Schoox
-  // answers 302 on both success and failure, differing only in where it points.
-  // The caller probes a real endpoint instead, which is the check that actually
-  // matters — a session that can't read the dashboard is no session at all.
+  // Deliberately not asserting on the status: Schoox answers 200 whether the
+  // credentials were accepted or not. The caller probes a real endpoint
+  // instead, which is the check that actually matters — a session that can't
+  // read the dashboard is no session at all, however the login page felt.
   return { cookies, expiresAt: Date.now() + SESSION_TTL_MS };
 }
 
