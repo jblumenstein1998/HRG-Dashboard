@@ -66,6 +66,16 @@ export type ZuStore = ZuStats & {
   storeId: string;
   /** HRG's name for the store, e.g. "Columbia". */
   label: string;
+  /**
+   * The store's compliance rate before rounding — the mean of its members'
+   * rates, which is what Schoox rounds to produce `complianceRate`.
+   *
+   * Only used for rolling several stores into a subtotal. Weighting the
+   * rounded integers instead drifts about a third of a point low, because
+   * Schoox's per-store rounding is biased rather than symmetric, and that was
+   * enough to print Tennessee as 88% when its people average 89%.
+   */
+  exactRate: number | null;
 };
 
 export type ZuReport = {
@@ -428,10 +438,24 @@ async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Prom
 async function buildReport(): Promise<ZuReport> {
   const [total, units] = await Promise.all([fetchStats(ALL_STORES_UNIT), fetchUnits()]);
 
-  const stores = await mapLimited(units, 4, async (u) => ({
-    ...u,
-    ...(await fetchStats(u.unitId)),
-  }));
+  // The roster is fetched alongside the stats so each store carries an
+  // unrounded rate for subtotalling. It costs a second call per store on a
+  // build that already runs hourly, and it warms the same cache the expanded
+  // rows read, so opening a store row is usually instant.
+  const stores = await mapLimited(units, 4, async (u) => {
+    const [stats, members] = await Promise.all([
+      fetchStats(u.unitId),
+      fetchZuMembers(u.unitId).catch(() => [] as ZuMember[]),
+    ]);
+    const rated = members.filter((m) => m.complianceRate !== null);
+    return {
+      ...u,
+      ...stats,
+      exactRate: rated.length
+        ? rated.reduce((t, m) => t + (m.complianceRate ?? 0), 0) / rated.length
+        : null,
+    };
+  });
 
   // Sorted by the label every other tab uses, so the ZU table reads in the same
   // order as SMG and Food Cost rather than in Schoox's store-number order.

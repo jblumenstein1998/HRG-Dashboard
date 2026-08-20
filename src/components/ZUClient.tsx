@@ -27,7 +27,13 @@ type ZuStats = {
   totalTime: string;
 };
 
-type ZuStore = ZuStats & { unitId: string; storeId: string; label: string };
+type ZuStore = ZuStats & {
+  unitId: string;
+  storeId: string;
+  label: string;
+  /** Unrounded rate, for subtotals. See the note in lib/schoox.ts. */
+  exactRate: number | null;
+};
 
 type ZuReport = { total: ZuStats; stores: ZuStore[]; fetchedAt: number };
 
@@ -107,9 +113,12 @@ function sortStores(stores: ZuStore[]): ZuStore[] {
  * Average Compliance Rate is the mean of each person's rate, so rolling stores
  * up means weighting each store's rate by its headcount — a plain mean of the
  * store percentages would let an 18-person store pull as hard as a 51-person
- * one. Weighting this way reproduces Schoox's own academy figure exactly, which
- * is why the all-stores row can fall back to the number Schoox reports and
- * still agree with the rows above it.
+ * one.
+ *
+ * The weight is applied to `exactRate`, not to the rounded percentage the row
+ * displays. Using the rounded figure runs about a third of a point low, which
+ * printed Tennessee as 88% when its people average 89% — small, but wrong in a
+ * way nobody would catch by eye.
  */
 function subtotal(stores: ZuStore[]): ZuStats {
   const people = stores.reduce((t, s) => t + s.people, 0);
@@ -119,7 +128,7 @@ function subtotal(stores: ZuStore[]): ZuStats {
     return sum / people;
   };
   return {
-    complianceRate: weighted((s) => s.complianceRate),
+    complianceRate: weighted((s) => s.exactRate ?? s.complianceRate),
     people,
     compliant: stores.reduce((t, s) => t + s.compliant, 0),
     noncompliant: stores.reduce((t, s) => t + s.noncompliant, 0),
