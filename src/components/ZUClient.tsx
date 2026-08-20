@@ -15,7 +15,6 @@ import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
  * is the question a store row raises: not "how bad", but "who".
  */
 
-const ALL_STORES = "";
 
 type ZuStats = {
   complianceRate: number | null;
@@ -47,6 +46,29 @@ type ZuMember = {
 
 type MemberState = "loading" | "error" | ZuMember[];
 
+type ZuTestPerson = {
+  id: string;
+  name: string;
+  /** Test id → progress 0–100. Null means the test isn't assigned to them. */
+  results: Record<string, number | null>;
+};
+
+type ZuTestStore = {
+  unitId: string;
+  storeId: string;
+  label: string;
+  /** Test id → the store's completion rate for it. */
+  rates: Record<string, number | null>;
+  people: ZuTestPerson[];
+};
+
+type ZuTestReport = {
+  tests: { id: string; label: string; short: string }[];
+  stores: ZuTestStore[];
+  fetchedAt: number;
+};
+
+
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 function fmtPct(v: number | null): string {
@@ -58,23 +80,35 @@ function num(v: number): string {
 }
 
 /**
- * The same thresholds the Schoox gauge paints: red below 60, amber to 80, green
- * above. Kept here rather than in surveyMeta because they score compliance, not
- * a survey metric, and the two scales have no reason to move together.
+ * HRG's thresholds, not Schoox's: red below 95, yellow to 99, green only at a
+ * clean 100. Stricter than the gauge on Schoox's own dashboard, deliberately —
+ * these are certifications, where "almost everyone" is the thing worth seeing
+ * rather than a passing grade. Kept here rather than in surveyMeta because they
+ * score compliance, not a survey metric, and the two have no reason to move
+ * together.
  */
 function rateColor(v: number | null): string {
   if (v === null) return "text-gray-400";
-  if (v >= 80) return "text-green-600";
-  if (v >= 60) return "text-yellow-600";
+  if (v >= 100) return "text-green-600";
+  if (v >= 95) return "text-yellow-600";
   return "text-red-600";
 }
 
-function rateBg(v: number | null): string {
-  if (v === null) return "";
-  if (v >= 80) return "bg-green-50";
-  if (v >= 60) return "bg-yellow-50";
-  return "bg-red-50";
+/**
+ * The row's shade, and the darker one it takes on hover or while open.
+ *
+ * Applied to the whole `<tr>` rather than the rate cell, so a store reads as
+ * one band across every column. Hover and open deliberately share a shade:
+ * both mean "this is the row you are working on", and separate tones would
+ * imply a distinction that isn't there.
+ */
+function rowTone(v: number | null, open: boolean): string {
+  if (v === null) return open ? "bg-gray-100" : "hover:bg-gray-50";
+  if (v >= 100) return open ? "bg-green-100" : "bg-green-50 hover:bg-green-100";
+  if (v >= 95) return open ? "bg-yellow-100" : "bg-yellow-50 hover:bg-yellow-100";
+  return open ? "bg-red-100" : "bg-red-50 hover:bg-red-100";
 }
+
 
 function fmtFetched(at: number): string {
   return `Updated ${new Date(at).toLocaleString("en-US", {
@@ -98,7 +132,7 @@ function marketOf(label: string): "TN" | "VA" | null {
  * about but the shared list doesn't — a new opening, before surveyMeta catches
  * up — fall to the end rather than disappearing.
  */
-function sortStores(stores: ZuStore[]): ZuStore[] {
+function sortStores<T extends { label: string }>(stores: T[]): T[] {
   const order = [...TN_STORES, ...VA_STORES];
   return [...stores].sort((a, b) => {
     const ia = order.indexOf(a.label);
@@ -120,6 +154,197 @@ function sortStores(stores: ZuStore[]): ZuStore[] {
  * printed Tennessee as 88% when its people average 89% — small, but wrong in a
  * way nobody would catch by eye.
  */
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+type SortDir = "asc" | "desc";
+type SortKey = { key: string; dir: SortDir };
+
+/**
+ * Sort keys, most recently clicked first. Empty means the table's own order.
+ *
+ * A list rather than a single key, so sorting accumulates: clicking a new
+ * column makes it primary but keeps the earlier ones behind it as tiebreakers.
+ * Rows the new column can't separate therefore stay in the order the previous
+ * sort put them, instead of falling back to the unsorted data.
+ */
+type Sort = SortKey[];
+
+/** One shared empty sort, so an unsorted drop-down doesn't churn a new array each render. */
+const NO_SORT: Sort = [];
+
+/**
+ * Clicking any column promotes it to primary; clicking the one that is already
+ * primary cycles it ascending → descending → off.
+ *
+ * Older keys slide down rather than being discarded, which is what makes
+ * successive sorts accumulate. Dropping the primary hands the table back to
+ * whatever was sorted before it, and emptying the list restores the table's own
+ * order — the store order every other tab uses, worth being able to return to.
+ */
+function nextSort(current: Sort, key: string): Sort {
+  const rest = current.filter((s) => s.key !== key);
+  const primary = current[0];
+
+  if (primary && primary.key === key) {
+    return primary.dir === "asc" ? [{ key, dir: "desc" }, ...rest] : rest;
+  }
+  return [{ key, dir: "asc" }, ...rest];
+}
+
+/**
+ * Nulls sort last in both directions. A person who was never assigned a test
+ * has no score to rank, and letting "—" head the table on one click would read
+ * as a zero they earned.
+ */
+function compareValues(
+  a: number | string | null,
+  b: number | string | null,
+  dir: SortDir,
+): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  const base =
+    typeof a === "string" && typeof b === "string" ? a.localeCompare(b) : Number(a) - Number(b);
+  return dir === "asc" ? base : -base;
+}
+
+/**
+ * Sorts by each active key in turn: the primary decides, and older keys break
+ * its ties. Rows that tie on every key keep the order they came in with, which
+ * is the table's default, because Array.prototype.sort is stable.
+ */
+function sortRows<T>(
+  rows: T[],
+  sort: Sort,
+  value: (row: T, key: string) => number | string | null,
+): T[] {
+  if (sort.length === 0) return rows;
+  return [...rows].sort((a, b) => {
+    for (const { key, dir } of sort) {
+      const order = compareValues(value(a, key), value(b, key), dir);
+      if (order !== 0) return order;
+    }
+    return 0;
+  });
+}
+
+/**
+ * Sorts inside each market rather than across them, so Tennessee stays above
+ * Virginia however the columns are ordered. The grouping is the tab's spine —
+ * a sort that shuffled the two together would answer a question nobody asked.
+ */
+function sortStoresWithinMarkets<T extends { label: string }>(
+  rows: T[],
+  sort: Sort,
+  value: (row: T, key: string) => number | string | null,
+): T[] {
+  const ordered = sortStores(rows);
+  if (sort.length === 0) return ordered;
+
+  // Insertion order is the default market order, so the groups come back out
+  // in the order they went in — only their contents move.
+  const groups = new Map<string, T[]>();
+  for (const row of ordered) {
+    const key = marketOf(row.label) ?? "other";
+    const group = groups.get(key);
+    if (group) group.push(row);
+    else groups.set(key, [row]);
+  }
+  return [...groups.values()].flatMap((group) => sortRows(group, sort, value));
+}
+
+function storeValue(s: ZuStore, key: string): number | string | null {
+  switch (key) {
+    case "store":
+      return s.label;
+    // The unrounded rate, so stores a point apart don't tie on the display value.
+    case "rate":
+      return s.exactRate ?? s.complianceRate;
+    case "people":
+      return s.people;
+    case "compliant":
+      return s.compliant;
+    case "noncompliant":
+      return s.noncompliant;
+    case "courses":
+      return s.averageCourses;
+    default:
+      return null;
+  }
+}
+
+function memberValue(m: ZuMember, key: string): number | string | null {
+  switch (key) {
+    case "name":
+      return m.name;
+    case "courses":
+      return m.totalCourses;
+    case "completions":
+      return m.completions;
+    case "rate":
+      return m.complianceRate;
+    default:
+      return null;
+  }
+}
+
+/** Any key that isn't "store" is a test id. */
+function testStoreValue(s: ZuTestStore, key: string): number | string | null {
+  return key === "store" ? s.label : (s.rates[key] ?? null);
+}
+
+function testPersonValue(p: ZuTestPerson, key: string): number | string | null {
+  return key === "name" ? p.name : (p.results[key] ?? null);
+}
+
+/**
+ * A clickable column heading.
+ *
+ * The arrow sits in a fixed-width slot that is always rendered, so the header
+ * row doesn't jump sideways the first time someone sorts.
+ */
+function SortTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = "right",
+  title,
+  size = "md",
+}: {
+  label: string;
+  sortKey: string;
+  sort: Sort;
+  onSort: (key: string) => void;
+  align?: "left" | "right";
+  title?: string;
+  size?: "md" | "sm";
+}) {
+  // Only the primary key is marked. The keys behind it are still sorting —
+  // see nextSort — but labelling them turned the header into something to
+  // decode rather than read.
+  const primary = sort[0] && sort[0].key === sortKey ? sort[0] : null;
+  return (
+    <th
+      onClick={() => onSort(sortKey)}
+      title={title}
+      aria-sort={primary ? (primary.dir === "asc" ? "ascending" : "descending") : "none"}
+      className={`${size === "md" ? "px-4 py-2" : "px-2 py-1"} font-medium cursor-pointer ${
+        align === "left" ? "text-left" : "text-right"
+      } select-none transition-colors hover:text-gray-700 ${
+        primary ? "text-gray-700" : "text-gray-500"
+      }`}
+    >
+      {label}
+      <span className="inline-block w-3 text-[10px] text-gray-500">
+        {primary ? (primary.dir === "asc" ? "▲" : "▼") : ""}
+      </span>
+    </th>
+  );
+}
+
+
 function subtotal(stores: ZuStore[]): ZuStats {
   const people = stores.reduce((t, s) => t + s.people, 0);
   const weighted = (pick: (s: ZuStore) => number | null) => {
@@ -146,12 +371,21 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
   const [report, setReport] = useState<ZuReport | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [error, setError] = useState<string>("");
-  const [storeId, setStoreId] = useState<string>(ALL_STORES);
   const [showTN, setShowTN] = useState(true);
   const [showVA, setShowVA] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<Record<string, MemberState>>({});
+  const [tests, setTests] = useState<ZuTestReport | null>(null);
+  const [testsStatus, setTestsStatus] = useState<"loading" | "done" | "error">("loading");
+  const [testsError, setTestsError] = useState<string>("");
+  const [openTestStores, setOpenTestStores] = useState<Set<string>>(new Set());
+  const testsRef = useRef<HTMLDivElement>(null);
+  const [storeSort, setStoreSort] = useState<Sort>(NO_SORT);
+  const [testSort, setTestSort] = useState<Sort>(NO_SORT);
+  // Keyed by store, so sorting one open drop-down leaves the others alone.
+  const [rosterSort, setRosterSort] = useState<Record<string, Sort>>({});
+  const [peopleSort, setPeopleSort] = useState<Record<string, Sort>>({});
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -181,6 +415,53 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  /**
+   * The certification grid arrives whole — rates and people together — so a
+   * store row opens without another round trip.
+   *
+   * Keyed on `report` rather than run once on mount: Refresh replaces the store
+   * report and clears the shared cache tag, so a new report object is the
+   * signal that these numbers are stale too.
+   */
+  useEffect(() => {
+    if (!report) return;
+
+    let cancelled = false;
+    setTestsStatus("loading");
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/zu/tests");
+        const data = (await res.json()) as ZuTestReport | { error: string };
+        if (cancelled) return;
+        if (!res.ok || "error" in data) {
+          setTestsError("error" in data ? data.error : `Request failed (${res.status})`);
+          setTestsStatus("error");
+          return;
+        }
+        setTests(data);
+        setTestsStatus("done");
+      } catch (err) {
+        if (cancelled) return;
+        setTestsError(err instanceof Error ? err.message : String(err));
+        setTestsStatus("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [report]);
+
+  const toggleTestStore = useCallback((unitId: string) => {
+    setOpenTestStores((prev) => {
+      const next = new Set(prev);
+      if (next.has(unitId)) next.delete(unitId);
+      else next.add(unitId);
+      return next;
+    });
+  }, []);
 
   const toggleRow = useCallback(
     (store: ZuStore) => {
@@ -213,13 +494,25 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
     [],
   );
 
+  const onStoreSort = useCallback((key: string) => setStoreSort((p) => nextSort(p, key)), []);
+  const onTestSort = useCallback((key: string) => setTestSort((p) => nextSort(p, key)), []);
+  const onRosterSort = useCallback((unitId: string, key: string) => {
+    setRosterSort((prev) => ({ ...prev, [unitId]: nextSort(prev[unitId] ?? NO_SORT, key) }));
+  }, []);
+  const onPeopleSort = useCallback((unitId: string, key: string) => {
+    setPeopleSort((prev) => ({ ...prev, [unitId]: nextSort(prev[unitId] ?? NO_SORT, key) }));
+  }, []);
   const allStores = report ? sortStores(report.stores) : [];
-  const visible = allStores.filter((s) => {
-    const market = marketOf(s.label);
-    if (market === "TN" && !showTN) return false;
-    if (market === "VA" && !showVA) return false;
-    return storeId === ALL_STORES || s.storeId === storeId;
-  });
+  const visible = sortStoresWithinMarkets(
+    allStores.filter((s) => {
+      const market = marketOf(s.label);
+      if (market === "TN" && !showTN) return false;
+      if (market === "VA" && !showVA) return false;
+      return true;
+    }),
+    storeSort,
+    storeValue,
+  );
 
   // Schoox's own academy figure when everything is on screen; a weighted
   // subtotal otherwise, so the bottom row always describes the rows above it.
@@ -236,6 +529,21 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
       : showVA && !showTN
         ? "Virginia"
         : "Selected";
+
+  /**
+   * The grid answers to the same controls as the table above it, so the two
+   * always describe the same set of stores.
+   */
+  const visibleTestStores = sortStoresWithinMarkets(
+    (tests?.stores ?? []).filter((s) => {
+      const market = marketOf(s.label);
+      if (market === "TN" && !showTN) return false;
+      if (market === "VA" && !showVA) return false;
+      return true;
+    }),
+    testSort,
+    testStoreValue,
+  );
 
   const COLUMNS = 6;
 
@@ -272,23 +580,6 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-3 flex-1 min-w-0">
-            <label className="sr-only" htmlFor="zu-store">
-              Filter by store
-            </label>
-            <select
-              id="zu-store"
-              value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
-              disabled={status !== "done"}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 disabled:opacity-50 cursor-pointer focus:outline-none"
-            >
-              <option value={ALL_STORES}>All Stores</option>
-              {allStores.map((s) => (
-                <option key={s.storeId || s.unitId} value={s.storeId}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
 
             <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
               <input
@@ -342,14 +633,38 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-4 py-2 text-left font-medium text-gray-500">Store</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-500">
-                      Avg Compliance
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-500">People</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-500">Compliant</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-500">Noncompliant</th>
-                    <th className="px-4 py-2 text-right font-medium text-gray-500">Avg Courses</th>
+                    <SortTh
+                      label="Store"
+                      sortKey="store"
+                      sort={storeSort}
+                      onSort={onStoreSort}
+                      align="left"
+                    />
+                    <SortTh
+                      label="Avg Compliance"
+                      sortKey="rate"
+                      sort={storeSort}
+                      onSort={onStoreSort}
+                    />
+                    <SortTh label="People" sortKey="people" sort={storeSort} onSort={onStoreSort} />
+                    <SortTh
+                      label="Compliant"
+                      sortKey="compliant"
+                      sort={storeSort}
+                      onSort={onStoreSort}
+                    />
+                    <SortTh
+                      label="Noncompliant"
+                      sortKey="noncompliant"
+                      sort={storeSort}
+                      onSort={onStoreSort}
+                    />
+                    <SortTh
+                      label="Avg Courses"
+                      sortKey="courses"
+                      sort={storeSort}
+                      onSort={onStoreSort}
+                    />
                   </tr>
                 </thead>
                 <tbody>
@@ -371,15 +686,15 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
                       <Fragment key={s.storeId || s.unitId}>
                         <tr
                           onClick={() => toggleRow(s)}
-                          className={`cursor-pointer hover:bg-gray-50 ${
+                          className={`cursor-pointer transition-colors ${
                             newMarket ? "border-t-2 border-gray-300" : "border-t border-gray-100"
-                          } ${isOpen ? "bg-gray-50" : ""}`}
+                          } ${rowTone(s.complianceRate, isOpen)}`}
                         >
                           <td className="px-4 py-2 whitespace-nowrap text-gray-900">{s.label}</td>
                           <td
                             className={`px-4 py-2 text-right tabular-nums font-medium ${rateColor(
                               s.complianceRate,
-                            )} ${rateBg(s.complianceRate)}`}
+                            )}`}
                           >
                             {fmtPct(s.complianceRate)}
                           </td>
@@ -415,23 +730,47 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
                                 <table className="w-full border-collapse text-xs">
                                   <thead>
                                     <tr className="border-b border-gray-200">
-                                      <th className="px-2 py-1 text-left font-medium text-gray-500">
-                                        Name
-                                      </th>
-                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
-                                        Courses
-                                      </th>
-                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
-                                        Completions
-                                      </th>
-                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
-                                        Compliance Rate
-                                      </th>
+                                      <SortTh
+                                        size="sm"
+                                        align="left"
+                                        label="Name"
+                                        sortKey="name"
+                                        sort={rosterSort[s.unitId] ?? NO_SORT}
+                                        onSort={(k) => onRosterSort(s.unitId, k)}
+                                      />
+                                      <SortTh
+                                        size="sm"
+                                        label="Courses"
+                                        sortKey="courses"
+                                        sort={rosterSort[s.unitId] ?? NO_SORT}
+                                        onSort={(k) => onRosterSort(s.unitId, k)}
+                                      />
+                                      <SortTh
+                                        size="sm"
+                                        label="Completions"
+                                        sortKey="completions"
+                                        sort={rosterSort[s.unitId] ?? NO_SORT}
+                                        onSort={(k) => onRosterSort(s.unitId, k)}
+                                      />
+                                      <SortTh
+                                        size="sm"
+                                        label="Compliance Rate"
+                                        sortKey="rate"
+                                        sort={rosterSort[s.unitId] ?? NO_SORT}
+                                        onSort={(k) => onRosterSort(s.unitId, k)}
+                                      />
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {roster.map((m) => (
-                                      <tr key={m.id} className="border-t border-gray-100">
+                                    {sortRows(
+                                      roster,
+                                      rosterSort[s.unitId] ?? NO_SORT,
+                                      memberValue,
+                                    ).map((m) => (
+                                      <tr
+                                        key={m.id}
+                                        className="border-t border-gray-100 transition-colors hover:bg-gray-50"
+                                      >
                                         <td className="px-2 py-1 whitespace-nowrap text-gray-800">
                                           {m.name}
                                         </td>
@@ -485,7 +824,159 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
             </div>
           </section>
         )}
-      </main>
+
+        {status === "done" && report && (
+          <section>
+            <CopyableTitle title="CERTIFICATION TESTS BY STORE" targetRef={testsRef} />
+            <div
+              ref={testsRef}
+              className="mt-2 rounded-lg border border-gray-200 bg-white overflow-x-auto"
+            >
+              {testsStatus === "loading" && (
+                <p className="px-4 py-6 text-sm text-gray-500">Loading certification tests…</p>
+              )}
+
+              {testsStatus === "error" && (
+                <p className="px-4 py-6 text-sm text-red-700">
+                  Couldn&apos;t load certification tests. {testsError}
+                </p>
+              )}
+
+              {testsStatus === "done" && tests && (
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <SortTh
+                        label="Store"
+                        sortKey="store"
+                        sort={testSort}
+                        onSort={onTestSort}
+                        align="left"
+                      />
+                      {tests.tests.map((t) => (
+                        <SortTh
+                          key={t.id}
+                          label={t.short}
+                          title={t.label}
+                          sortKey={t.id}
+                          sort={testSort}
+                          onSort={onTestSort}
+                        />
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleTestStores.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={tests.tests.length + 1}
+                          className="px-4 py-6 text-center text-sm text-gray-500"
+                        >
+                          No stores match the current filters.
+                        </td>
+                      </tr>
+                    )}
+
+                    {visibleTestStores.map((s, i) => {
+                      const prev = visibleTestStores[i - 1];
+                      const newMarket = i > 0 && marketOf(s.label) !== marketOf(prev.label);
+                      const isOpen = openTestStores.has(s.unitId);
+
+                      return (
+                        <Fragment key={s.storeId || s.unitId}>
+                          <tr
+                            onClick={() => toggleTestStore(s.unitId)}
+                            className={`cursor-pointer transition-colors ${
+                              newMarket ? "border-t-2 border-gray-300" : "border-t border-gray-100"
+                            } ${isOpen ? "bg-gray-50" : "hover:bg-gray-50"}`}
+                          >
+                            <td className="px-4 py-2 whitespace-nowrap text-gray-900">{s.label}</td>
+                            {tests.tests.map((t) => (
+                              <td
+                                key={t.id}
+                                className="px-4 py-2 text-right tabular-nums text-gray-700"
+                              >
+                                {fmtPct(s.rates[t.id] ?? null)}
+                              </td>
+                            ))}
+                          </tr>
+
+                          {isOpen && (
+                            <tr className="border-t border-gray-100">
+                              <td
+                                colSpan={tests.tests.length + 1}
+                                className="bg-gray-50 px-4 py-3"
+                              >
+                                {s.people.length === 0 ? (
+                                  <p className="text-xs text-gray-500">
+                                    Nobody at {s.label} is assigned these tests.
+                                  </p>
+                                ) : (
+                                  <table className="w-full border-collapse text-xs">
+                                    <thead>
+                                      <tr className="border-b border-gray-200">
+                                        <SortTh
+                                          size="sm"
+                                          align="left"
+                                          label="Name"
+                                          sortKey="name"
+                                          sort={peopleSort[s.unitId] ?? NO_SORT}
+                                          onSort={(k) => onPeopleSort(s.unitId, k)}
+                                        />
+                                        {tests.tests.map((t) => (
+                                          <SortTh
+                                            key={t.id}
+                                            size="sm"
+                                            label={t.short}
+                                            title={t.label}
+                                            sortKey={t.id}
+                                            sort={peopleSort[s.unitId] ?? NO_SORT}
+                                            onSort={(k) => onPeopleSort(s.unitId, k)}
+                                          />
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {sortRows(
+                                        s.people,
+                                        peopleSort[s.unitId] ?? NO_SORT,
+                                        testPersonValue,
+                                      ).map((p) => (
+                                        <tr
+                                          key={p.id}
+                                          className="border-t border-gray-100 transition-colors hover:bg-gray-50"
+                                        >
+                                          <td className="px-2 py-1 whitespace-nowrap text-gray-800">
+                                            {p.name}
+                                          </td>
+                                          {tests.tests.map((t) => (
+                                            <td
+                                              key={t.id}
+                                              className={`px-2 py-1 text-right tabular-nums font-medium ${rateColor(
+                                                p.results[t.id] ?? null,
+                                              )}`}
+                                            >
+                                              {fmtPct(p.results[t.id] ?? null)}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+        )}
+            </main>
     </div>
   );
 }

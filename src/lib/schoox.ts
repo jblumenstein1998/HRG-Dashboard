@@ -484,3 +484,198 @@ export function fetchZuReportFresh(): Promise<ZuReport> {
   invalidateSchooxSession();
   return buildReport();
 }
+
+// ── Certification tests ───────────────────────────────────────────────────────
+
+/**
+ * The four certification tests the ZU tab reports on, in the order they sit on
+ * the career path: trainer, shift leader, assistant manager, general manager.
+ *
+ * Hardcoded rather than discovered because this is an editorial choice, not a
+ * complete list — Zaxby's publishes sixty-eight compliance courses and these
+ * are the four HRG manages against. The ids come from the academy's course
+ * catalogue; `scripts/schoox-courses-explore.mjs` prints the full list with ids
+ * if one is ever renamed or replaced.
+ */
+export const ZU_TESTS = [
+  { id: "806609", label: "Train-the-Trainer", short: "Train-the-Trainer" },
+  { id: "7041306", label: "Shift Leader Performance Assessment", short: "Shift Leader" },
+  { id: "4966964", label: "Assistant Manager Readiness Check", short: "Assistant Mgr" },
+  { id: "9116252", label: "General Manager Certification Test", short: "General Mgr" },
+] as const;
+
+/** One person's result on each test. Null means not assigned that test. */
+export type ZuTestPerson = {
+  id: string;
+  name: string;
+  /** Test id → progress 0–100. */
+  results: Record<string, number | null>;
+};
+
+export type ZuTestStore = {
+  unitId: string;
+  storeId: string;
+  label: string;
+  /** Test id → the store's completion rate for it, 0–100. */
+  rates: Record<string, number | null>;
+  people: ZuTestPerson[];
+};
+
+/**
+ * The report carries the test list it was built from. The ZU tab is a client
+ * component and cannot import ZU_TESTS directly — this module reaches for
+ * next/cache and holds a session at module scope, neither of which belongs in a
+ * browser bundle — so shipping the labels with the data keeps one definition
+ * instead of two that can drift apart.
+ */
+export type ZuTestReport = {
+  tests: { id: string; label: string; short: string }[];
+  stores: ZuTestStore[];
+  fetchedAt: number;
+};
+
+type CourseMember = {
+  id?: number | string;
+  name?: string;
+  surname?: string;
+  progress?: string | number;
+};
+
+/** Schoox returns at most this many roster rows per request. */
+const COURSE_PAGE_SIZE = 50;
+
+/**
+ * One test, for one store: the store's completion rate plus every assigned
+ * person's progress.
+ *
+ * Note where `courseId` goes — the query string, beside `action`, not the body.
+ * In the body it is ignored and the response covers the whole academy, which is
+ * how this endpoint hid through forty-odd name guesses that all posted it as a
+ * form field.
+ *
+ * `all` is the row offset, despite the name. It reads like a boolean asking for
+ * everything, and sending "1" for that reason quietly skipped the first person
+ * of every roster — alphabetically first, so always a real person, and the
+ * store's percentage never moved because Schoox computes `general` over the
+ * whole roster rather than the page it hands back. Offsets are the only paging
+ * that works here: start, length and limit are all accepted and all ignored.
+ */
+async function fetchTestForUnit(
+  courseId: string,
+  unitId: string,
+): Promise<{ rate: number | null; members: CourseMember[] }> {
+  const page = (offset: number) => {
+    const body = filterParams(unitId);
+    body.set("search", "");
+    body.set("order", "1");
+    body.set("coupon_id", "0");
+    body.set("dueDate", "1");
+    body.set("sorting", "name");
+    body.set("sorting_type", "1");
+    body.set("returnDropDowns", "false");
+    body.set("all", String(offset));
+    body.set("customFields", "");
+
+    return postJson<{
+      general?: { completion_rates?: number; compliant_rate?: number };
+      members?: CourseMember[];
+    }>(
+      `/academies/panel/organize/actions.php?action=getCourse&courseId=${courseId}` +
+        `&academyId=${ACADEMY_ID}&membersType=3&page=dashboard`,
+      body,
+    );
+  };
+
+  const members: CourseMember[] = [];
+  let general: { completion_rates?: number; compliant_rate?: number } = {};
+
+  // Every HRG store sits well inside one page today, so this is a single
+  // request in practice; the loop is what keeps it correct if a roster grows.
+  for (let offset = 0, guard = 0; guard < 40; guard++) {
+    const json = await page(offset);
+    if (offset === 0) general = json.general ?? {};
+
+    const rows = json.members ?? [];
+    members.push(...rows);
+    if (rows.length < COURSE_PAGE_SIZE) break;
+    offset += rows.length;
+  }
+
+  const rate =
+    typeof general.completion_rates === "number"
+      ? general.completion_rates
+      : typeof general.compliant_rate === "number"
+        ? general.compliant_rate
+        : null;
+
+  return { rate, members };
+}
+
+function progressOf(m: CourseMember): number | null {
+  const n = typeof m.progress === "number" ? m.progress : Number.parseFloat(String(m.progress));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The whole grid: every store against the four tests, with the people behind
+ * each store's numbers.
+ *
+ * Four tests across twelve stores is forty-eight requests, so it is built once
+ * per revalidation window and served whole. The people are bundled rather than
+ * fetched per expanded row because they arrive in the same responses the rates
+ * come from — asking for them separately would mean making these calls twice.
+ */
+async function buildTestReport(): Promise<ZuTestReport> {
+  const units = await fetchUnits();
+
+  const stores = await mapLimited(units, 4, async (u) => {
+    const rates: Record<string, number | null> = {};
+    const byPerson = new Map<string, ZuTestPerson>();
+
+    for (const test of ZU_TESTS) {
+      const { rate, members } = await fetchTestForUnit(test.id, u.unitId);
+      rates[test.id] = rate;
+
+      for (const m of members) {
+        const id = String(m.id ?? "");
+        if (!id) continue;
+        let person = byPerson.get(id);
+        if (!person) {
+          person = {
+            id,
+            name: [m.name, m.surname].filter(Boolean).join(" ").trim() || "(no name)",
+            // Absent stays absent: a test a person was never assigned reads as
+            // "—", not as a zero they failed to earn.
+            results: Object.fromEntries(ZU_TESTS.map((t) => [t.id, null])),
+          };
+          byPerson.set(id, person);
+        }
+        person.results[test.id] = progressOf(m);
+      }
+    }
+
+    const people = [...byPerson.values()].sort((a, b) => {
+      // Least finished first, on the tests each person actually holds — the
+      // reason to open a store is to find who still owes something.
+      const done = (p: ZuTestPerson) => {
+        const held = Object.values(p.results).filter((v): v is number => v !== null);
+        return held.length ? held.reduce((t, v) => t + v, 0) / held.length : 101;
+      };
+      return done(a) - done(b) || a.name.localeCompare(b.name);
+    });
+
+    return { ...u, rates, people };
+  });
+
+  stores.sort((a, b) => a.label.localeCompare(b.label));
+  return { tests: ZU_TESTS.map((t) => ({ ...t })), stores, fetchedAt: Date.now() };
+}
+
+const cachedTestReport = unstable_cache(buildTestReport, ["zu-tests"], {
+  revalidate: REVALIDATE_SECONDS,
+  tags: ["zu-compliance"],
+});
+
+export function fetchZuTestReport(): Promise<ZuTestReport> {
+  return cachedTestReport();
+}

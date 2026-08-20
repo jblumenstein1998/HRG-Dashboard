@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { fetchZuReport, fetchZuReportFresh } from "@/lib/schoox";
 
 /**
@@ -12,6 +13,13 @@ import { fetchZuReport, fetchZuReportFresh } from "@/lib/schoox";
  */
 export async function GET(req: NextRequest) {
   const fresh = req.nextUrl.searchParams.get("refresh") === "1";
+
+  // Refresh means the whole tab, not just this response. The roster and course
+  // reads are cached under the same tag, and leaving them alone would refresh
+  // the store table against Schoox while the tables below it kept answering
+  // from an hour-old cache.
+  if (fresh) revalidateTag("zu-compliance", { expire: 0 });
+
   try {
     const report = fresh ? await fetchZuReportFresh() : await fetchZuReport();
     return NextResponse.json(report);
