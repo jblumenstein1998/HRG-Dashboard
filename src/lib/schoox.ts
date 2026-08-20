@@ -35,6 +35,13 @@ const UA =
 /** The unfiltered scope — Schoox's own "Choose Store" placeholder id. */
 const ALL_STORES_UNIT = "0";
 
+/**
+ * How long a cached read stays good. Declared up here because both cache
+ * wrappers below reference it at module scope, where a `const` further down
+ * the file would still be in its temporal dead zone and throw on import.
+ */
+const REVALIDATE_SECONDS = 60 * 60;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type ZuStats = {
@@ -66,6 +73,16 @@ export type ZuReport = {
   total: ZuStats;
   stores: ZuStore[];
   fetchedAt: number;
+};
+
+/** One person, as the compliance dashboard's own roster lists them. */
+export type ZuMember = {
+  id: string;
+  name: string;
+  /** 0–100. Null when Schoox omits it. */
+  complianceRate: number | null;
+  totalCourses: number;
+  completions: number;
 };
 
 // ── Session ───────────────────────────────────────────────────────────────────
@@ -288,6 +305,74 @@ async function fetchStats(unitId: string): Promise<ZuStats> {
   return toStats(json.generalStats ?? {});
 }
 
+type MemberRow = {
+  id?: string;
+  name?: string;
+  surname?: string;
+  compliant_rate?: number;
+  completion_rate?: number;
+  total_courses?: number;
+  total_completions?: number;
+};
+
+/**
+ * The people behind one store's number.
+ *
+ * `getMain` answers the whole roster in a single response — it reports `all`
+ * alongside `members` and the two matched for every store, the largest of which
+ * is around fifty — so there is no paging to do. If a store ever outgrows that,
+ * `all` is the count to compare against `members.length` to notice.
+ */
+async function fetchMembers(unitId: string): Promise<ZuMember[]> {
+  const body = filterParams(unitId);
+  body.set("search", "");
+  body.set("order", "1");
+  body.set("dueDate", "1");
+  body.set("sorting", "name");
+  body.set("sorting_type", "1");
+  body.set("returnDropDowns", "false");
+  body.set("from", "");
+  body.set("to", "");
+  body.set("all", "0");
+  body.set("extId", "");
+  body.set("acadMembersStatus", "4");
+  body.set("complianceType", "courses");
+  body.set("past", "false");
+  body.set("limitedAccess", "");
+
+  const json = await postJson<{ members?: MemberRow[] }>(
+    "/academies/panel/organize/actions.php?action=getMain&page=dashboard",
+    body,
+  );
+
+  const members = (json.members ?? []).map((m) => ({
+    id: String(m.id ?? ""),
+    name: [m.name, m.surname].filter(Boolean).join(" ").trim() || "(no name)",
+    complianceRate:
+      typeof m.compliant_rate === "number"
+        ? m.compliant_rate
+        : typeof m.completion_rate === "number"
+          ? m.completion_rate
+          : null,
+    totalCourses: m.total_courses ?? 0,
+    completions: m.total_completions ?? 0,
+  }));
+
+  // Lowest rate first: the point of opening a store is to see who is behind,
+  // and Schoox's own alphabetical order buries them.
+  members.sort((a, b) => (a.complianceRate ?? 101) - (b.complianceRate ?? 101));
+  return members;
+}
+
+const cachedMembers = unstable_cache(fetchMembers, ["zu-members"], {
+  revalidate: REVALIDATE_SECONDS,
+  tags: ["zu-compliance"],
+});
+
+export function fetchZuMembers(unitId: string): Promise<ZuMember[]> {
+  return cachedMembers(unitId);
+}
+
 type Unit = { id: string; name: string };
 
 /**
@@ -354,8 +439,6 @@ async function buildReport(): Promise<ZuReport> {
 
   return { total, stores, fetchedAt: Date.now() };
 }
-
-const REVALIDATE_SECONDS = 60 * 60;
 
 /**
  * Wrapped in `unstable_cache` for the same reason lib/par.ts is: a module-level

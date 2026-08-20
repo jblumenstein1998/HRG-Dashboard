@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
@@ -10,11 +10,9 @@ import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 /**
  * Zaxby's University — training compliance out of Schoox.
  *
- * The headline is Average Compliance Rate, the tile the Schoox compliance
- * dashboard leads with, for whichever store is selected. "All Stores" is the
- * unfiltered academy figure Schoox reports itself, not an average of the rows
- * below: a mean of twelve store percentages would weight a 30-person store the
- * same as a 60-person one and quietly disagree with Schoox's own number.
+ * One table, one row per store, sorted TN then VA the way every other tab
+ * orders them. Opening a row lists that store's people worst-rate-first, which
+ * is the question a store row raises: not "how bad", but "who".
  */
 
 const ALL_STORES = "";
@@ -33,17 +31,24 @@ type ZuStore = ZuStats & { unitId: string; storeId: string; label: string };
 
 type ZuReport = { total: ZuStats; stores: ZuStore[]; fetchedAt: number };
 
+type ZuMember = {
+  id: string;
+  name: string;
+  complianceRate: number | null;
+  totalCourses: number;
+  completions: number;
+};
+
+type MemberState = "loading" | "error" | ZuMember[];
+
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${Math.round(v)}%`;
 }
 
-/** Schoox sends "522:38:34" for a store and a bare hour count for the academy. */
-function fmtHours(totalTime: string): string {
-  if (!totalTime) return "—";
-  const hours = Number(totalTime.split(":")[0]);
-  return Number.isFinite(hours) ? `${hours.toLocaleString("en-US")} hrs` : totalTime;
+function num(v: number): string {
+  return v.toLocaleString("en-US");
 }
 
 /**
@@ -74,7 +79,13 @@ function fmtFetched(at: number): string {
   })}`;
 }
 
-// ── Store ordering ────────────────────────────────────────────────────────────
+// ── Store ordering and grouping ───────────────────────────────────────────────
+
+function marketOf(label: string): "TN" | "VA" | null {
+  if (TN_STORES.includes(label)) return "TN";
+  if (VA_STORES.includes(label)) return "VA";
+  return null;
+}
 
 /**
  * TN then VA, in the order every other tab lists them. Stores Schoox knows
@@ -90,10 +101,32 @@ function sortStores(stores: ZuStore[]): ZuStore[] {
   });
 }
 
-function marketOf(label: string): "TN" | "VA" | null {
-  if (TN_STORES.includes(label)) return "TN";
-  if (VA_STORES.includes(label)) return "VA";
-  return null;
+/**
+ * A subtotal for whatever subset is on screen.
+ *
+ * Average Compliance Rate is the mean of each person's rate, so rolling stores
+ * up means weighting each store's rate by its headcount — a plain mean of the
+ * store percentages would let an 18-person store pull as hard as a 51-person
+ * one. Weighting this way reproduces Schoox's own academy figure exactly, which
+ * is why the all-stores row can fall back to the number Schoox reports and
+ * still agree with the rows above it.
+ */
+function subtotal(stores: ZuStore[]): ZuStats {
+  const people = stores.reduce((t, s) => t + s.people, 0);
+  const weighted = (pick: (s: ZuStore) => number | null) => {
+    if (people === 0) return null;
+    const sum = stores.reduce((t, s) => t + (pick(s) ?? 0) * s.people, 0);
+    return sum / people;
+  };
+  return {
+    complianceRate: weighted((s) => s.complianceRate),
+    people,
+    compliant: stores.reduce((t, s) => t + s.compliant, 0),
+    noncompliant: stores.reduce((t, s) => t + s.noncompliant, 0),
+    complianceScore: null,
+    averageCourses: Math.round(weighted((s) => s.averageCourses) ?? 0),
+    totalTime: "",
+  };
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -105,7 +138,11 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [error, setError] = useState<string>("");
   const [storeId, setStoreId] = useState<string>(ALL_STORES);
+  const [showTN, setShowTN] = useState(true);
+  const [showVA, setShowVA] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [members, setMembers] = useState<Record<string, MemberState>>({});
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -122,6 +159,8 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
       }
       setReport(data);
       setStatus("done");
+      // A refresh re-reads Schoox, so any roster already on screen is stale.
+      if (refresh) setMembers({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus("error");
@@ -134,13 +173,62 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
     void load(false);
   }, [load]);
 
-  const stores = report ? sortStores(report.stores) : [];
-  const selected = storeId === ALL_STORES ? null : stores.find((s) => s.storeId === storeId) ?? null;
+  const toggleRow = useCallback(
+    (store: ZuStore) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(store.unitId)) next.delete(store.unitId);
+        else next.add(store.unitId);
+        return next;
+      });
 
-  // A selected store that vanished from a refreshed report would otherwise
-  // leave the headline blank with the picker still naming it.
-  const scope: ZuStats | null = selected ?? report?.total ?? null;
-  const scopeLabel = selected ? selected.label : "All Stores";
+      // Fetched once per store and kept, so collapsing and reopening a row is
+      // instant rather than another round trip to Schoox.
+      setMembers((prev) => {
+        if (prev[store.unitId]) return prev;
+        void (async () => {
+          try {
+            const res = await fetch(`/api/zu/members?unitId=${encodeURIComponent(store.unitId)}`);
+            const data = (await res.json()) as { members?: ZuMember[]; error?: string };
+            setMembers((m) => ({
+              ...m,
+              [store.unitId]: res.ok && data.members ? data.members : "error",
+            }));
+          } catch {
+            setMembers((m) => ({ ...m, [store.unitId]: "error" }));
+          }
+        })();
+        return { ...prev, [store.unitId]: "loading" };
+      });
+    },
+    [],
+  );
+
+  const allStores = report ? sortStores(report.stores) : [];
+  const visible = allStores.filter((s) => {
+    const market = marketOf(s.label);
+    if (market === "TN" && !showTN) return false;
+    if (market === "VA" && !showVA) return false;
+    return storeId === ALL_STORES || s.storeId === storeId;
+  });
+
+  // Schoox's own academy figure when everything is on screen; a weighted
+  // subtotal otherwise, so the bottom row always describes the rows above it.
+  const showingEverything = report !== null && visible.length === allStores.length;
+  const totals = report
+    ? showingEverything
+      ? report.total
+      : subtotal(visible)
+    : null;
+  const totalsLabel = showingEverything
+    ? "All Stores"
+    : showTN && !showVA
+      ? "Tennessee"
+      : showVA && !showTN
+        ? "Virginia"
+        : "Selected";
+
+  const COLUMNS = 6;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -174,7 +262,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
+          <div className="flex flex-wrap items-center justify-end gap-3 flex-1 min-w-0">
             <label className="sr-only" htmlFor="zu-store">
               Filter by store
             </label>
@@ -186,12 +274,31 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
               className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 disabled:opacity-50 cursor-pointer focus:outline-none"
             >
               <option value={ALL_STORES}>All Stores</option>
-              {stores.map((s) => (
+              {allStores.map((s) => (
                 <option key={s.storeId || s.unitId} value={s.storeId}>
                   {s.label}
                 </option>
               ))}
             </select>
+
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showVA}
+                onChange={(e) => setShowVA(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              VA
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showTN}
+                onChange={(e) => setShowTN(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              TN
+            </label>
 
             <button
               onClick={() => void load(true)}
@@ -216,64 +323,48 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
           </div>
         )}
 
-        {status === "done" && scope && (
-          <>
-            <section className="rounded-lg border border-gray-200 bg-white px-5 py-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Average Compliance Rate — {scopeLabel}
-              </p>
-              <p className={`mt-2 text-5xl font-semibold tabular-nums ${rateColor(scope.complianceRate)}`}>
-                {fmtPct(scope.complianceRate)}
-              </p>
-
-              <dl className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-4 border-t border-gray-100 pt-4">
-                {[
-                  { label: "People", value: scope.people.toLocaleString("en-US") },
-                  { label: "Compliant", value: scope.compliant.toLocaleString("en-US") },
-                  { label: "Noncompliant", value: scope.noncompliant.toLocaleString("en-US") },
-                  { label: "Avg Courses", value: scope.averageCourses.toLocaleString("en-US") },
-                ].map((s) => (
-                  <div key={s.label}>
-                    <dt className="text-xs text-gray-500">{s.label}</dt>
-                    <dd className="text-lg font-medium tabular-nums text-gray-900">{s.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-
-            <section>
-              <CopyableTitle title="BY STORE" targetRef={tableRef} />
-              <div
-                ref={tableRef}
-                className="mt-2 rounded-lg border border-gray-200 bg-white overflow-x-auto"
-              >
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="px-4 py-2 text-left font-medium text-gray-500">Store</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">
-                        Avg Compliance
-                      </th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">People</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Compliant</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">
-                        Noncompliant
-                      </th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Avg Courses</th>
-                      <th className="px-4 py-2 text-right font-medium text-gray-500">Total Time</th>
+        {status === "done" && report && (
+          <section>
+            <CopyableTitle title="AVERAGE COMPLIANCE RATE BY STORE" targetRef={tableRef} />
+            <div
+              ref={tableRef}
+              className="mt-2 rounded-lg border border-gray-200 bg-white overflow-x-auto"
+            >
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="px-4 py-2 text-left font-medium text-gray-500">Store</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-500">
+                      Avg Compliance
+                    </th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-500">People</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-500">Compliant</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-500">Noncompliant</th>
+                    <th className="px-4 py-2 text-right font-medium text-gray-500">Avg Courses</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.length === 0 && (
+                    <tr>
+                      <td colSpan={COLUMNS} className="px-4 py-6 text-center text-sm text-gray-500">
+                        No stores match the current filters.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {stores.map((s, i) => {
-                      const prev = stores[i - 1];
-                      const newMarket = i > 0 && marketOf(s.label) !== marketOf(prev.label);
-                      return (
+                  )}
+
+                  {visible.map((s, i) => {
+                    const prev = visible[i - 1];
+                    const newMarket = i > 0 && marketOf(s.label) !== marketOf(prev.label);
+                    const isOpen = expanded.has(s.unitId);
+                    const roster = members[s.unitId];
+
+                    return (
+                      <Fragment key={s.storeId || s.unitId}>
                         <tr
-                          key={s.storeId || s.unitId}
-                          onClick={() => setStoreId(s.storeId)}
+                          onClick={() => toggleRow(s)}
                           className={`cursor-pointer hover:bg-gray-50 ${
                             newMarket ? "border-t-2 border-gray-300" : "border-t border-gray-100"
-                          } ${s.storeId === storeId ? "bg-gray-50" : ""}`}
+                          } ${isOpen ? "bg-gray-50" : ""}`}
                         >
                           <td className="px-4 py-2 whitespace-nowrap text-gray-900">{s.label}</td>
                           <td
@@ -284,56 +375,106 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
                             {fmtPct(s.complianceRate)}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                            {s.people.toLocaleString("en-US")}
+                            {num(s.people)}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                            {s.compliant.toLocaleString("en-US")}
+                            {num(s.compliant)}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                            {s.noncompliant.toLocaleString("en-US")}
+                            {num(s.noncompliant)}
                           </td>
                           <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                            {s.averageCourses.toLocaleString("en-US")}
-                          </td>
-                          <td className="px-4 py-2 text-right tabular-nums text-gray-700">
-                            {fmtHours(s.totalTime)}
+                            {num(s.averageCourses)}
                           </td>
                         </tr>
-                      );
-                    })}
 
-                    {report && (
-                      <tr className="border-t-2 border-gray-300 font-semibold text-gray-900">
-                        <td className="px-4 py-2 whitespace-nowrap">All Stores</td>
-                        <td
-                          className={`px-4 py-2 text-right tabular-nums ${rateColor(
-                            report.total.complianceRate,
-                          )}`}
-                        >
-                          {fmtPct(report.total.complianceRate)}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {report.total.people.toLocaleString("en-US")}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {report.total.compliant.toLocaleString("en-US")}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {report.total.noncompliant.toLocaleString("en-US")}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {report.total.averageCourses.toLocaleString("en-US")}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {fmtHours(report.total.totalTime)}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </>
+                        {isOpen && (
+                          <tr className="border-t border-gray-100">
+                            <td colSpan={COLUMNS} className="bg-gray-50 px-4 py-3">
+                              {roster === "loading" && (
+                                <p className="text-xs text-gray-500">Loading {s.label}&apos;s team…</p>
+                              )}
+                              {roster === "error" && (
+                                <p className="text-xs text-red-700">
+                                  Couldn&apos;t load {s.label}&apos;s team.
+                                </p>
+                              )}
+                              {Array.isArray(roster) && roster.length === 0 && (
+                                <p className="text-xs text-gray-500">No people at {s.label}.</p>
+                              )}
+                              {Array.isArray(roster) && roster.length > 0 && (
+                                <table className="w-full border-collapse text-xs">
+                                  <thead>
+                                    <tr className="border-b border-gray-200">
+                                      <th className="px-2 py-1 text-left font-medium text-gray-500">
+                                        Name
+                                      </th>
+                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
+                                        Courses
+                                      </th>
+                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
+                                        Completions
+                                      </th>
+                                      <th className="px-2 py-1 text-right font-medium text-gray-500">
+                                        Compliance Rate
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {roster.map((m) => (
+                                      <tr key={m.id} className="border-t border-gray-100">
+                                        <td className="px-2 py-1 whitespace-nowrap text-gray-800">
+                                          {m.name}
+                                        </td>
+                                        <td className="px-2 py-1 text-right tabular-nums text-gray-600">
+                                          {num(m.totalCourses)}
+                                        </td>
+                                        <td className="px-2 py-1 text-right tabular-nums text-gray-600">
+                                          {num(m.completions)}
+                                        </td>
+                                        <td
+                                          className={`px-2 py-1 text-right tabular-nums font-medium ${rateColor(
+                                            m.complianceRate,
+                                          )}`}
+                                        >
+                                          {fmtPct(m.complianceRate)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+
+                  {totals && visible.length > 0 && (
+                    <tr className="border-t-2 border-gray-300 font-semibold text-gray-900">
+                      <td className="px-4 py-2 whitespace-nowrap">{totalsLabel}</td>
+                      <td
+                        className={`px-4 py-2 text-right tabular-nums ${rateColor(
+                          totals.complianceRate,
+                        )}`}
+                      >
+                        {fmtPct(totals.complianceRate)}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums">{num(totals.people)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums">{num(totals.compliant)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums">
+                        {num(totals.noncompliant)}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums">
+                        {num(totals.averageCourses)}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
         )}
       </main>
     </div>
