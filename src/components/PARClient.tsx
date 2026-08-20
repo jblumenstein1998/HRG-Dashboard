@@ -694,9 +694,13 @@ function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
   const prior = r.txLY > 0 ? r.netSalesLY / r.txLY : 0;
   return { value, prior, compPct: derivedCompPct(value, prior) };
 }
-// Productivity ($/labor hour) is this-year-only — no prior-year comparison.
+// Productivity ($/labor hour) and TPLH (transactions/labor hour) are
+// this-year-only — the snapshot carries no prior-year labor hours.
 function deriveSplh(r: SnapshotRaw): number | null {
   return r.laborHoursTY > 0 ? r.netSalesTY / r.laborHoursTY : null;
+}
+function deriveSnapshotTplh(r: SnapshotRaw): number | null {
+  return r.laborHoursTY > 0 ? r.txTY / r.laborHoursTY : null;
 }
 function sumSnapshotRaw(stores: SnapshotRaw[]): SnapshotRaw {
   const clockedIn = stores.filter(r => r.clockedInTY != null);
@@ -846,11 +850,12 @@ function SnapshotVsLastYearTable({
       <table className="w-full table-fixed">
         <colgroup>
           <col className="w-[16%]" />
-          <col className="w-[20%]" />
-          <col className="w-[20%]" />
-          <col className="w-[20%]" />
-          <col className="w-[14%]" />
-          <col className="w-[10%]" />
+          <col className="w-[19%]" />
+          <col className="w-[19%]" />
+          <col className="w-[19%]" />
+          <col className="w-[11%]" />
+          <col className="w-[8%]" />
+          <col className="w-[8%]" />
         </colgroup>
         <thead>
           <tr className="border-b border-gray-100">
@@ -864,13 +869,16 @@ function SnapshotVsLastYearTable({
               Productivity
             </th>
             <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              TPLH
+            </th>
+            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               Clocked In
             </th>
           </tr>
         </thead>
         <tbody>
           {stores.length === 0 && loading ? (
-            <tr><td colSpan={6} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+            <tr><td colSpan={7} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
           ) : (
             <>
               {groups.map(group => (
@@ -882,6 +890,7 @@ function SnapshotVsLastYearTable({
                       </td>
                       {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(s)} fmt={c.fmt} />)}
                       <SimpleFigureCell value={deriveSplh(s)} fmt={fmtProductivity} />
+                      <SimpleFigureCell value={deriveSnapshotTplh(s)} fmt={fmtTplh} />
                       <SimpleFigureCell value={s.clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
                     </tr>
                   ))}
@@ -889,6 +898,7 @@ function SnapshotVsLastYearTable({
                     <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
                     {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumSnapshotRaw(group.stores))} fmt={c.fmt} />)}
                     <SimpleFigureCell value={deriveSplh(sumSnapshotRaw(group.stores))} fmt={fmtProductivity} />
+                    <SimpleFigureCell value={deriveSnapshotTplh(sumSnapshotRaw(group.stores))} fmt={fmtTplh} />
                     <SimpleFigureCell value={sumSnapshotRaw(group.stores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
                   </tr>
                 </Fragment>
@@ -897,117 +907,8 @@ function SnapshotVsLastYearTable({
                 <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
                 {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumSnapshotRaw(hrgStores))} fmt={c.fmt} />)}
                 <SimpleFigureCell value={deriveSplh(sumSnapshotRaw(hrgStores))} fmt={fmtProductivity} />
+                <SimpleFigureCell value={deriveSnapshotTplh(sumSnapshotRaw(hrgStores))} fmt={fmtTplh} />
                 <SimpleFigureCell value={sumSnapshotRaw(hrgStores).clockedInTY} fmt={v => Math.round(v).toLocaleString()} />
-              </tr>
-            </>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Period net sales comp (P4/P5/P6, store rows + market summary) ─────────────
-
-type StorePeriodNetSales = { storeId: string; name: string; state: "TN" | "VA"; periods: Record<number, MetricFigure> };
-
-function periodColLabel(periodNum: number): string {
-  const p = PERIODS.find(x => x.period === periodNum);
-  return p ? periodLabel(p) : `P${periodNum}`;
-}
-
-function sumPeriodFigures(stores: StorePeriodNetSales[], periodNum: number): MetricFigure {
-  const value = stores.reduce((s, r) => s + (r.periods[periodNum]?.value ?? 0), 0);
-  const prior = stores.reduce((s, r) => s + (r.periods[periodNum]?.prior ?? 0), 0);
-  return { value, prior, compPct: derivedCompPct(value, prior) };
-}
-
-function usePeriodNetSalesComp(periodNums: number[]) {
-  const [stores, setStores] = useState<StorePeriodNetSales[]>([]);
-  const [loading, setLoading] = useState(true);
-  const periodsKey = periodNums.join(",");
-
-  const refetch = useCallback(() => {
-    setLoading(true);
-    fetch(`/api/par/period-net-sales-comp?periods=${periodsKey}`)
-      .then(r => r.json())
-      .then(d => setStores(d.stores ?? []))
-      .catch(err => console.error("[PAR] period-net-sales-comp fetch failed", err))
-      .finally(() => setLoading(false));
-  }, [periodsKey]);
-
-  useEffect(() => { refetch(); }, [refetch]);
-
-  return { stores, loading, refetch };
-}
-
-function PeriodNetSalesTable({
-  stores, loading, periodNums, showVA, showTN,
-}: {
-  stores: StorePeriodNetSales[];
-  loading: boolean;
-  periodNums: number[];
-  showVA: boolean;
-  showTN: boolean;
-}) {
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  const byName = (a: StorePeriodNetSales, b: StorePeriodNetSales) => a.name.localeCompare(b.name);
-  const tnStores = stores.filter(s => s.state === "TN").sort(byName);
-  const vaStores = stores.filter(s => s.state === "VA").sort(byName);
-  const groups = [
-    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
-  ];
-  const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
-
-  return (
-    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
-        <CopyableTitle title="Net Sales by Period" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
-        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
-      </div>
-      <table className="w-full">
-        <thead>
-          <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            {periodNums.map(n => (
-              <th key={n} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
-                {periodColLabel(n)} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {stores.length === 0 && loading ? (
-            <tr><td colSpan={periodNums.length + 1} className="px-3 py-6 text-center text-xs text-gray-400 animate-pulse">Loading…</td></tr>
-          ) : (
-            <>
-              {groups.map(group => (
-                <Fragment key={group.label}>
-                  {group.stores.map(s => (
-                    <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                      <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
-                        {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
-                      </td>
-                      {periodNums.map(n => (
-                        <MetricFigureCell key={n} figure={s.periods[n] ?? { value: 0, prior: 0, compPct: null }} fmt={fmtDollars} />
-                      ))}
-                    </tr>
-                  ))}
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <td className="px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-gray-700">{group.label}</td>
-                    {periodNums.map(n => (
-                      <MetricFigureCell key={n} figure={sumPeriodFigures(group.stores, n)} fmt={fmtDollars} />
-                    ))}
-                  </tr>
-                </Fragment>
-              ))}
-              <tr className="bg-gray-100 border-t-2 border-gray-200">
-                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
-                {periodNums.map(n => (
-                  <MetricFigureCell key={n} figure={sumPeriodFigures(hrgStores, n)} fmt={fmtDollars} />
-                ))}
               </tr>
             </>
           )}
@@ -1032,7 +933,6 @@ export default function PARClient({ locations, tabs, isAdmin }: { locations: PAR
   const transactionsComp = useMetricComp("/api/par/transactions-comp");
   const avgCheckComp = useAvgCheckComp();
   const salesSnapshot = useSalesSnapshot(snapshotRange);
-  const periodNetSalesComp = usePeriodNetSalesComp([4, 5, 6]);
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -1047,7 +947,6 @@ export default function PARClient({ locations, tabs, isAdmin }: { locations: PAR
     transactionsComp.refetch();
     avgCheckComp.refetch();
     salesSnapshot.refetch();
-    periodNetSalesComp.refetch();
     setRefreshing(false);
   };
 
@@ -1147,9 +1046,6 @@ export default function PARClient({ locations, tabs, isAdmin }: { locations: PAR
         </div>
         <div className="mt-6">
           <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="count" {...posData} />
-        </div>
-        <div className="mt-6">
-          <PeriodNetSalesTable stores={periodNetSalesComp.stores} loading={periodNetSalesComp.loading} periodNums={[4, 5, 6]} showVA={showVA} showTN={showTN} />
         </div>
       </main>
     </div>
