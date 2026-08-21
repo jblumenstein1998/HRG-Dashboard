@@ -499,7 +499,10 @@ export function fetchZuReportFresh(): Promise<ZuReport> {
  */
 export const ZU_TESTS = [
   { id: "806609", label: "Train-the-Trainer", short: "Train-the-Trainer" },
-  { id: "7041306", label: "Shift Leader Performance Assessment", short: "Shift Leader" },
+  // The shift-leader step is measured by the Manager Certification Test, whose
+  // title does not name the rank — the column header keeps the career-path
+  // wording and the full course name shows on hover.
+  { id: "805646", label: "Manager Certification Test", short: "Shift Leader" },
   { id: "4966964", label: "Assistant Manager Readiness Check", short: "Assistant Mgr" },
   { id: "9116252", label: "General Manager Certification Test", short: "General Mgr" },
 ] as const;
@@ -671,10 +674,13 @@ async function buildTestReport(): Promise<ZuTestReport> {
   return { tests: ZU_TESTS.map((t) => ({ ...t })), stores, fetchedAt: Date.now() };
 }
 
-const cachedTestReport = unstable_cache(buildTestReport, ["zu-tests"], {
-  revalidate: REVALIDATE_SECONDS,
-  tags: ["zu-compliance"],
-});
+// The test ids are part of the cache key: swapping which course backs a column
+// must not serve an hour of grid built against the old one.
+const cachedTestReport = unstable_cache(
+  buildTestReport,
+  ["zu-tests", ZU_TESTS.map((t) => t.id).join(",")],
+  { revalidate: REVALIDATE_SECONDS, tags: ["zu-compliance"] },
+);
 
 export function fetchZuTestReport(): Promise<ZuTestReport> {
   return cachedTestReport();
