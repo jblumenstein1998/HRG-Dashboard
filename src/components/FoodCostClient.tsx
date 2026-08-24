@@ -1619,6 +1619,32 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     }));
   }, [router]);
 
+  /**
+   * The COGS-by-sales table is pinned to last week regardless of the period the
+   * rest of the page is showing, so it fetches on its own. It has to honour the
+   * cache bust too: Refresh used to reload only the tables above, leaving this
+   * one showing whatever the hour-long server cache held at page load. Any store
+   * Net-Chef restated in between then read differently here than up top.
+   */
+  const fetchLastWeek = useCallback(async (start: string, end: string, bust = false) => {
+    if (!start || !end) return;
+    setLastWeekLoadingIds(new Set(LOCATION_IDS));
+    const bustParam = bust ? "&bust=1" : "";
+    await Promise.all(LOCATION_IDS.map(async id => {
+      try {
+        const res = await fetch(`/api/netchef/data?start=${start}&end=${end}&locationId=${id}${bustParam}`);
+        if (res.status === 401) { router.push("/login"); return; }
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? "Failed to load location");
+        setLastWeekLocMap(prev => ({ ...prev, [id]: json as LocationData }));
+      } catch (err) {
+        console.error("[FoodCost] failed last-week loc", id, err);
+      } finally {
+        setLastWeekLoadingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+      }
+    }));
+  }, [router]);
+
   useEffect(() => {
     fetch("/api/netchef/dates")
       .then(async r => {
@@ -1638,21 +1664,12 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
           // Fetch last-week data independently for the COGS-by-sales table (always pinned to last week)
           setLastWeekRange({ start: prior.startDate, end: prior.endDate });
-          setLastWeekLoadingIds(new Set(LOCATION_IDS));
-          Promise.all(LOCATION_IDS.map(async id => {
-            try {
-              const res = await fetch(`/api/netchef/data?start=${prior.startDate}&end=${prior.endDate}&locationId=${id}`);
-              const json = await res.json();
-              setLastWeekLocMap(prev => ({ ...prev, [id]: json as LocationData }));
-            } catch { /* skip */ } finally {
-              setLastWeekLoadingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
-            }
-          }));
+          fetchLastWeek(prior.startDate, prior.endDate);
         }
       })
       .catch(err => setError(`Network error loading dates: ${err?.message ?? err}`))
       .finally(() => setDatesLoading(false));
-  }, [fetchData]);
+  }, [fetchData, fetchLastWeek]);
 
   const startOptions = dateOptions.map(o => o.startDate);
   const endOptions   = dateOptions.map(o => o.endDate);
@@ -1822,7 +1839,14 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               {loading ? "Fetching…" : "Fetch"}
             </button>
             {reportMeta && (
-              <button onClick={() => fetchData(startDate, endDate, true)} disabled={loading}
+              <button
+                onClick={() => {
+                  fetchData(startDate, endDate, true);
+                  // The pinned last-week table has its own range; refresh it too, or
+                  // it keeps serving pre-refresh numbers next to refreshed ones.
+                  if (lastWeekRange) fetchLastWeek(lastWeekRange.start, lastWeekRange.end, true);
+                }}
+                disabled={loading}
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition">
                 Refresh
               </button>
