@@ -994,11 +994,14 @@ function CogsBySalesTable({
   loading,
   loadingCount,
   dateRange,
+  rangeLabel,
 }: {
   rows: LocationData[];
   loading: boolean;
   loadingCount?: number;
   dateRange?: { start: string; end: string } | null;
+  /** Name of the window on screen, or null when the dates were picked by hand. */
+  rangeLabel?: string | null;
 }) {
   // Sales have to cover the same window as the costs they are ranked against, so
   // this follows dateRange rather than the endpoint default of last week. The
@@ -1034,7 +1037,11 @@ function CogsBySalesTable({
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
       <div className="px-4 py-3 border-b border-gray-100">
-        <CopyableTitle title="COGS - ranked by sales" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        <CopyableTitle
+          title={rangeLabel ? `COGS - ranked by sales — ${rangeLabel}` : "COGS - ranked by sales"}
+          targetRef={cardRef}
+          className="text-sm font-semibold text-gray-800"
+        />
         {dateRange && (
           <span className="ml-1.5 text-sm font-normal text-gray-400">
             {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
@@ -1594,6 +1601,11 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const [reportMeta, setReportMeta] = useState<{ startDate: string; endDate: string; fetchedAt: number } | null>(null);
   const [error, setError]         = useState<string | null>(null);
   const [activeQuick, setActiveQuick] = useState<string | null>(null);
+  // What the heading calls the window on screen. Mirrors the wording on whichever
+  // control chose it, so the label always names the button or option the reader
+  // clicked. Null means the start/end dropdowns were set by hand, where there is
+  // no name to give and the dates speak for themselves.
+  const [rangeLabel, setRangeLabel] = useState<string | null>(null);
 
   const [expandedIds, setExpandedIds]       = useState<Set<number>>(new Set());
   const [cogsItemsCache, setCogsItemsCache] = useState<Record<number, ItemData[] | "loading" | "error">>({});
@@ -1648,6 +1660,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           setStartDate(prior.startDate);
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
+          setRangeLabel("Last Week");
           fetchData(prior.startDate, prior.endDate);
         }
       })
@@ -1661,14 +1674,14 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const setLastWeek = () => {
     const sunStr = lastCompletedWeekEndDate();
     const opt = dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0];
-    if (opt) { setStartDate(opt.startDate); setEndDate(opt.endDate); setActiveQuick("last_week"); fetchData(opt.startDate, opt.endDate); }
+    if (opt) { setStartDate(opt.startDate); setEndDate(opt.endDate); setActiveQuick("last_week"); setRangeLabel("Last Week"); fetchData(opt.startDate, opt.endDate); }
   };
 
   const setYTD = () => {
     const ytdStart = [...dateOptions].reverse().find(o => o.startDate >= FISCAL_YEAR_START)?.startDate;
     const sunStr = lastCompletedWeekEndDate();
     const ytdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
-    if (ytdStart && ytdEnd) { setStartDate(ytdStart); setEndDate(ytdEnd); setActiveQuick("ytd"); fetchData(ytdStart, ytdEnd); }
+    if (ytdStart && ytdEnd) { setStartDate(ytdStart); setEndDate(ytdEnd); setActiveQuick("ytd"); setRangeLabel("YTD"); fetchData(ytdStart, ytdEnd); }
   };
 
   const setPTD = () => {
@@ -1676,7 +1689,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     const ptdStart = [...dateOptions].reverse().find(o => o.startDate >= cp.start)?.startDate;
     const sunStr = lastCompletedWeekEndDate();
     const ptdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
-    if (ptdStart && ptdEnd) { setStartDate(ptdStart); setEndDate(ptdEnd); setActiveQuick("ptd"); fetchData(ptdStart, ptdEnd); }
+    if (ptdStart && ptdEnd) { setStartDate(ptdStart); setEndDate(ptdEnd); setActiveQuick("ptd"); setRangeLabel("PTD"); fetchData(ptdStart, ptdEnd); }
   };
 
   const handlePeriodSelect = (key: RangeKey) => {
@@ -1686,6 +1699,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
       setStartDate(start);
       setEndDate(resolvedEnd);
       setActiveQuick(null);
+      setRangeLabel(HISTORY_RANGE_OPTIONS.find(o => o.key === key)?.label ?? null);
       fetchData(start, resolvedEnd);
     }
   };
@@ -1800,13 +1814,13 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             </select>
 
             <div className="flex items-center gap-1">
-              <select value={startDate} onChange={e => { setStartDate(e.target.value); setActiveQuick(null); }} disabled={loading || datesLoading}
+              <select value={startDate} onChange={e => { setStartDate(e.target.value); setActiveQuick(null); setRangeLabel(null); }} disabled={loading || datesLoading}
                 className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300">
                 {datesLoading && <option>Loading…</option>}
                 {startOptions.map(s => <option key={s} value={s}>{fmtDate(s)}</option>)}
               </select>
               <span className="text-xs text-gray-400">to</span>
-              <select value={endDate} onChange={e => { setEndDate(e.target.value); setActiveQuick(null); }} disabled={loading || datesLoading}
+              <select value={endDate} onChange={e => { setEndDate(e.target.value); setActiveQuick(null); setRangeLabel(null); }} disabled={loading || datesLoading}
                 className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300">
                 {datesLoading && <option>Loading…</option>}
                 {endOptions.map(e => <option key={e} value={e}>{fmtDate(e)}</option>)}
@@ -1965,6 +1979,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               loading={loading}
               loadingCount={loadingIds.size}
               dateRange={reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null}
+              rangeLabel={rangeLabel}
             />
           </div>
         )}
