@@ -986,6 +986,9 @@ function RankTable({
 
 // ── COGS by Sales table ───────────────────────────────────────────────────────
 
+/** Stable empty map so a pending range change does not churn referential equality. */
+const EMPTY_SALES: Record<string, number> = {};
+
 function CogsBySalesTable({
   rows,
   loading,
@@ -997,14 +1000,29 @@ function CogsBySalesTable({
   loadingCount?: number;
   dateRange?: { start: string; end: string } | null;
 }) {
-  const [salesByName, setSalesByName] = useState<Record<string, number>>({});
+  // Sales have to cover the same window as the costs they are ranked against, so
+  // this follows dateRange rather than the endpoint default of last week. The
+  // window that produced the figures is stored with them and checked on read, so
+  // the previous window sales never rank the new window rows while a fetch is in
+  // flight - cheaper than clearing state and re-rendering on every range change.
+  const rangeStart = dateRange?.start;
+  const rangeEnd = dateRange?.end;
+  const rangeKey = `${rangeStart ?? ""}__${rangeEnd ?? ""}`;
+  const [sales, setSales] = useState<{ key: string; byName: Record<string, number> }>({ key: "", byName: {} });
 
   useEffect(() => {
-    fetch("/api/par/weekly-sales")
+    if (!rangeStart || !rangeEnd) return;
+    let cancelled = false;
+    const key = `${rangeStart}__${rangeEnd}`;
+    const qs = new URLSearchParams({ start: rangeStart, end: rangeEnd }).toString();
+    fetch(`/api/par/weekly-sales?${qs}`)
       .then(r => r.json())
-      .then(d => setSalesByName(d.salesByLocationName ?? {}))
-      .catch(err => console.error("[FoodCost] weekly sales fetch failed", err));
-  }, []);
+      .then(d => { if (!cancelled) setSales({ key, byName: d.salesByLocationName ?? {} }); })
+      .catch(err => console.error("[FoodCost] sales fetch failed", err));
+    return () => { cancelled = true; };
+  }, [rangeStart, rangeEnd]);
+
+  const salesByName = sales.key === rangeKey ? sales.byName : EMPTY_SALES;
 
   const sorted = [...rows].sort((a, b) => {
     const sa = salesByName[a.locationName] ?? -1;
@@ -1016,7 +1034,7 @@ function CogsBySalesTable({
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
       <div className="px-4 py-3 border-b border-gray-100">
-        <CopyableTitle title="COGS - ranked by sales — Last Week" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        <CopyableTitle title="COGS - ranked by sales" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
         {dateRange && (
           <span className="ml-1.5 text-sm font-normal text-gray-400">
             {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
@@ -1584,10 +1602,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
 
-  const [lastWeekLocMap, setLastWeekLocMap] = useState<Record<number, LocationData>>({});
-  const [lastWeekLoadingIds, setLastWeekLoadingIds] = useState<Set<number>>(new Set());
-  const [lastWeekRange, setLastWeekRange] = useState<{ start: string; end: string } | null>(null);
-
   const fetchData = useCallback(async (start: string, end: string, bust = false) => {
     if (!start || !end) return;
     setLocMap({});
@@ -1619,32 +1633,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     }));
   }, [router]);
 
-  /**
-   * The COGS-by-sales table is pinned to last week regardless of the period the
-   * rest of the page is showing, so it fetches on its own. It has to honour the
-   * cache bust too: Refresh used to reload only the tables above, leaving this
-   * one showing whatever the hour-long server cache held at page load. Any store
-   * Net-Chef restated in between then read differently here than up top.
-   */
-  const fetchLastWeek = useCallback(async (start: string, end: string, bust = false) => {
-    if (!start || !end) return;
-    setLastWeekLoadingIds(new Set(LOCATION_IDS));
-    const bustParam = bust ? "&bust=1" : "";
-    await Promise.all(LOCATION_IDS.map(async id => {
-      try {
-        const res = await fetch(`/api/netchef/data?start=${start}&end=${end}&locationId=${id}${bustParam}`);
-        if (res.status === 401) { router.push("/login"); return; }
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "Failed to load location");
-        setLastWeekLocMap(prev => ({ ...prev, [id]: json as LocationData }));
-      } catch (err) {
-        console.error("[FoodCost] failed last-week loc", id, err);
-      } finally {
-        setLastWeekLoadingIds(prev => { const s = new Set(prev); s.delete(id); return s; });
-      }
-    }));
-  }, [router]);
-
   useEffect(() => {
     fetch("/api/netchef/dates")
       .then(async r => {
@@ -1661,15 +1649,11 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
           fetchData(prior.startDate, prior.endDate);
-
-          // Fetch last-week data independently for the COGS-by-sales table (always pinned to last week)
-          setLastWeekRange({ start: prior.startDate, end: prior.endDate });
-          fetchLastWeek(prior.startDate, prior.endDate);
         }
       })
       .catch(err => setError(`Network error loading dates: ${err?.message ?? err}`))
       .finally(() => setDatesLoading(false));
-  }, [fetchData, fetchLastWeek]);
+  }, [fetchData]);
 
   const startOptions = dateOptions.map(o => o.startDate);
   const endOptions   = dateOptions.map(o => o.endDate);
@@ -1745,11 +1729,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     (TN_STORES.includes(l.locationName) && showTN)
   );
 
-  const lastWeekCogsRows = Object.values(lastWeekLocMap)
-    .filter(l => l.actualCostPct !== null && (
-      (VA_STORES.includes(l.locationName) && showVA) ||
-      (TN_STORES.includes(l.locationName) && showTN)
-    ));
   const byVariance = [...allLocations]
     .filter(l => l.variancePct !== null)
     .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
@@ -1839,14 +1818,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               {loading ? "Fetching…" : "Fetch"}
             </button>
             {reportMeta && (
-              <button
-                onClick={() => {
-                  fetchData(startDate, endDate, true);
-                  // The pinned last-week table has its own range; refresh it too, or
-                  // it keeps serving pre-refresh numbers next to refreshed ones.
-                  if (lastWeekRange) fetchLastWeek(lastWeekRange.start, lastWeekRange.end, true);
-                }}
-                disabled={loading}
+              <button onClick={() => fetchData(startDate, endDate, true)} disabled={loading}
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition">
                 Refresh
               </button>
@@ -1989,10 +1961,10 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         {(allLocations.length > 0 || loading) && (
           <div className="mt-6">
             <CogsBySalesTable
-              rows={lastWeekCogsRows}
-              loading={lastWeekLoadingIds.size > 0}
-              loadingCount={lastWeekLoadingIds.size}
-              dateRange={lastWeekRange}
+              rows={cogsRows}
+              loading={loading}
+              loadingCount={loadingIds.size}
+              dateRange={reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null}
             />
           </div>
         )}

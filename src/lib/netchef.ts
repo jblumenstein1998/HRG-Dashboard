@@ -282,12 +282,18 @@ export async function fetchLocationReport(
     }
   }
 
-  if (locationId === 425 || locationId === 689) {
-    console.log(`[NC] loc ${locationId} totalSummaries length:`, (data.totalSummaries as unknown[])?.length ?? "undefined");
-    console.log(`[NC] loc ${locationId} totalSummaries[0]:`, JSON.stringify(totals));
-    const rows = data.rows as unknown[] | undefined;
-    if (rows?.length) console.log(`[NC] loc ${locationId} rows[0]:`, JSON.stringify(rows[0]));
-  }
+  // Log the window we asked for next to the figure that came back, for every
+  // location. A store once rendered a two-week cost under a one-week heading and
+  // the old 425/689-only dump could not show whether the response belonged to the
+  // range requested. salesBase is the row-level divisorValue, the denominator
+  // behind actualCostPercent, and is the field that gives the window away.
+  const firstRow = (data.rows as Record<string, unknown>[] | undefined)?.[0];
+  console.log(
+    `[NC] loc ${locationId} ${startDate}..${endDate}` +
+      ` actualCost=${totals.actualCost} pct=${totals.actualCostPercent}` +
+      ` salesBase=${firstRow?.divisorValue ?? "n/a"}` +
+      ` summaries=${(data.totalSummaries as unknown[])?.length ?? 0}`,
+  );
 
   const actualCostPct     = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : null;
   const actualCostDollars = totals.actualCost           != null ? Number(totals.actualCost)           : null;

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { PAR_LOCATIONS } from "@/lib/par";
 import { getNetSalesForRange, getLaborHoursForRange } from "@/lib/parRollup";
 
@@ -16,8 +16,26 @@ function lastCompletedWeek(): { start: string; end: string } {
   return { start: toISO(start), end: toISO(end) };
 }
 
-export async function GET() {
-  const { start, end } = lastCompletedWeek();
+/**
+ * Net sales per location for a date range.
+ *
+ * The range is optional and defaults to the last completed week, which is what
+ * every caller wanted until the food-cost COGS-by-sales table started following
+ * the page date selectors and needed sales for the same window as its costs.
+ */
+export async function GET(req: NextRequest) {
+  const { searchParams } = req.nextUrl;
+  const qStart = searchParams.get("start");
+  const qEnd = searchParams.get("end");
+  const isISO = (v: string | null): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+  if ((qStart && !isISO(qStart)) || (qEnd && !isISO(qEnd))) {
+    return NextResponse.json({ error: "Dates must be in YYYY-MM-DD format" }, { status: 400 });
+  }
+
+  const fallback = lastCompletedWeek();
+  const start = isISO(qStart) && isISO(qEnd) ? qStart : fallback.start;
+  const end = isISO(qStart) && isISO(qEnd) ? qEnd : fallback.end;
 
   const results = await Promise.all(
     PAR_LOCATIONS.map(async loc => {
