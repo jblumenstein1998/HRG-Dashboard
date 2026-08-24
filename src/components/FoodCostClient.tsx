@@ -1606,6 +1606,9 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   // clicked. Null means the start/end dropdowns were set by hand, where there is
   // no name to give and the dates speak for themselves.
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
+  // Why there is nothing to show, when that is a legitimate answer rather than a
+  // failure - a period whose first week is still running, say.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [expandedIds, setExpandedIds]       = useState<Set<number>>(new Set());
   const [cogsItemsCache, setCogsItemsCache] = useState<Record<number, ItemData[] | "loading" | "error">>({});
@@ -1619,6 +1622,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     setLocMap({});
     setLoadingIds(new Set(LOCATION_IDS));
     setError(null);
+    setNotice(null);
     setExpandedIds(new Set());
     setCogsItemsCache({});
     setVarItemsCache({});
@@ -1689,7 +1693,28 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     const ptdStart = [...dateOptions].reverse().find(o => o.startDate >= cp.start)?.startDate;
     const sunStr = lastCompletedWeekEndDate();
     const ptdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
-    if (ptdStart && ptdEnd) { setStartDate(ptdStart); setEndDate(ptdEnd); setActiveQuick("ptd"); setRangeLabel("PTD"); fetchData(ptdStart, ptdEnd); }
+
+    // Select the button whether or not there is anything behind it. A period that
+    // has not banked a week yet is an answer; swallowing the click is not, and it
+    // reads as a dead control.
+    setActiveQuick("ptd");
+    setRangeLabel("PTD");
+
+    if (ptdStart && ptdEnd && ptdStart <= ptdEnd) {
+      setStartDate(ptdStart);
+      setEndDate(ptdEnd);
+      fetchData(ptdStart, ptdEnd);
+      return;
+    }
+
+    // Net-Chef reports by completed week, so a period still inside its first one
+    // has nothing to total. Clear the previous window rather than leave it sitting
+    // under a PTD heading it does not belong to.
+    setLocMap({});
+    setLoadingIds(new Set());
+    setReportMeta(null);
+    setError(null);
+    setNotice(`P${cp.period} began ${fmtDate(cp.start)}. No completed weeks yet - PTD will fill in once the first week closes.`);
   };
 
   const handlePeriodSelect = (key: RangeKey) => {
@@ -1901,7 +1926,12 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             <button onClick={() => fetchData(startDate, endDate)} className="text-xs font-medium underline underline-offset-2 shrink-0">Retry</button>
           </div>
         )}
-        {allLocations.length === 0 && !loading && !error && (
+        {notice && (
+          <div className="mb-6 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+            {notice}
+          </div>
+        )}
+        {allLocations.length === 0 && !loading && !error && !notice && (
           <div className="text-center py-20 text-gray-400 text-sm">Select a date range and click Fetch to load food cost data.</div>
         )}
 
