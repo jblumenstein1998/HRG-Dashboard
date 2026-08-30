@@ -720,6 +720,9 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
   const quickButtons = [
     { key: "24h", label: "Last 24 Hours", fn: () => applyRange(last24Hours(), "24h") },
     { key: "7d", label: "Last 7 Days", fn: () => applyRange(lastNDays(7), "7d") },
+    // The last completed Monday–Sunday week, per lib/fiscal — a closed window,
+    // so unlike the others its numbers are final.
+    { key: "last_week", label: "Last Week", fn: () => applyRange(rangeKeyToDates("last_week"), "last_week") },
     // PTD is the fiscal period to date, the same window the drive-thru tab shows.
     { key: "mtd", label: "PTD", fn: () => applyRange(rangeKeyToDates("mtd"), "mtd") },
   ];

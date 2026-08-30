@@ -830,19 +830,25 @@ export async function fetchStoreLists(
   // purely because it was handed out 25 hours ago. Over a month the two bases
   // differ by less than a tenth of a point; the gap only bites on short windows.
   //
-  // The window runs to the end of the selected period, not to now: a list due
-  // later today belongs to a period that includes today, whether or not its
-  // deadline has arrived. One finished ahead of its deadline simply reads as
-  // on time — being early is not a separate state.
+  // One rule decides membership: the list is due inside the selected period,
+  // and it has already been assigned. When it was assigned does not matter, so
+  // a weekly handed out last Monday and due this Sunday belongs to the period
+  // containing Sunday. Whether the deadline has arrived does not matter either
+  // — a list finished ahead of its deadline reads as on time, because it was.
   //
-  // displayBeforeTimestamp is the one bound beyond the period itself. It keeps
-  // out instances Jolt has created but not yet surfaced: the whole day's lists
-  // exist by breakfast, and tonight's closing list is not outstanding at noon.
+  // The one bound outside the period is displayBeforeTimestamp. Jolt creates a
+  // whole day's instances by breakfast, and a closing list that does not reach
+  // a tablet until 10:30 PM is not outstanding at noon.
+  //
+  // A rolling window ("last 24 hours") still runs to the end of today rather
+  // than to this minute, so that a period covering today shows the rest of
+  // today's work. Without that, the deadline range would end mid-afternoon and
+  // no upcoming list could ever fall inside it.
   const filter = {
     isActive: true,
     isSublist: false,
     deadlineAfterTimestamp: opts.hours ? now - opts.hours * 3600 : toEpochSeconds(startDate, timezone),
-    deadlineBeforeTimestamp: opts.hours ? now : toEpochSeconds(endDate, timezone, true),
+    deadlineBeforeTimestamp: toEpochSeconds(endDate, timezone, true),
     displayBeforeTimestamp: now,
   };
 
@@ -868,31 +874,12 @@ export async function fetchStoreLists(
     return out;
   }
 
-  // Everything assigned during the window, plus everything still open right
-  // now regardless of when it was assigned.
-  //
-  // "What is still outstanding?" is not a question about a date range, but
-  // scoping it to the window made the answer change as the period changed: a
-  // weekly list handed out on Monday and due Sunday sat outside a 24-hour
-  // window, so the same open list appeared or vanished depending on which
-  // button was pressed. These are always pending, so they never touch the
-  // percentages — only what the table shows.
-  //
-  // displayBeforeTimestamp keeps this to lists that have actually reached a
-  // tablet. Jolt creates the whole day's instances up front, and counting a
-  // closing list that does not surface until 10:30 PM as "outstanding" at noon
-  // would overstate what anyone can act on.
-  const openNowFilter = {
-    isActive: true,
-    isSublist: false,
-    deadlineAfterTimestamp: now,
-    displayBeforeTimestamp: now,
-  };
-
-  const [windowNodes, openNodes] = await Promise.all([fetchAll(filter), fetchAll(openNowFilter)]);
-
-  const seen = new Set(windowNodes.map(n => n.id));
-  const nodes = [...windowNodes, ...openNodes.filter(n => !n.completionTimestamp && !seen.has(n.id))];
+  // A second query used to pin every currently-open list into the view no
+  // matter which period was selected. Keying the window on the deadline made
+  // it redundant — an open list is due in whatever period contains its
+  // deadline, and turns up there on its own — and it was actively wrong for a
+  // closed period, dragging next Sunday's work into the week of Aug 17-23.
+  const nodes = await fetchAll(filter);
 
   const asOf = Math.floor(Date.now() / 1000);
   const byStore = new Map<string, StoreLists>();
