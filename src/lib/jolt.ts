@@ -818,38 +818,79 @@ export async function fetchStoreLists(
   // label the report and key the cache.
   const now = Math.floor(Date.now() / 1000);
 
-  // The window is keyed on DISPLAY time — when the list was assigned — because
-  // that is what Jolt's own List Completion Report groups by, and this tab is
-  // meant to tie out against it. An overnight closing list assigned 10:30 PM
-  // Monday and due 12:00 AM Tuesday therefore counts toward Monday.
+  // The window is keyed on the DEADLINE — when the work was owed — not on when
+  // Jolt handed it out.
   //
-  // Keying on deadlineTimestamp instead was tried and reverted: it reads more
-  // naturally per shift, but it moves boundary lists to the other day and puts
-  // this tab permanently out of step with the report people check it against.
+  // Jolt's own List Completion Report groups by assigned date, and this was
+  // built that way to tie out against it (verified: assigned-basis reproduces
+  // the report exactly, 542/493/49/108 for Columbia in August, where a
+  // deadline basis gives 550/501/49/109). Josh chose the deadline basis anyway,
+  // because assignment time produces a result nobody can defend at a shift
+  // level: a list finished two hours ago can be missing from "last 24 hours"
+  // purely because it was handed out 25 hours ago. Over a month the two bases
+  // differ by less than a tenth of a point; the gap only bites on short windows.
+  //
+  // Two bounds beyond the window itself:
+  //   - the end never runs past now, so nothing is scored before it is due;
+  //     upcoming work arrives through the open-lists query below instead.
+  //   - displayBeforeTimestamp keeps out instances Jolt has created but not yet
+  //     surfaced. Tonight's closing list is not outstanding at noon.
+  const windowEnd = opts.hours ? now : Math.min(toEpochSeconds(endDate, timezone, true), now);
   const filter = {
     isActive: true,
     isSublist: false,
-    displayAfterTimestamp: opts.hours ? now - opts.hours * 3600 : toEpochSeconds(startDate, timezone),
-    displayBeforeTimestamp: opts.hours ? now : toEpochSeconds(endDate, timezone, true),
+    deadlineAfterTimestamp: opts.hours ? now - opts.hours * 3600 : toEpochSeconds(startDate, timezone),
+    deadlineBeforeTimestamp: windowEnd,
+    displayBeforeTimestamp: now,
   };
 
-  const nodes: StoreListNode[] = [];
-  let after: string | null = null;
-  let pages = 0;
   let truncated = false;
 
-  do {
-    const page: {
-      allListInstances: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        edges: { node: StoreListNode }[];
-      };
-    } = await gql(STORE_LISTS_QUERY, { filter, first: PAGE_SIZE, after, mode });
+  /** Pages a filter to exhaustion, flagging rather than silently stopping. */
+  async function fetchAll(f: Record<string, unknown>): Promise<StoreListNode[]> {
+    const out: StoreListNode[] = [];
+    let after: string | null = null;
+    let pages = 0;
+    do {
+      const page: {
+        allListInstances: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          edges: { node: StoreListNode }[];
+        };
+      } = await gql(STORE_LISTS_QUERY, { filter: f, first: PAGE_SIZE, after, mode });
 
-    nodes.push(...page.allListInstances.edges.map(e => e.node));
-    after = page.allListInstances.pageInfo.hasNextPage ? page.allListInstances.pageInfo.endCursor : null;
-    if (++pages >= MAX_PAGES && after) { truncated = true; break; }
-  } while (after);
+      out.push(...page.allListInstances.edges.map(e => e.node));
+      after = page.allListInstances.pageInfo.hasNextPage ? page.allListInstances.pageInfo.endCursor : null;
+      if (++pages >= MAX_PAGES && after) { truncated = true; break; }
+    } while (after);
+    return out;
+  }
+
+  // Everything assigned during the window, plus everything still open right
+  // now regardless of when it was assigned.
+  //
+  // "What is still outstanding?" is not a question about a date range, but
+  // scoping it to the window made the answer change as the period changed: a
+  // weekly list handed out on Monday and due Sunday sat outside a 24-hour
+  // window, so the same open list appeared or vanished depending on which
+  // button was pressed. These are always pending, so they never touch the
+  // percentages — only what the table shows.
+  //
+  // displayBeforeTimestamp keeps this to lists that have actually reached a
+  // tablet. Jolt creates the whole day's instances up front, and counting a
+  // closing list that does not surface until 10:30 PM as "outstanding" at noon
+  // would overstate what anyone can act on.
+  const openNowFilter = {
+    isActive: true,
+    isSublist: false,
+    deadlineAfterTimestamp: now,
+    displayBeforeTimestamp: now,
+  };
+
+  const [windowNodes, openNodes] = await Promise.all([fetchAll(filter), fetchAll(openNowFilter)]);
+
+  const seen = new Set(windowNodes.map(n => n.id));
+  const nodes = [...windowNodes, ...openNodes.filter(n => !n.completionTimestamp && !seen.has(n.id))];
 
   const asOf = Math.floor(Date.now() / 1000);
   const byStore = new Map<string, StoreLists>();
