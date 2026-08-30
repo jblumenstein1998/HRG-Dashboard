@@ -830,17 +830,19 @@ export async function fetchStoreLists(
   // purely because it was handed out 25 hours ago. Over a month the two bases
   // differ by less than a tenth of a point; the gap only bites on short windows.
   //
-  // Two bounds beyond the window itself:
-  //   - the end never runs past now, so nothing is scored before it is due;
-  //     upcoming work arrives through the open-lists query below instead.
-  //   - displayBeforeTimestamp keeps out instances Jolt has created but not yet
-  //     surfaced. Tonight's closing list is not outstanding at noon.
-  const windowEnd = opts.hours ? now : Math.min(toEpochSeconds(endDate, timezone, true), now);
+  // The window runs to the end of the selected period, not to now: a list due
+  // later today belongs to a period that includes today, whether or not its
+  // deadline has arrived. One finished ahead of its deadline simply reads as
+  // on time — being early is not a separate state.
+  //
+  // displayBeforeTimestamp is the one bound beyond the period itself. It keeps
+  // out instances Jolt has created but not yet surfaced: the whole day's lists
+  // exist by breakfast, and tonight's closing list is not outstanding at noon.
   const filter = {
     isActive: true,
     isSublist: false,
     deadlineAfterTimestamp: opts.hours ? now - opts.hours * 3600 : toEpochSeconds(startDate, timezone),
-    deadlineBeforeTimestamp: windowEnd,
+    deadlineBeforeTimestamp: opts.hours ? now : toEpochSeconds(endDate, timezone, true),
     displayBeforeTimestamp: now,
   };
 
