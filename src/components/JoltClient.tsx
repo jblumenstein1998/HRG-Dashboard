@@ -143,11 +143,6 @@ function untilDue(deadline: number, asOf: number): string {
   return delta > 0 ? `in ${span}` : `${span} ago`;
 }
 
-/** "10 min" / "2 hr" — the To Do band's bounds, stated the way a person says them. */
-function fmtSpanMinutes(minutes: number): string {
-  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} hr` : `${minutes} min`;
-}
-
 function completeColor(v: number | null | undefined): string {
   if (v == null) return "text-gray-400";
   if (v >= COMPLETE_TARGET) return "text-green-600";
@@ -339,8 +334,7 @@ function ToDoCard({ report, visibleStores }: { report: ToDoReport; visibleStores
           To Do
         </button>
         <span className="text-xs text-gray-500">
-          due in the next {fmtSpanMinutes(report.upcomingMinutes)}, or overdue by up to{" "}
-          {fmtSpanMinutes(report.overdueMinutes)}
+          due in the next {report.upcomingMinutes} min, or overdue by up to {report.overdueMinutes} min
         </span>
         {copyStatus !== "idle" && (
           <span
