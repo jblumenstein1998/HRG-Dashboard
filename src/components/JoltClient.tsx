@@ -245,6 +245,25 @@ const toIso = (d: Date) =>
 /** `hours` marks a rolling window; the dates then only bound the fetch. */
 type Range = { start: string; end: string; hours?: number };
 
+/**
+ * The widest range the tab will fetch.
+ *
+ * Volume runs about 120 instances a day across the seven Jolt stores, and
+ * lib/jolt stops paging at 20,000 — roughly 165 days — but it is slow long
+ * before it is truncated: 120 days took 14.7s and shipped 2.7 MB. A hundred
+ * clears a full fiscal quarter, the widest thing the period picker offers,
+ * while sitting near 60% of the row ceiling so the margin survives Jolt being
+ * rolled out to more stores.
+ */
+const MAX_RANGE_DAYS = 100;
+
+/** Inclusive length of a range, in days. */
+function rangeDays({ start, end }: Range): number {
+  const [ys, ms, ds] = start.split("-").map(Number);
+  const [ye, me, de] = end.split("-").map(Number);
+  return Math.round((Date.UTC(ye, me - 1, de) - Date.UTC(ys, ms - 1, ds)) / 86_400_000) + 1;
+}
+
 function lastNDays(n: number): Range {
   const now = new Date();
   const from = new Date(now);
@@ -802,9 +821,27 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
   // Fetched alongside the report but never from it: the To Do band is fixed to
   // the present, while the report follows the range buttons.
   const [todo, setTodo] = useState<ToDoReport | null>(null);
+  /** Day count when the selected range exceeds the limit, else null. */
+  const [tooLong, setTooLong] = useState<number | null>(null);
 
   const load = useCallback(
     (r: Range, { bust = false, markLoading = true }: { bust?: boolean; markLoading?: boolean } = {}) => {
+      // Refuse an over-long range rather than spend twenty seconds on it and
+      // hand back a wall of rows nobody asked for. The To Do band still loads:
+      // it is fixed to the present and costs nothing.
+      const days = r.hours ? 1 : rangeDays(r);
+      setTooLong(days > MAX_RANGE_DAYS ? days : null);
+      if (days > MAX_RANGE_DAYS) {
+        setReport(null);
+        setStatus("done");
+        setError(null);
+        fetch(`/api/jolt/todo${bust ? "?bust=1" : ""}`)
+          .then(res => (res.status === 401 ? null : res.json()))
+          .then((d: (ToDoReport & { error?: string }) | null) => { if (d && !d.error) setTodo(d); })
+          .catch(() => {});
+        return;
+      }
+
       if (markLoading) setStatus("loading");
       setError(null);
       const qs = new URLSearchParams({ start: r.start, end: r.end });
@@ -1080,7 +1117,11 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
             different question, and it is the one someone opens the tab for. */}
         {todo && <ToDoCard report={todo} visibleStores={visibleStores} />}
 
-        {!report ? (
+        {tooLong ? (
+          <div className="bg-white rounded-xl border border-yellow-200 px-5 py-6 text-sm text-yellow-900">
+            Selected range is too long — {tooLong} days. The maximum is {MAX_RANGE_DAYS} days.
+          </div>
+        ) : !report ? (
           status !== "error" && (
             <div className="bg-white rounded-xl border border-gray-200 px-5 py-8 text-sm text-gray-400">
               Loading lists…
