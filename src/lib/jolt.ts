@@ -698,6 +698,7 @@ export function invalidateJoltCache(): void {
   dueSoonCache.clear();
   submitterCache.clear();
   storeListsCache.clear();
+  todoCache = null;
   locationCache = null;
   invalidateSession();
 }
@@ -945,4 +946,87 @@ export async function fetchStoreLists(
   };
   storeListsCache.set(key, report);
   return report;
+}
+
+// ── To do, right now ──────────────────────────────────────────────────────────
+// A narrow band around the present: what is still recoverable, and what is
+// about to land. Deliberately not scoped to the tab's selected period — "what
+// needs doing" is a question about this minute, and someone reviewing last week
+// still wants to see that a temperature log is due in eight minutes.
+
+/** How far back a missed list stays worth chasing. */
+const TODO_OVERDUE_MINUTES = 60;
+/** How far ahead to warn. */
+const TODO_UPCOMING_MINUTES = 10;
+
+export type ToDoRow = {
+  id: string;
+  store: string;
+  title: string;
+  /** Unix seconds. Always present — the query is bounded by it. */
+  deadline: number;
+};
+
+export type ToDoReport = {
+  rows: ToDoRow[];
+  /** The instant the band was measured from; the UI counts against this. */
+  asOf: number;
+  overdueMinutes: number;
+  upcomingMinutes: number;
+  fetchedAt: number;
+};
+
+let todoCache: ToDoReport | null = null;
+/** Short: the forward edge is ten minutes, so a stale answer misleads quickly. */
+const TODO_TTL_MS = 60 * 1000;
+
+export async function fetchToDo(opts: { bust?: boolean } = {}): Promise<ToDoReport> {
+  if (!opts.bust && todoCache && Date.now() - todoCache.fetchedAt < TODO_TTL_MS) return todoCache;
+
+  const mode = await allLocationsMode();
+  const now = Math.floor(Date.now() / 1000);
+
+  const page = await gql<{
+    allListInstances: { edges: { node: StoreListNode }[] };
+  }>(STORE_LISTS_QUERY, {
+    filter: {
+      isActive: true,
+      isSublist: false,
+      deadlineAfterTimestamp: now - TODO_OVERDUE_MINUTES * 60,
+      deadlineBeforeTimestamp: now + TODO_UPCOMING_MINUTES * 60,
+      // Same rule as the main table: nothing that has not reached a tablet.
+      displayBeforeTimestamp: now,
+    },
+    first: PAGE_SIZE,
+    after: null,
+    mode,
+  });
+
+  const rows: ToDoRow[] = [];
+  for (const node of page.allListInstances.edges.map(e => e.node)) {
+    // Only what is still outstanding — a finished list is not a to-do.
+    if (node.completionTimestamp) continue;
+    if (!node.location || !node.deadlineTimestamp) continue;
+    const store = JOLT_TO_STORE[node.location.name];
+    if (!store) continue; // drops Portland
+
+    rows.push({
+      id: node.id,
+      store,
+      title: node.listTemplate?.title ?? node.instanceTitle ?? "Untitled list",
+      deadline: node.deadlineTimestamp,
+    });
+  }
+
+  // Most overdue first: the top of the list is the thing to chase.
+  rows.sort((a, b) => a.deadline - b.deadline);
+
+  todoCache = {
+    rows,
+    asOf: now,
+    overdueMinutes: TODO_OVERDUE_MINUTES,
+    upcomingMinutes: TODO_UPCOMING_MINUTES,
+    fetchedAt: Date.now(),
+  };
+  return todoCache;
 }

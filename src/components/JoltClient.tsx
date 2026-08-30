@@ -61,6 +61,21 @@ type StoreLists = {
   rows: ListInstanceRow[];
 };
 
+type ToDoRow = {
+  id: string;
+  store: string;
+  title: string;
+  deadline: number;
+};
+
+type ToDoReport = {
+  rows: ToDoRow[];
+  asOf: number;
+  overdueMinutes: number;
+  upcomingMinutes: number;
+  fetchedAt: number;
+};
+
 type StoreListsReport = {
   stores: StoreLists[];
   storesWithoutJolt: string[];
@@ -281,6 +296,80 @@ const PERIOD_OPTIONS: { key: RangeKey; label: string }[] = [
   { key: "qtd", label: "Quarter to Date" },
   ...PERIODS.map(p => ({ key: `p${p.period}` as RangeKey, label: `P${p.period} (Full)` })),
 ];
+
+// ── To do, right now ──────────────────────────────────────────────────────────
+// Independent of the range buttons on purpose: someone reviewing last week still
+// wants to know a temperature log is due in eight minutes.
+
+function ToDoCard({ report, visibleStores }: { report: ToDoReport; visibleStores: Set<string> }) {
+  const rows = report.rows.filter(r => visibleStores.has(r.store));
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 sm:px-5 py-3 border-b border-gray-100 flex flex-wrap items-baseline gap-x-3">
+        <h2 className="text-base font-semibold text-gray-900">To Do</h2>
+        <span className="text-xs text-gray-500">
+          due in the next {report.upcomingMinutes} min, or overdue by up to {report.overdueMinutes} min
+        </span>
+        {rows.length > 0 && <span className="ml-auto text-xs text-gray-400 tabular-nums">{rows.length} lists</span>}
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="px-4 sm:px-5 py-6 text-sm text-gray-400">Nothing due right now.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm table-fixed min-w-[44rem]">
+            <colgroup>
+              <col style={{ width: "18%" }} />
+              <col style={{ width: "42%" }} />
+              <col style={{ width: "22%" }} />
+              <col style={{ width: "18%" }} />
+            </colgroup>
+            <thead>
+              <tr className="text-xs text-gray-500 border-b border-gray-100">
+                <th className="text-left font-medium px-4 sm:px-5 py-2">Store</th>
+                <th className="text-left font-medium px-3 py-2">List</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Due</th>
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Time left / overdue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => {
+                const overdue = row.deadline < report.asOf;
+                return (
+                  <tr key={row.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-100">
+                    <td className="px-4 sm:px-5 py-1.5 font-medium text-gray-900">{row.store}</td>
+                    <td className="px-3 py-1.5 text-gray-900">
+                      <a
+                        href={JOLT_BROWSE_LISTS}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open Browse Lists in Jolt"
+                        className="hover:text-red-700 hover:underline"
+                      >
+                        {row.title.trim()}
+                      </a>
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
+                      {fmtStamp(row.deadline, tzFor(row.store))}
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 tabular-nums whitespace-nowrap ${
+                        overdue ? "text-red-600 font-medium" : "text-gray-600"
+                      }`}
+                    >
+                      {untilDue(row.deadline, report.asOf)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
 
 // ── Summary: every store's on-time rate at a glance ───────────────────────────
 // This is the whole-company view, so it always shows all visible stores. The
@@ -675,6 +764,9 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
   const [report, setReport] = useState<StoreListsReport | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string | null>(null);
+  // Fetched alongside the report but never from it: the To Do band is fixed to
+  // the present, while the report follows the range buttons.
+  const [todo, setTodo] = useState<ToDoReport | null>(null);
 
   const load = useCallback(
     (r: Range, { bust = false, markLoading = true }: { bust?: boolean; markLoading?: boolean } = {}) => {
@@ -701,6 +793,17 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
           setError(e.message);
           setStatus("error");
         });
+
+      // Its own request, and its own failure: if the band cannot be fetched the
+      // rest of the page is still worth showing, so this never sets the page
+      // status. Refresh busts it too, since a stale To Do list is worse than
+      // none — it shows work someone has already dealt with.
+      fetch(`/api/jolt/todo${bust ? "?bust=1" : ""}`)
+        .then(res => (res.status === 401 ? null : res.json()))
+        .then((d: (ToDoReport & { error?: string }) | null) => {
+          if (d && !d.error) setTodo(d);
+        })
+        .catch(() => {});
     },
     [router],
   );
@@ -728,6 +831,13 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
     const names = [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])];
     return names.map(store => ({ store, data: byStore.get(store) ?? null }));
   }, [byStore, showTN, showVA]);
+
+  // The To Do band has its own rows, so it filters by name rather than by the
+  // report's per-store entries.
+  const visibleStores = useMemo(
+    () => new Set([...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])]),
+    [showTN, showVA],
+  );
 
   // Which store's table is on screen. Held loosely rather than corrected in an
   // effect: toggling TN/VA or changing the range can drop the chosen store from
@@ -932,6 +1042,10 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
           missing from the map, and drawing them would label all twelve "Not on
           Jolt" — a claim about the data, not a loading state.
         */}
+        {/* Sits above everything and does not wait on the report — it answers a
+            different question, and it is the one someone opens the tab for. */}
+        {todo && <ToDoCard report={todo} visibleStores={visibleStores} />}
+
         {!report ? (
           status !== "error" && (
             <div className="bg-white rounded-xl border border-gray-200 px-5 py-8 text-sm text-gray-400">
