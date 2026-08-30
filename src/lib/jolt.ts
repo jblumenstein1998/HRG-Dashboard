@@ -789,6 +789,15 @@ type StoreListNode = {
   assignedPerson: { id: string; firstName: string; lastName: string } | null;
 };
 
+/**
+ * When a business day begins, in hours past midnight, company time.
+ *
+ * A restaurant's day does not end at midnight — the closing lists are due at
+ * 12:00 AM and belong to the shift that just finished. Everything that buckets
+ * a deadline into a day shifts by this.
+ */
+const BUSINESS_DAY_START_HOURS = 3;
+
 const PAGE_SIZE = 500;
 /** ~20k instances. A window big enough to exceed this is a mistake, not a query. */
 const MAX_PAGES = 40;
@@ -845,11 +854,25 @@ export async function fetchStoreLists(
   // than to this minute, so that a period covering today shows the rest of
   // today's work. Without that, the deadline range would end mid-afternoon and
   // no upcoming list could ever fall inside it.
+  //
+  // A day ends at BUSINESS_DAY_START, not at midnight. A closing list due at
+  // 12:00 AM belongs to the shift that just worked it, not to the morning that
+  // has not started, and a calendar boundary filed it under the wrong day.
+  //
+  // Three in the morning, company time, is arbitrary inside a wide dead zone:
+  // across two weeks and 1,713 deadlines, every early one is midnight except a
+  // single 1:22 AM, and nothing else falls before 10 AM at any store. Anything
+  // from ~1:30 to ~9 would move the same lists. Three specifically dodges the
+  // DST changeover, which happens at 2 AM and makes that hour ambiguous twice a
+  // year. One company-wide boundary means Virginia's lands at 4 AM local — also
+  // dead time — rather than needing a separate window per store.
   const filter = {
     isActive: true,
     isSublist: false,
-    deadlineAfterTimestamp: opts.hours ? now - opts.hours * 3600 : toEpochSeconds(startDate, timezone),
-    deadlineBeforeTimestamp: toEpochSeconds(endDate, timezone, true),
+    deadlineAfterTimestamp: opts.hours
+      ? now - opts.hours * 3600
+      : toEpochSeconds(startDate, timezone) + BUSINESS_DAY_START_HOURS * 3600,
+    deadlineBeforeTimestamp: toEpochSeconds(endDate, timezone, true) + BUSINESS_DAY_START_HOURS * 3600,
     displayBeforeTimestamp: now,
   };
 
