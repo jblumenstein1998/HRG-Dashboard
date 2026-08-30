@@ -103,6 +103,31 @@ function fmtStamp(epochSeconds: number | null, timeZone: string): string {
 }
 
 
+/**
+ * "in 3h 15m" / "2d ago", for a deadline measured against the instant the
+ * report was built. Measured against `asOf` rather than the browser clock so
+ * this can never contradict the status badge beside it — a cached report could
+ * otherwise read "Not due yet · 5m ago".
+ */
+function untilDue(deadline: number, asOf: number): string {
+  const delta = deadline - asOf;
+  const abs = Math.abs(delta);
+  if (abs < 60) return delta >= 0 ? "due now" : "just overdue";
+
+  const mins = Math.floor(abs / 60);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  const span =
+    days > 0
+      ? `${days}d${hours % 24 ? ` ${hours % 24}h` : ""}`
+      : hours > 0
+        ? `${hours}h${mins % 60 ? ` ${mins % 60}m` : ""}`
+        : `${mins}m`;
+
+  return delta > 0 ? `in ${span}` : `${span} ago`;
+}
+
 function completeColor(v: number | null | undefined): string {
   if (v == null) return "text-gray-400";
   if (v >= COMPLETE_TARGET) return "text-green-600";
@@ -420,11 +445,14 @@ function StorePanel({
   store,
   data,
   options,
+  asOf,
   onChange,
 }: {
   store: string;
   data: StoreLists | null;
   options: SummaryRow[];
+  /** When the report was built; relative deadlines are measured from this. */
+  asOf: number;
   onChange: (store: string) => void;
 }) {
   // Most recent deadline first, so the newest activity is at the top.
@@ -562,6 +590,17 @@ function StorePanel({
                     </td>
                     <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
                       {fmtStamp(row.deadline, tz)}
+                      {/* Only unfinished lists get a countdown — once a list is
+                          done, how long was left is no longer the useful fact. */}
+                      {row.completedAt === null && row.deadline !== null && (
+                        <span
+                          className={`ml-2 text-xs ${
+                            row.status === "missed" ? "text-red-500" : "text-gray-400"
+                          }`}
+                        >
+                          {untilDue(row.deadline, asOf)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
                       {fmtStamp(row.completedAt, tz)}
@@ -871,6 +910,7 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
                 store={selected}
                 data={selectedData}
                 options={visible}
+                asOf={report.asOf}
                 onChange={store => {
                   setPicked(store);
                   setHighlighted(store);
