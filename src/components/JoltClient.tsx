@@ -248,12 +248,23 @@ function last24Hours(): Range {
  * "now" means today — both of which have to be unwound before the Jolt API,
  * which takes whole days, sees them.
  */
+/**
+ * Ranges that mean "…so far", which here run through today.
+ *
+ * lib/fiscal deliberately ends these at yesterday: once a range's end is in the
+ * past it is closed, so Berry can cache it forever. Jolt is queried live and
+ * caches nothing that way, and a PTD that stopped yesterday just silently
+ * dropped today's lists while Last 7 Days included them.
+ */
+const TO_DATE_KEYS = new Set<RangeKey>(["mtd", "qtd", "ytd", "wtd"]);
+
 function rangeKeyToDates(key: RangeKey): Range {
   const { range } = resolveRange(key);
   const [rawStart, rawEnd] = range.split(" : ").map(s => s.trim());
   const start = rawStart.split("T")[0];
+  const today = toIso(new Date());
 
-  if (rawEnd === "now") return { start, end: toIso(new Date()) };
+  if (TO_DATE_KEYS.has(key) || rawEnd === "now") return { start, end: today };
 
   const [endDate, endTime = ""] = rawEnd.split("T");
   if (endTime.startsWith("00:00:00")) {
