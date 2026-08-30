@@ -87,26 +87,29 @@ function num(v: number): string {
  * score compliance, not a survey metric, and the two have no reason to move
  * together.
  */
+/** Stated in the header legend, so the two can't drift apart. */
+const COMPLIANCE_TARGET = 100;
+const COMPLIANCE_THRESHOLD = 95;
+
 function rateColor(v: number | null): string {
   if (v === null) return "text-gray-400";
-  if (v >= 100) return "text-green-600";
-  if (v >= 95) return "text-yellow-600";
+  if (v >= COMPLIANCE_TARGET) return "text-green-600";
+  if (v >= COMPLIANCE_THRESHOLD) return "text-yellow-600";
   return "text-red-600";
 }
 
 /**
- * The row's shade, and the darker one it takes on hover or while open.
+ * The row's shade while hovered or open — neutral, and carrying no meaning
+ * about the rate. Scoring is said once, by the colour of the rate itself;
+ * banding the whole row repeated it in a heavier voice and left the table
+ * looking like a heat map of something it wasn't measuring.
  *
- * Applied to the whole `<tr>` rather than the rate cell, so a store reads as
- * one band across every column. Hover and open deliberately share a shade:
- * both mean "this is the row you are working on", and separate tones would
- * imply a distinction that isn't there.
+ * Hover and open deliberately share a shade: both mean "this is the row you
+ * are working on", and separate tones would imply a distinction that isn't
+ * there.
  */
-function rowTone(v: number | null, open: boolean): string {
-  if (v === null) return open ? "bg-gray-100" : "hover:bg-gray-50";
-  if (v >= 100) return open ? "bg-green-100" : "bg-green-50 hover:bg-green-100";
-  if (v >= 95) return open ? "bg-yellow-100" : "bg-yellow-50 hover:bg-yellow-100";
-  return open ? "bg-red-100" : "bg-red-50 hover:bg-red-100";
+function rowTone(open: boolean): string {
+  return open ? "bg-gray-100" : "hover:bg-gray-100";
 }
 
 
@@ -611,6 +614,20 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
         </div>
       </header>
 
+      {/* The scoring legend, stated once — matches the Jolt tab. */}
+      <div className="bg-gray-50 border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+          <span className="text-gray-500">
+            Compliance&nbsp;
+            <span className="text-green-600 font-medium">≥{COMPLIANCE_TARGET}%</span>
+            {" / "}
+            <span className="text-yellow-600 font-medium">≥{COMPLIANCE_THRESHOLD}%</span>
+            {" / "}
+            <span className="text-red-600 font-medium">&lt;{COMPLIANCE_THRESHOLD}%</span>
+          </span>
+        </div>
+      </div>
+
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
         {status === "loading" && (
           <p className="text-sm text-gray-500">Loading Zaxby&apos;s University compliance…</p>
@@ -688,7 +705,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
                           onClick={() => toggleRow(s)}
                           className={`cursor-pointer transition-colors ${
                             newMarket ? "border-t-2 border-gray-300" : "border-t border-gray-100"
-                          } ${rowTone(s.complianceRate, isOpen)}`}
+                          } ${rowTone(isOpen)}`}
                         >
                           <td className="px-4 py-2 whitespace-nowrap text-gray-900">{s.label}</td>
                           <td
