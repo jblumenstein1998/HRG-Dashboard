@@ -955,7 +955,7 @@ export async function fetchStoreLists(
 // still wants to see that a temperature log is due in eight minutes.
 
 /** How far back a missed list stays worth chasing. */
-const TODO_OVERDUE_MINUTES = 60;
+const TODO_OVERDUE_MINUTES = 120;
 /** How far ahead to warn. */
 const TODO_UPCOMING_MINUTES = 10;
 
