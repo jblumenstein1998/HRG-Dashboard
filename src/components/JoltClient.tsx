@@ -14,9 +14,9 @@ const TN_STORES = ["Columbia", "Spring Hill", "Brentwood", "White House", "Sprin
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 // Jolt has no URL for a single list instance — /review/review/review?id=… just
-// bounces away — so every list links to the List Completion Report, where a
-// person filters down to the one they came looking for.
-const JOLT_COMPLETION_REPORT = "https://app.joltup.com/review/review/listCompletionReporting";
+// bounces away — so every list links to Browse Lists, where a person filters
+// down to the one they came looking for.
+const JOLT_BROWSE_LISTS = "https://app.joltup.com/review/review/listResultsReporting/lists";
 
 /** Stores keep their own clock: TN is Central, VA is Eastern. */
 const STORE_TZ: Record<string, string> = {};
@@ -590,10 +590,10 @@ function StorePanel({
                   <tr key={row.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
                     <td className="px-4 sm:px-5 py-1.5 text-gray-900">
                       <a
-                        href={JOLT_COMPLETION_REPORT}
+                        href={JOLT_BROWSE_LISTS}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title="Open the List Completion Report in Jolt"
+                        title="Open Browse Lists in Jolt"
                         className="hover:text-red-700 hover:underline"
                       >
                         {row.title.trim()}
