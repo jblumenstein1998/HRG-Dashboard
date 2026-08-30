@@ -18,6 +18,7 @@ export const ALL_TABS = [
   "/survey-data",
   "/bonus",
   "/zu",
+  "/jolt",
   "/admin-links",
 ] as const;
 export type Tab = (typeof ALL_TABS)[number];
@@ -30,6 +31,8 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/bonus": "Bonus",
   // Zaxby's University — training compliance, out of Schoox.
   "/zu": "ZU",
+  // Jolt — checklist / list completion, out of app.joltup.com.
+  "/jolt": "Jolt",
   // The route is /admin-links because /admin is the Users & Access screen; the
   // label is what people see, and this tab is "Admin".
   "/admin-links": "Admin",
