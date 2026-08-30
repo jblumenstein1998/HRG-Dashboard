@@ -385,7 +385,20 @@ function SummaryCard({
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        {/* Fixed layout: with auto widths the columns are sized from whatever
+            data happens to be loaded, so every change of period nudged them
+            sideways. These percentages hold still instead. */}
+        <table className="w-full text-sm table-fixed min-w-[52rem]">
+          <colgroup>
+            <col style={{ width: "24%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "9%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "13%" }} />
+            <col style={{ width: "10%" }} />
+          </colgroup>
           <thead>
             <tr className="text-xs text-gray-500 border-b border-gray-100">
               <SortTh label="Store" sortKey="store" sort={sort} setSort={setSort} className="px-4 sm:px-5 py-2" />
@@ -575,7 +588,16 @@ function StorePanel({
           {data.rows.length === 0 ? (
             <p className="px-5 py-6 text-sm text-gray-400">No lists assigned in this period.</p>
           ) : (
-            <table className="w-full text-sm">
+            // Fixed widths for the same reason as the summary table; the Due
+            // column especially grew and shrank as countdowns came and went.
+            <table className="w-full text-sm table-fixed min-w-[56rem]">
+              <colgroup>
+                <col style={{ width: "32%" }} />
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "15%" }} />
+                <col style={{ width: "19%" }} />
+                <col style={{ width: "12%" }} />
+              </colgroup>
               <thead>
                 <tr className="text-xs text-gray-500 border-b border-gray-100">
                   <SortTh label="List" sortKey="title" sort={sort} setSort={setSort} className="px-4 sm:px-5 py-2" />
