@@ -304,13 +304,48 @@ const PERIOD_OPTIONS: { key: RangeKey; label: string }[] = [
 function ToDoCard({ report, visibleStores }: { report: ToDoReport; visibleStores: Set<string> }) {
   const rows = report.rows.filter(r => visibleStores.has(r.store));
 
+  // Soonest deadline first, so the most overdue sits at the top.
+  const [sort, setSort] = useState<Sort>({ key: "deadline", dir: "asc" });
+  const sortedRows = useMemo(
+    () =>
+      sortBy(rows, sort.dir, r => {
+        switch (sort.key) {
+          case "store": return r.store.toLowerCase();
+          case "title": return r.title.trim().toLowerCase();
+          // "Time left" is just the deadline seen from now, so it orders the same.
+          default: return r.deadline;
+        }
+      }),
+    [rows, sort],
+  );
+
+  const cardRef = useRef<HTMLElement>(null);
+  const { status: copyStatus, copy } = useCopyImage(cardRef);
+
   return (
-    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <section ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 sm:px-5 py-3 border-b border-gray-100 flex flex-wrap items-baseline gap-x-3">
-        <h2 className="text-base font-semibold text-gray-900">To Do</h2>
+        <button
+          onClick={copy}
+          disabled={copyStatus === "copying"}
+          title="Click to copy this table as an image"
+          className="text-base font-semibold text-gray-900 hover:text-red-700 transition cursor-pointer disabled:cursor-wait"
+        >
+          To Do
+        </button>
         <span className="text-xs text-gray-500">
           due in the next {report.upcomingMinutes} min, or overdue by up to {report.overdueMinutes} min
         </span>
+        {copyStatus !== "idle" && (
+          <span
+            data-copy-image-ignore="true"
+            className={`text-xs font-medium ${
+              copyStatus === "done" ? "text-green-600" : copyStatus === "error" ? "text-red-600" : "text-gray-400"
+            }`}
+          >
+            {copyStatus === "copying" ? "Copying…" : copyStatus === "done" ? "Copied!" : "Copy failed"}
+          </span>
+        )}
         {rows.length > 0 && <span className="ml-auto text-xs text-gray-400 tabular-nums">{rows.length} lists</span>}
       </div>
 
@@ -327,14 +362,14 @@ function ToDoCard({ report, visibleStores }: { report: ToDoReport; visibleStores
             </colgroup>
             <thead>
               <tr className="text-xs text-gray-500 border-b border-gray-100">
-                <th className="text-left font-medium px-4 sm:px-5 py-2">Store</th>
-                <th className="text-left font-medium px-3 py-2">List</th>
-                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Due</th>
-                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Time left / overdue</th>
+                <SortTh label="Store" sortKey="store" sort={sort} setSort={setSort} className="px-4 sm:px-5 py-2" />
+                <SortTh label="List" sortKey="title" sort={sort} setSort={setSort} className="px-3 py-2" />
+                <SortTh label="Due" sortKey="deadline" sort={sort} setSort={setSort} className="px-3 py-2 whitespace-nowrap" />
+                <SortTh label="Time left / overdue" sortKey="timeLeft" sort={sort} setSort={setSort} className="px-3 py-2 whitespace-nowrap" />
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => {
+              {sortedRows.map(row => {
                 const overdue = row.deadline < report.asOf;
                 return (
                   <tr key={row.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-100">
