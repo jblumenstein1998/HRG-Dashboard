@@ -820,6 +820,18 @@ function HistoryChart() {
 
 // ── Rank table ────────────────────────────────────────────────────────────────
 
+type SortCol = "location" | "sales" | "dollars" | "pct";
+
+// Which way a column reads on the first click: names A-Z, money biggest first,
+// percentages best first. A second click reverses it, a third clears the sort and
+// hands the table back to the ranking it arrived in.
+const FIRST_SORT_DIR: Record<SortCol, "asc" | "desc"> = {
+  location: "asc",
+  sales: "desc",
+  dollars: "desc",
+  pct: "asc",
+};
+
 function RankTable({
   title,
   rows,
@@ -838,6 +850,8 @@ function RankTable({
   itemsCache,
   onToggle,
   marketGroups,
+  salesByName,
+  sortByMagnitude,
 }: {
   title: string;
   rows: LocationData[];
@@ -856,11 +870,82 @@ function RankTable({
   itemsCache?: Record<number, ItemData[] | "loading" | "error">;
   onToggle?: (row: LocationData) => void;
   marketGroups?: { label: string; rows: LocationData[] }[];
+  /** Net sales for the same window as the costs, keyed by location name. Omit to
+   *  drop the Sales column entirely rather than show a column of dashes. */
+  salesByName?: Record<string, number>;
+  /** Rank the metric columns by distance from zero rather than by signed value.
+   *  Variance is a deviation - being 2% under is as far off plan as 2% over, and
+   *  the table's default order already says so - so sorting it signed would file
+   *  the worst underages where the best rows belong. Costs are not a deviation
+   *  and stay signed. Only affects ordering; the cells still show the sign. */
+  sortByMagnitude?: boolean;
 }) {
   const green  = rows.filter(r => colorFn(r[pctKey] as number | null).includes("green")).length;
   const yellow = rows.filter(r => colorFn(r[pctKey] as number | null).includes("yellow")).length;
   const red    = rows.filter(r => colorFn(r[pctKey] as number | null).includes("red")).length;
   const cardRef = useRef<HTMLDivElement>(null);
+  const colCount = salesByName ? 5 : 4;
+
+  // Null means the order the rows came in with, which is the meaningful default -
+  // best COGS first, smallest variance first. Sorting is a detour from that, so a
+  // third click on the active column returns to it rather than stranding the
+  // reader in a column order they have to undo by reloading.
+  const [sort, setSort] = useState<{ col: SortCol; dir: "asc" | "desc" } | null>(null);
+
+  const toggleSort = (col: SortCol) => {
+    setSort(prev => {
+      if (!prev || prev.col !== col) return { col, dir: FIRST_SORT_DIR[col] };
+      if (prev.dir === FIRST_SORT_DIR[col]) return { col, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return null;
+    });
+  };
+
+  // Sales are a level, not a deviation, so they rank by their own value even on a
+  // magnitude table.
+  const metricOrder = (v: number | null) => (v === null ? null : sortByMagnitude ? Math.abs(v) : v);
+
+  const sortValue = (row: LocationData, col: SortCol): string | number | null => {
+    switch (col) {
+      case "location": return row.locationName;
+      case "sales":    return salesByName?.[row.locationName] ?? null;
+      case "dollars":  return metricOrder(row[dollarsKey] as number | null);
+      case "pct":      return metricOrder(row[pctKey] as number | null);
+    }
+  };
+
+  const applySort = (list: LocationData[]): LocationData[] => {
+    if (!sort) return list;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const va = sortValue(a, sort.col);
+      const vb = sortValue(b, sort.col);
+      // Missing figures sink to the bottom whichever way the column is pointing -
+      // a store with no sales on file is not the best or the worst, it is absent.
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
+      return (va - vb) * dir;
+    });
+  };
+
+  const sortHeader = (col: SortCol, label: string, align: "left" | "right" = "right") => {
+    const active = sort?.col === col;
+    return (
+      <th className={`${align === "right" ? "text-right" : "text-left"} px-4 py-2 text-xs font-semibold uppercase tracking-wide ${active ? "text-gray-600" : "text-gray-400"}`}>
+        <button
+          type="button"
+          onClick={() => toggleSort(col)}
+          title={`Sort by ${label}`}
+          className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition ${align === "right" ? "flex-row-reverse" : ""}`}
+        >
+          {label}
+          {/* Fixed width so the header does not shift as the arrow appears. */}
+          <span className="w-2 text-[9px] leading-none">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+        </button>
+      </th>
+    );
+  };
 
   const renderRow = (row: LocationData, rank: number) => {
     const pct      = row[pctKey] as number | null;
@@ -875,22 +960,28 @@ function RankTable({
         >
           <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{rank}.</td>
           <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
+          {salesByName && (
+            <td className="px-4 py-3 text-right tabular-nums text-gray-700">
+              {salesByName[row.locationName] != null ? fmtDollars(salesByName[row.locationName]) : "—"}
+            </td>
+          )}
           <td className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtDollars(dollars)}</td>
           <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(pct)}`}>{fmtPct(pct, pctDecimals)}</td>
         </tr>
         {isOpen && rowItems === "loading" && (
-          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400 animate-pulse">Loading…</td></tr>
+          <tr className="bg-gray-50"><td colSpan={colCount} className="px-4 py-2 text-xs text-gray-400 animate-pulse">Loading…</td></tr>
         )}
         {isOpen && rowItems === "error" && (
-          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-red-500">Failed to load items</td></tr>
+          <tr className="bg-gray-50"><td colSpan={colCount} className="px-4 py-2 text-xs text-red-500">Failed to load items</td></tr>
         )}
         {isOpen && Array.isArray(rowItems) && rowItems.length === 0 && (
-          <tr className="bg-gray-50"><td colSpan={4} className="px-4 py-2 text-xs text-gray-400">No item data for this period</td></tr>
+          <tr className="bg-gray-50"><td colSpan={colCount} className="px-4 py-2 text-xs text-gray-400">No item data for this period</td></tr>
         )}
         {isOpen && Array.isArray(rowItems) && rowItems.map((item, j) => (
           <tr key={`item-${j}`} className="bg-gray-50 border-t border-gray-100">
             <td className="px-3 py-1.5" />
             <td className="pl-4 pr-4 py-1.5 text-xs text-gray-600">{item.name}</td>
+            {salesByName && <td className="px-4 py-1.5" />}
             <td className="px-4 py-1.5 text-right text-xs tabular-nums text-gray-600">
               {itemMode === "actual" ? fmtDollars(item.actualCostDollars) : fmtDollars(item.varianceDollars)}
             </td>
@@ -923,6 +1014,7 @@ function RankTable({
             <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-gray-50 animate-pulse">
               <div className="h-4 bg-gray-100 rounded w-6" />
               <div className="h-4 bg-gray-100 rounded flex-1" />
+              {salesByName && <div className="h-4 bg-gray-100 rounded w-20" />}
               <div className="h-4 bg-gray-100 rounded w-16" />
               <div className="h-4 bg-gray-100 rounded w-16" />
             </div>
@@ -933,9 +1025,10 @@ function RankTable({
           <thead>
             <tr className="border-b border-gray-100">
               <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
-              <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">$</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">%</th>
+              {sortHeader("location", "Location", "left")}
+              {salesByName && sortHeader("sales", "Sales")}
+              {sortHeader("dollars", "$")}
+              {sortHeader("pct", "%")}
             </tr>
           </thead>
           <tbody>
@@ -944,19 +1037,19 @@ function RankTable({
                 {marketGroups.map((group, gi) => (
                   <Fragment key={group.label}>
                     <tr className={`border-b border-gray-200 ${gi > 0 ? "border-t-2 border-t-gray-200" : ""}`}>
-                      <td colSpan={4} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      <td colSpan={colCount} className="px-4 py-1.5 bg-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         {group.label}
                       </td>
                     </tr>
-                    {group.rows.map((row, i) => renderRow(row, i + 1))}
+                    {applySort(group.rows).map((row, i) => renderRow(row, i + 1))}
                     {group.rows.length === 0 && !loading && (
-                      <tr><td colSpan={4} className="px-4 py-3 text-center text-xs text-gray-400">No data</td></tr>
+                      <tr><td colSpan={colCount} className="px-4 py-3 text-center text-xs text-gray-400">No data</td></tr>
                     )}
                   </Fragment>
                 ))}
                 {loading && (loadingCount ?? 0) > 0 && (
                   <tr className="border-b border-gray-50">
-                    <td colSpan={4} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
+                    <td colSpan={colCount} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
                       Loading {loadingCount} more…
                     </td>
                   </tr>
@@ -964,16 +1057,16 @@ function RankTable({
               </>
             ) : (
               <>
-                {rows.map((row, i) => renderRow(row, i + 1))}
+                {applySort(rows).map((row, i) => renderRow(row, i + 1))}
                 {loading && (loadingCount ?? 0) > 0 && (
                   <tr className="border-b border-gray-50">
-                    <td colSpan={4} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
+                    <td colSpan={colCount} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
                       Loading {loadingCount} more…
                     </td>
                   </tr>
                 )}
                 {rows.length === 0 && !loading && (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
+                  <tr><td colSpan={colCount} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
                 )}
               </>
             )}
@@ -984,30 +1077,23 @@ function RankTable({
   );
 }
 
-// ── COGS by Sales table ───────────────────────────────────────────────────────
+// ── Sales for the reported window ─────────────────────────────────────────────
 
 /** Stable empty map so a pending range change does not churn referential equality. */
 const EMPTY_SALES: Record<string, number> = {};
 
-function CogsBySalesTable({
-  rows,
-  loading,
-  loadingCount,
-  dateRange,
-  rangeLabel,
-}: {
-  rows: LocationData[];
-  loading: boolean;
-  loadingCount?: number;
-  dateRange?: { start: string; end: string } | null;
-  /** Name of the window on screen, or null when the dates were picked by hand. */
-  rangeLabel?: string | null;
-}) {
-  // Sales have to cover the same window as the costs they are ranked against, so
-  // this follows dateRange rather than the endpoint default of last week. The
-  // window that produced the figures is stored with them and checked on read, so
-  // the previous window sales never rank the new window rows while a fetch is in
-  // flight - cheaper than clearing state and re-rendering on every range change.
+/**
+ * Net sales per location name for a date range.
+ *
+ * Sales have to cover the same window as the costs they sit beside, so this
+ * follows the page date selectors rather than the endpoint default of last week.
+ * The window that produced the figures is stored with them and checked on read,
+ * so the previous window sales never sit next to the new window rows while a
+ * fetch is in flight - cheaper than clearing state and re-rendering on every
+ * range change. Lives in the page component so the tables that need it share one
+ * request instead of each firing their own.
+ */
+function useSalesForRange(dateRange: { start: string; end: string } | null | undefined): Record<string, number> {
   const rangeStart = dateRange?.start;
   const rangeEnd = dateRange?.end;
   const rangeKey = `${rangeStart ?? ""}__${rangeEnd ?? ""}`;
@@ -1025,81 +1111,7 @@ function CogsBySalesTable({
     return () => { cancelled = true; };
   }, [rangeStart, rangeEnd]);
 
-  const salesByName = sales.key === rangeKey ? sales.byName : EMPTY_SALES;
-
-  const sorted = [...rows].sort((a, b) => {
-    const sa = salesByName[a.locationName] ?? -1;
-    const sb = salesByName[b.locationName] ?? -1;
-    return sb - sa;
-  });
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  return (
-    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-1/2">
-      <div className="px-4 py-3 border-b border-gray-100">
-        <CopyableTitle
-          title={rangeLabel ? `COGS - ranked by sales — ${rangeLabel}` : "COGS - ranked by sales"}
-          targetRef={cardRef}
-          className="text-sm font-semibold text-gray-800"
-        />
-        {dateRange && (
-          <span className="ml-1.5 text-sm font-normal text-gray-400">
-            {fmtDate(dateRange.start)} – {fmtDate(dateRange.end)}
-          </span>
-        )}
-      </div>
-      {loading && sorted.length === 0 ? (
-        <div>
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-gray-50 animate-pulse">
-              <div className="h-4 bg-gray-100 rounded w-6" />
-              <div className="h-4 bg-gray-100 rounded flex-1" />
-              <div className="h-4 bg-gray-100 rounded w-16" />
-              <div className="h-4 bg-gray-100 rounded w-20" />
-              <div className="h-4 bg-gray-100 rounded w-16" />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100">
-              <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
-              <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">COGS</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Sales</th>
-              <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">COGS %</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((row, i) => {
-              const pct   = row.actualCostPct;
-              const sales = salesByName[row.locationName] ?? null;
-              return (
-                <tr key={row.locationId} className={`border-b border-gray-50 ${actualBg(pct)}`}>
-                  <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
-                  <td className="px-4 py-3 font-medium text-gray-900">{row.locationName}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-gray-700">{fmtDollars(row.actualCostDollars)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-gray-700">{sales != null ? fmtDollars(sales) : "—"}</td>
-                  <td className={`px-4 py-3 text-right font-semibold tabular-nums ${actualColor(pct)}`}>{fmtPct(pct)}</td>
-                </tr>
-              );
-            })}
-            {loading && (loadingCount ?? 0) > 0 && (
-              <tr className="border-b border-gray-50">
-                <td colSpan={5} className="px-4 py-2.5 text-xs text-gray-400 animate-pulse text-center">
-                  Loading {loadingCount} more…
-                </td>
-              </tr>
-            )}
-            {sorted.length === 0 && !loading && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
-            )}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
+  return sales.key === rangeKey ? sales.byName : EMPTY_SALES;
 }
 
 // ── Category × location matrix ────────────────────────────────────────────────
@@ -1601,11 +1613,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const [reportMeta, setReportMeta] = useState<{ startDate: string; endDate: string; fetchedAt: number } | null>(null);
   const [error, setError]         = useState<string | null>(null);
   const [activeQuick, setActiveQuick] = useState<string | null>(null);
-  // What the heading calls the window on screen. Mirrors the wording on whichever
-  // control chose it, so the label always names the button or option the reader
-  // clicked. Null means the start/end dropdowns were set by hand, where there is
-  // no name to give and the dates speak for themselves.
-  const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   // Why there is nothing to show, when that is a legitimate answer rather than a
   // failure - a period whose first week is still running, say.
   const [notice, setNotice] = useState<string | null>(null);
@@ -1664,7 +1671,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           setStartDate(prior.startDate);
           setEndDate(prior.endDate);
           setActiveQuick("last_week");
-          setRangeLabel("Last Week");
           fetchData(prior.startDate, prior.endDate);
         }
       })
@@ -1678,14 +1684,14 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const setLastWeek = () => {
     const sunStr = lastCompletedWeekEndDate();
     const opt = dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0];
-    if (opt) { setStartDate(opt.startDate); setEndDate(opt.endDate); setActiveQuick("last_week"); setRangeLabel("Last Week"); fetchData(opt.startDate, opt.endDate); }
+    if (opt) { setStartDate(opt.startDate); setEndDate(opt.endDate); setActiveQuick("last_week"); fetchData(opt.startDate, opt.endDate); }
   };
 
   const setYTD = () => {
     const ytdStart = [...dateOptions].reverse().find(o => o.startDate >= FISCAL_YEAR_START)?.startDate;
     const sunStr = lastCompletedWeekEndDate();
     const ytdEnd = (dateOptions.find(o => o.endDate === sunStr) ?? dateOptions[1] ?? dateOptions[0])?.endDate;
-    if (ytdStart && ytdEnd) { setStartDate(ytdStart); setEndDate(ytdEnd); setActiveQuick("ytd"); setRangeLabel("YTD"); fetchData(ytdStart, ytdEnd); }
+    if (ytdStart && ytdEnd) { setStartDate(ytdStart); setEndDate(ytdEnd); setActiveQuick("ytd"); fetchData(ytdStart, ytdEnd); }
   };
 
   const setPTD = () => {
@@ -1698,7 +1704,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     // has not banked a week yet is an answer; swallowing the click is not, and it
     // reads as a dead control.
     setActiveQuick("ptd");
-    setRangeLabel("PTD");
 
     if (ptdStart && ptdEnd && ptdStart <= ptdEnd) {
       setStartDate(ptdStart);
@@ -1724,7 +1729,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
       setStartDate(start);
       setEndDate(resolvedEnd);
       setActiveQuick(null);
-      setRangeLabel(HISTORY_RANGE_OPTIONS.find(o => o.key === key)?.label ?? null);
       fetchData(start, resolvedEnd);
     }
   };
@@ -1779,6 +1783,11 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const fetchedLabel = reportMeta
     ? `${fmtDate(reportMeta.startDate)} – ${fmtDate(reportMeta.endDate)} · ${new Date(reportMeta.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
     : null;
+
+  // Sales for the window the COGS and variance figures came from, shared by every
+  // table that shows them so the range only gets fetched once.
+  const salesRange = reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null;
+  const salesByName = useSalesForRange(salesRange);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1839,13 +1848,13 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             </select>
 
             <div className="flex items-center gap-1">
-              <select value={startDate} onChange={e => { setStartDate(e.target.value); setActiveQuick(null); setRangeLabel(null); }} disabled={loading || datesLoading}
+              <select value={startDate} onChange={e => { setStartDate(e.target.value); setActiveQuick(null); }} disabled={loading || datesLoading}
                 className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300">
                 {datesLoading && <option>Loading…</option>}
                 {startOptions.map(s => <option key={s} value={s}>{fmtDate(s)}</option>)}
               </select>
               <span className="text-xs text-gray-400">to</span>
-              <select value={endDate} onChange={e => { setEndDate(e.target.value); setActiveQuick(null); setRangeLabel(null); }} disabled={loading || datesLoading}
+              <select value={endDate} onChange={e => { setEndDate(e.target.value); setActiveQuick(null); }} disabled={loading || datesLoading}
                 className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300">
                 {datesLoading && <option>Loading…</option>}
                 {endOptions.map(e => <option key={e} value={e}>{fmtDate(e)}</option>)}
@@ -1953,6 +1962,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               expandedIds={expandedIds}
               itemsCache={cogsItemsCache}
               onToggle={handleToggle}
+              salesByName={salesByName}
             />
             <RankTable
               title="Variance"
@@ -1970,6 +1980,8 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               expandedIds={expandedIds}
               itemsCache={varItemsCache}
               onToggle={handleToggle}
+              salesByName={salesByName}
+              sortByMagnitude
             />
           </div>
         )}
@@ -2001,18 +2013,6 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         </div>
 
         <HistoryChart />
-
-        {(allLocations.length > 0 || loading) && (
-          <div className="mt-6">
-            <CogsBySalesTable
-              rows={cogsRows}
-              loading={loading}
-              loadingCount={loadingIds.size}
-              dateRange={reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null}
-              rangeLabel={rangeLabel}
-            />
-          </div>
-        )}
       </main>
     </div>
   );
