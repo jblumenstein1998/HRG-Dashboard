@@ -124,10 +124,38 @@ export type PAROrder = {
   isCountedOrder: boolean;
 };
 
+// Jobs PAR leaves out of the Labor Hours on its own Sales Summary. This is not
+// our judgement call — each job in Settings2.svc carries an explicit
+// ExcludeOnSalesAndLaborReports flag, and we read it rather than deciding for
+// ourselves which roles count.
+//
+// As of 2026-08-31 exactly two jobs have it set, chain-wide: "Training mode"
+// (649495739) and "Above Store" (649490824) — trainees are not productive
+// labor, and above-store staff working in a restaurant are not that
+// restaurant's labor. Counting them put productivity out by up to 2.7% on the
+// four stores that had such shifts; verified against the report for all 12
+// stores over 8/24-8/30, every one matching to the decimal once excluded.
+//
+// Note the flag is the rule, not an unpaid rate: "Salary - General Manager"
+// (649487911) is PayRate 0 at five stores and PAR counts every minute of it.
+//
+// Fallback for a Settings2.svc failure. Reading the flag live is the point —
+// this only keeps a transient outage from silently reinflating labor, and goes
+// stale the moment someone flags a new job in the back office.
+const KNOWN_NON_LABOR_JOB_IDS = new Set(["649495739", "649490824"]);
+
+export type PARJob = {
+  id: string;
+  name: string;
+  /** PAR's own flag for "leave this job out of the Sales and Labor reports". */
+  excludeFromReports: boolean;
+};
+
 export type PARShift = {
   startMinutes: number; // minutes from midnight, local time
   endMinutes:   number;
   minutesWorked: number;
+  jobId: string | null;
   // True if this employee hasn't clocked out yet. PAR represents "no clock-out
   // yet" as an EndTime whose DateTime is the sentinel 0001-01-01 — NOT a missing
   // tag — so this can't be inferred from endDt being null.
@@ -195,6 +223,7 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     const breaksXml = tagVal(s, "Breaks") ?? "";
 
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
+    const jobId = tagVal(top, "JobId");
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
     const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
     const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
@@ -227,7 +256,7 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     });
 
     const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
-    return { startMinutes, endMinutes, minutesWorked, isOpen, breaks };
+    return { startMinutes, endMinutes, minutesWorked, jobId, isOpen, breaks };
   });
 }
 
@@ -248,16 +277,64 @@ export const getOrders = unstable_cache(
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
+// Job definitions change when someone edits them in the back office, which is
+// rare — a day's cache is plenty, and it keeps GetJobs off the per-day path
+// entirely when a range is being backfilled.
+export const getJobs = unstable_cache(
+  async (storeId: string): Promise<PARJob[]> => {
+    const xml = await soapPost(
+      "Settings2.svc",
+      "http://www.brinksoftware.com/webservices/settings/v2/ISettingsWebService2/GetJobs",
+      `<GetJobs xmlns="http://www.brinksoftware.com/webservices/settings/v2"><request></request></GetJobs>`,
+      getLocationToken(storeId),
+    );
+    return allTags(xml, "Job").flatMap(j => {
+      const id = tagVal(j, "Id");
+      if (!id) return [];
+      return [{
+        id,
+        name: tagVal(j, "Name") ?? "",
+        excludeFromReports: tagVal(j, "ExcludeOnSalesAndLaborReports") === "true",
+      }];
+    });
+  },
+  ["par-jobs"],
+  { revalidate: 60 * 60 * 24, tags: ["par-data"] },
+);
+
+async function nonLaborJobIds(storeId: string): Promise<Set<string>> {
+  try {
+    const jobs = await getJobs(storeId);
+    // An empty or unparseable response would exclude nothing and quietly
+    // reinflate labor, so treat "no jobs came back" as a failure too.
+    if (jobs.length === 0) throw new Error("GetJobs returned no jobs");
+    return new Set(jobs.filter(j => j.excludeFromReports).map(j => j.id));
+  } catch (err) {
+    console.warn(`[par] GetJobs failed for ${storeId}, falling back to known exclusions`, err);
+    return KNOWN_NON_LABOR_JOB_IDS;
+  }
+}
+
+/** Drops the shifts PAR itself leaves out of Labor Hours. */
+function withoutNonLaborJobs(shifts: PARShift[], excluded: Set<string>): PARShift[] {
+  return shifts.filter(s => !s.jobId || !excluded.has(s.jobId));
+}
+
 export const getShifts = unstable_cache(
   async (storeId: string, businessDate: string): Promise<PARShift[]> => {
     const token = getLocationToken(storeId);
+    // Sequential, NOT Promise.all: both calls draw on the same 5-permit
+    // semaphore, so overlapping them lets five callers each hold a shifts
+    // permit while waiting for a jobs permit, and nothing ever releases.
+    // GetJobs is cached for a day, so this costs one request, once.
+    const excluded = await nonLaborJobIds(storeId);
     const xml = await soapPost(
       "Labor2.svc",
       "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
       `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
       token,
     );
-    return parseShiftsXml(xml, getStoreTimeZone(storeId));
+    return withoutNonLaborJobs(parseShiftsXml(xml, getStoreTimeZone(storeId)), excluded);
   },
   ["par-shifts"],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
@@ -280,13 +357,17 @@ export async function getOrdersLive(storeId: string, businessDate: string): Prom
 
 export async function getShiftsLive(storeId: string, businessDate: string): Promise<PARShift[]> {
   const token = getLocationToken(storeId);
+  // Only the shifts are refetched — "live" is about today's minutes still
+  // moving, and a job's report flag is not something that changes hour to hour.
+  // Sequential for the same semaphore reason as getShifts above.
+  const excluded = await nonLaborJobIds(storeId);
   const xml = await soapPost(
     "Labor2.svc",
     "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
     `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
     token,
   );
-  return parseShiftsXml(xml, getStoreTimeZone(storeId));
+  return withoutNonLaborJobs(parseShiftsXml(xml, getStoreTimeZone(storeId)), excluded);
 }
 
 // ── Date utilities ────────────────────────────────────────────────────────────

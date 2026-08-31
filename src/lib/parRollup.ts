@@ -51,7 +51,11 @@ function aggregateDay(orders: PAROrders, shifts: PARShift[]): DayTotals {
 // store/day overwrites with fresh totals (e.g. late-settling orders).
 
 export async function backfillStoreDay(storeId: string, businessDate: string): Promise<void> {
-  const { netSales, orderCount, laborMinutes } = await computeDayTotals(storeId, businessDate);
+  await writeDayTotals(storeId, businessDate, await computeDayTotals(storeId, businessDate));
+}
+
+async function writeDayTotals(storeId: string, businessDate: string, totals: DayTotals): Promise<void> {
+  const { netSales, orderCount, laborMinutes } = totals;
 
   await sql`
     INSERT INTO par_daily_metrics (store_id, business_date, net_sales, order_count, labor_minutes, updated_at)
@@ -78,6 +82,165 @@ export async function backfillRange(start: string, end: string): Promise<{ store
     }
   }
   return done;
+}
+
+// ── Trailing re-roll ──────────────────────────────────────────────────────────
+// A business date was rolled up once, the morning after it closed, and never
+// revisited. Timecards keep moving after that: measured over four weeks and four
+// stores, 1.54% of labor hours belonged to shifts edited after their day's cron
+// write had already happened, and that figure is a floor — a shift deleted after
+// the write cannot appear in a live pull at all, and deletions were the larger
+// error in practice (one store sat 26 hours above what PAR now reports). Sales
+// barely move after close; labor does, so the visible symptom was productivity.
+//
+// Re-rolling a trailing window each morning folds those corrections in. The
+// window is 14 days because the late-edit tail runs that long: a 3-day window
+// recovers ~81% of late-edited hours, 7 days ~93%, 14 days all of it.
+
+export const REROLL_WINDOW_DAYS = 14;
+
+export type RerollChange = {
+  storeId: string;
+  businessDate: string;
+  laborMinutesBefore: number | null;
+  laborMinutesAfter: number;
+  netSalesBefore: number | null;
+  netSalesAfter: number;
+};
+
+export type RerollSummary = {
+  windowStart: string;
+  windowEnd: string;
+  /** True when nothing was written — the run only reports what it would change. */
+  dryRun: boolean;
+  storeDays: number;
+  written: number;
+  changed: number;
+  /** PAR errored for this store/day; the stored row was left alone. */
+  skippedError: number;
+  /** PAR returned an empty day over a stored non-empty one — treated as a failed
+   *  read rather than a real correction. See guard below. */
+  skippedZero: number;
+  laborMinutesDelta: number;
+  netSalesDelta: number;
+  changes: RerollChange[];
+};
+
+/** Existing rows for the window, keyed `storeId__businessDate`. */
+async function existingRows(start: string, end: string): Promise<Map<string, DayTotals>> {
+  const rows = (await sql`
+    SELECT store_id, business_date, net_sales, order_count, labor_minutes
+    FROM par_daily_metrics
+    WHERE business_date BETWEEN ${start} AND ${end}
+  `) as {
+    store_id: string;
+    business_date: string | Date;
+    net_sales: string;
+    order_count: string;
+    labor_minutes: string;
+  }[];
+
+  const map = new Map<string, DayTotals>();
+  for (const row of rows) {
+    const date =
+      typeof row.business_date === "string"
+        ? row.business_date.slice(0, 10)
+        : row.business_date.toISOString().slice(0, 10);
+    map.set(`${row.store_id}__${date}`, {
+      netSales: Number(row.net_sales),
+      orderCount: Number(row.order_count),
+      laborMinutes: Number(row.labor_minutes),
+    });
+  }
+  return map;
+}
+
+/**
+ * Re-computes every store for every business date in [start, end] and overwrites
+ * the rollup, reporting what moved.
+ *
+ * Reads live rather than through par.ts's 1hr cache: the whole point is to see
+ * PAR as it stands now, and a re-roll that could serve a cached copy of the same
+ * stale figures it is meant to correct would be the original bug wearing a hat.
+ *
+ * `dryRun` does every read and comparison but no write, so the same summary can
+ * be inspected before letting it touch the table.
+ */
+export async function rerollRange(start: string, end: string, dryRun = false): Promise<RerollSummary> {
+  const before = await existingRows(start, end);
+  const summary: RerollSummary = {
+    windowStart: start,
+    windowEnd: end,
+    dryRun,
+    storeDays: 0,
+    written: 0,
+    changed: 0,
+    skippedError: 0,
+    skippedZero: 0,
+    laborMinutesDelta: 0,
+    netSalesDelta: 0,
+    changes: [],
+  };
+
+  // Dates in sequence, stores in parallel within a date. par.ts's semaphore caps
+  // actual SOAP concurrency at 5 regardless, so this bounds wall time without
+  // pushing PAR past its documented limit.
+  for (const businessDate of dateRange(start, end)) {
+    const results = await Promise.all(
+      PAR_LOCATIONS.map(async loc => {
+        try {
+          // Strict: a PAR failure throws here instead of collapsing to an empty
+          // day, which would otherwise overwrite a good row with zeros.
+          return { loc, totals: await computeDayTotalsStrict(loc.storeId, businessDate) };
+        } catch {
+          return { loc, totals: null };
+        }
+      }),
+    );
+
+    for (const { loc, totals } of results) {
+      summary.storeDays++;
+      const prior = before.get(`${loc.storeId}__${businessDate}`) ?? null;
+
+      if (!totals) {
+        summary.skippedError++;
+        continue;
+      }
+
+      // soapPost returns the body whatever the HTTP status, so a SOAP fault
+      // parses as a day with no orders and no shifts. Indistinguishable from a
+      // genuinely closed store on its own — but replacing a stored day that had
+      // real numbers with an empty one is a failed read, not a correction, so
+      // leave the row and count it.
+      const isEmpty = totals.netSales === 0 && totals.orderCount === 0 && totals.laborMinutes === 0;
+      const priorHadData = !!prior && (prior.netSales !== 0 || prior.orderCount !== 0 || prior.laborMinutes !== 0);
+      if (isEmpty && priorHadData) {
+        summary.skippedZero++;
+        continue;
+      }
+
+      if (!dryRun) await writeDayTotals(loc.storeId, businessDate, totals);
+      summary.written++;
+
+      const laborDelta = totals.laborMinutes - (prior?.laborMinutes ?? 0);
+      const salesDelta = totals.netSales - (prior?.netSales ?? 0);
+      if (prior && (laborDelta !== 0 || Math.abs(salesDelta) >= 0.01)) {
+        summary.changed++;
+        summary.laborMinutesDelta += laborDelta;
+        summary.netSalesDelta += salesDelta;
+        summary.changes.push({
+          storeId: loc.storeId,
+          businessDate,
+          laborMinutesBefore: prior.laborMinutes,
+          laborMinutesAfter: totals.laborMinutes,
+          netSalesBefore: prior.netSales,
+          netSalesAfter: totals.netSales,
+        });
+      }
+    }
+  }
+
+  return summary;
 }
 
 // ── Live "today" merge ────────────────────────────────────────────────────────
