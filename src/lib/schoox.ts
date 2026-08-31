@@ -488,12 +488,14 @@ export function fetchZuReportFresh(): Promise<ZuReport> {
 // ── Certification tests ───────────────────────────────────────────────────────
 
 /**
- * The four certification tests the ZU tab reports on, in the order they sit on
- * the career path: trainer, shift leader, assistant manager, general manager.
+ * The certification tests the ZU tab reports on. The first four are the career
+ * path in order — trainer, shift leader, assistant manager, general manager —
+ * and ServSafe Manager follows as a food-safety certification that sits beside
+ * the ladder rather than on it.
  *
  * Hardcoded rather than discovered because this is an editorial choice, not a
- * complete list — Zaxby's publishes sixty-eight compliance courses and these
- * are the four HRG manages against. The ids come from the academy's course
+ * complete list — the academy publishes a hundred and twenty-one courses and
+ * these are the ones HRG manages against. The ids come from the academy's course
  * catalogue; `scripts/schoox-courses-explore.mjs` prints the full list with ids
  * if one is ever renamed or replaced.
  */
@@ -505,6 +507,12 @@ export const ZU_TESTS = [
   { id: "805646", label: "Manager Certification Test", short: "Shift Leader" },
   { id: "4966964", label: "Assistant Manager Readiness Check", short: "Assistant Mgr" },
   { id: "9116252", label: "General Manager Certification Test", short: "General Mgr" },
+  // Unlike the four above this one is not a compliance course, so it never
+  // appears in the compliance catalogue the explore script prints — look it up
+  // by id if it needs checking. The per-store filter still answers correctly for
+  // it, which is what the grid depends on. `label` keeps the academy's own
+  // spelling so the course is findable in Schoox; the header uses the brand's.
+  { id: "10936639", label: "Servsafe Manager", short: "ServSafe" },
 ] as const;
 
 /** One person's result on each test. Null means not assigned that test. */
@@ -620,10 +628,10 @@ function progressOf(m: CourseMember): number | null {
 }
 
 /**
- * The whole grid: every store against the four tests, with the people behind
+ * The whole grid: every store against every test, with the people behind
  * each store's numbers.
  *
- * Four tests across twelve stores is forty-eight requests, so it is built once
+ * Five tests across twelve stores is sixty requests, so it is built once
  * per revalidation window and served whole. The people are bundled rather than
  * fetched per expanded row because they arrive in the same responses the rates
  * come from — asking for them separately would mean making these calls twice.
