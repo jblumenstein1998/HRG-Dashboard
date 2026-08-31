@@ -94,9 +94,29 @@ async function soapPost(service: string, action: string, body: string, locationT
         "LocationToken": locationToken,
       },
       body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>${body}</soap:Body></soap:Envelope>`,
-      signal: AbortSignal.timeout(30_000),
+      // A full day of orders for a busy store runs to several MB; 30s was too
+      // tight for the largest of them under load.
+      signal: AbortSignal.timeout(90_000),
     });
-    return res.text();
+    const text = await res.text();
+
+    // Everything below turns a failed call into a thrown error rather than a
+    // body that parses as "this day had no orders". That distinction is the
+    // whole ballgame for the rollup: a caller can retry or skip on an error,
+    // but an empty day is indistinguishable from a closed store and will be
+    // written straight over good figures. One store-day was zeroed this way
+    // (Spring Hill 2026-01-07, $8,646.69 of sales) before these checks existed.
+    if (!res.ok) {
+      throw new Error(`PAR ${service} HTTP ${res.status}: ${text.slice(0, 300)}`);
+    }
+    if (/<(?:[a-zA-Z]+:)?Fault[\s>]/.test(text)) {
+      throw new Error(`PAR ${service} SOAP fault: ${(tagVal(text, "faultstring") ?? text.slice(0, 300))}`);
+    }
+    const resultCode = tagVal(text, "ResultCode");
+    if (resultCode !== null && resultCode !== "0") {
+      throw new Error(`PAR ${service} ResultCode=${resultCode}: ${tagVal(text, "Message") ?? "(no message)"}`);
+    }
+    return text;
   } finally {
     sem.release();
   }

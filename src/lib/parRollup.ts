@@ -124,6 +124,9 @@ export type RerollSummary = {
   laborMinutesDelta: number;
   netSalesDelta: number;
   changes: RerollChange[];
+  /** Store-days left untouched because a metric collapsed to zero. Worth eyes:
+   *  each one is either a real closure that already read zero, or a bad read. */
+  suspect: { storeId: string; businessDate: string; reason: string; prior: { netSales: number; orderCount: number; laborMinutes: number } | null }[];
 };
 
 /** Existing rows for the window, keyed `storeId__businessDate`. */
@@ -180,6 +183,7 @@ export async function rerollRange(start: string, end: string, dryRun = false): P
     laborMinutesDelta: 0,
     netSalesDelta: 0,
     changes: [],
+    suspect: [],
   };
 
   // Dates in sequence, stores in parallel within a date. par.ts's semaphore caps
@@ -207,15 +211,30 @@ export async function rerollRange(start: string, end: string, dryRun = false): P
         continue;
       }
 
-      // soapPost returns the body whatever the HTTP status, so a SOAP fault
-      // parses as a day with no orders and no shifts. Indistinguishable from a
-      // genuinely closed store on its own — but replacing a stored day that had
-      // real numbers with an empty one is a failed read, not a correction, so
-      // leave the row and count it.
-      const isEmpty = totals.netSales === 0 && totals.orderCount === 0 && totals.laborMinutes === 0;
-      const priorHadData = !!prior && (prior.netSales !== 0 || prior.orderCount !== 0 || prior.laborMinutes !== 0);
-      if (isEmpty && priorHadData) {
+      // Sales and labor come from separate endpoints, so they fail separately.
+      // Judge them separately too: an earlier version demanded the WHOLE day be
+      // empty before it would skip, and a day whose orders came back empty
+      // while its shifts came back fine sailed straight past it — 113 labor
+      // hours against $0 of sales, overwriting $8,646.69 (Spring Hill,
+      // 2026-01-07). Either half collapsing to nothing where the stored row had
+      // something is a failed read until proven otherwise.
+      //
+      // "Prior had something" is the test rather than any judgement about what
+      // a plausible day looks like: real closures do post zero sales against a
+      // little cleaning labor, and those days read zero in the stored row too,
+      // so they are never mistaken for a failure.
+      const salesCollapsed =
+        totals.netSales === 0 && totals.orderCount === 0 && !!prior && (prior.netSales !== 0 || prior.orderCount !== 0);
+      const laborCollapsed =
+        totals.laborMinutes === 0 && !!prior && prior.laborMinutes !== 0;
+      if (salesCollapsed || laborCollapsed) {
         summary.skippedZero++;
+        summary.suspect.push({
+          storeId: loc.storeId,
+          businessDate,
+          reason: salesCollapsed ? "sales went to zero" : "labor went to zero",
+          prior: prior ? { netSales: prior.netSales, orderCount: prior.orderCount, laborMinutes: prior.laborMinutes } : null,
+        });
         continue;
       }
 
