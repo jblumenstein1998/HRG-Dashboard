@@ -105,7 +105,9 @@ export type ConditionUnit =
   /** 0 = no, 1 = yes. */
   | "boolean"
   /** 0 = below expectations, 1 = Meets, 2 = Exceeds. */
-  | "rating";
+  | "rating"
+  /** A review marked out of ten, where the mark IS the attainment. */
+  | "tenPoint";
 
 export type Condition = {
   /**
@@ -188,6 +190,20 @@ export type Category = {
    * both source docs.
    */
   isLivingOurValues?: boolean;
+  /**
+   * How the category turns its conditions into a score.
+   *
+   * "strict" (the default, and every category from the docs bar one) is
+   * all-or-nothing: every condition at Target scores 100%, every condition at
+   * Threshold scores 50%, anything else scores 0. No partial credit.
+   *
+   * "proportionalTen" is the deliberate exception for Living Our Values, which
+   * is a single review marked out of ten where the mark is the attainment —
+   * 8 means 80% of the category, not "passed" or "failed". Applying the strict
+   * ladder to it would throw away the only criterion on these scorecards that
+   * carries a genuine gradient.
+   */
+  scoreMode?: "strict" | "proportionalTen";
   /**
    * Marks a category whose score comes from other positions rather than metrics:
    * the AGM's Director Performance and the GM's AGM Performance. These carry no

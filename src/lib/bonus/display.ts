@@ -64,6 +64,7 @@ export function fmtValue(value: number | null | undefined, unit: ConditionUnit):
     case "currency": return `$${Math.round(value).toLocaleString("en-US")}`;
     case "boolean": return value >= 1 ? "Yes" : "No";
     case "rating": return value >= 2 ? "Exceeds" : value >= 1 ? "Meets" : "Below";
+    case "tenPoint": return `${round(value)} / 10`;
     case "ratio": return round(value);
     default: return round(value);
   }

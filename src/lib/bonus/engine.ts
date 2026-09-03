@@ -188,7 +188,15 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
   }
 
   let score: number | null;
-  if (scoreable.length === 0) {
+  if (category.scoreMode === "proportionalTen") {
+    // The mark IS the attainment: 8 out of 10 earns 80% of the category, not a
+    // pass or a fail. This is the one place partial credit exists, so it sits
+    // ahead of the strict ladder rather than inside it — every branch below
+    // assumes a category is won or lost outright.
+    const only = scoreable[0];
+    const mark = only?.value ?? null;
+    score = mark === null ? null : Math.min(1, Math.max(0, mark / 10));
+  } else if (scoreable.length === 0) {
     // A category with nothing to score (the derived ones) is filled in later by
     // the rollup; treat it as pending here rather than as a perfect zero.
     score = null;
@@ -218,7 +226,10 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
   // Highest, not product — see the note at the top of this file.
   const multiplier = multipliersFired.reduce((best, m) => Math.max(best, m.factor), 1);
 
-  markNearMisses(scoreable, score);
+  // A near miss is "one condition short of the next level up", which has no
+  // meaning where the score is a gradient — and a 5 out of 10 lands on exactly
+  // the 0.5 the flag keys off, so without this it would be labelled as one.
+  if (category.scoreMode !== "proportionalTen") markNearMisses(scoreable, score);
 
   return {
     category,

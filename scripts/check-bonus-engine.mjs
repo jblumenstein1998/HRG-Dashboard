@@ -60,7 +60,7 @@ try {
     weeklyEquivalentSales: 40000,
     dtWindowSecs: 65, dtTotalSecs: 210, dtDaysMissingTarget: 0, dtMaxWeeklyPullForwards: 3,
     smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70,
-    lov_driveThru: 2, txnAllWeeksGrew: 1,
+    lov_driveThru: 10, txnAllWeeksGrew: 1,
   }));
   let r = scorePosition("driveThru", "36001", "P7 FY2026", perfectDT);
   check("SOS payout = 50 x 1.0 x 1.25 multiplier", cat(r, "sos").payout, 62.5);
@@ -106,7 +106,7 @@ try {
     weeklyEquivalentSales: 90000,
     dtWindowSecs: 56, dtTotalSecs: 235, dtDaysMissingTarget: 0, dtMaxWeeklyPullForwards: 9,
     smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70,
-    lov_driveThru: 2, txnAllWeeksGrew: 0, dt_line_busting: 85,
+    lov_driveThru: 10, txnAllWeeksGrew: 0, dt_line_busting: 85,
   }));
   r = scorePosition("driveThru", "57004", "P7 FY2026", bigStore);
   check("0:56 clears the >$45k target of 0:57", cond(cat(r, "sos"), "dt_window_time").status, "target");
@@ -179,7 +179,7 @@ try {
   const kicked = new Map(Object.entries(base));
   kicked.set("txnAllWeeksGrew", 1);
   kicked.set("dtMaxWeeklyPullForwards", 3);   // fires the SOS 1.25x
-  kicked.set("lov_driveThru", 2);
+  kicked.set("lov_driveThru", 10);
   r = scoreStore("36001", "P7 FY2026", kicked).driveThru;
   check("SOS pays 50 x 1.25 category multiplier", cat(r, "sos").payout, 62.5);
   check("categories total 112.5 before the kicker",
@@ -190,7 +190,7 @@ try {
   const allTargets = new Map(Object.entries(base));
   allTargets.set("txnAllWeeksGrew", 1);
   for (const id of ["driveThru", "quality", "training", "hospitality", "agm"]) {
-    allTargets.set(`lov_${id}`, 2);
+    allTargets.set(`lov_${id}`, 10);
   }
   const rolled = scoreStore("36001", "P7 FY2026", allTargets);
   for (const id of ["driveThru", "quality", "training", "hospitality"]) {
@@ -226,7 +226,29 @@ try {
   check("value still present on the scorecard",
     cond(cat(r, "agm_performance"), "gm_monday_meetings").value, 0);
 
-  console.log("\n11. Manual criteria per position");
+  console.log("\n11. Living Our Values scores proportionally, not strictly");
+  // The one category on any scorecard with a gradient: the mark out of ten IS
+  // the attainment, so 8 pays 80% of the category rather than passing or
+  // failing it. Every other category is won or lost outright.
+  const lovAt = (mark) => {
+    const m = new Map(Object.entries(base));
+    m.set("lov_driveThru", mark);
+    return cat(scoreStore("36001", "P7 FY2026", m).driveThru, "lov");
+  };
+  check("8 of 10 scores the category at 80%", lovAt(8).score, 0.8);
+  check("8 of 10 pays 8 of a 10-point category", lovAt(8).payout, 8);
+  check("10 of 10 pays the category in full", lovAt(10).payout, 10);
+  check("0 of 10 pays nothing", lovAt(0).payout, 0);
+  check("3 of 10 is not rounded to a strict tier", lovAt(3).payout, 3);
+  // 5 lands exactly on the 0.5 the near-miss flag keys off, and must not be
+  // labelled as one condition short of the next level up.
+  check("5 of 10 is not marked a near miss", lovAt(5).conditions[0].isNearMiss, false);
+  const unentered = new Map(Object.entries(base));
+  unentered.delete("lov_driveThru");
+  check("unentered leaves the category pending, not zero",
+    cat(scoreStore("36001", "P7 FY2026", unentered).driveThru, "lov").score, null);
+
+  console.log("\n12. Manual criteria per position");
   for (const id of Object.keys(BONUS_RULES)) console.log(`     ${id}: ${manualConditions(id).length}`);
 
   console.log(`\n${pass} passed, ${fail} failed`);

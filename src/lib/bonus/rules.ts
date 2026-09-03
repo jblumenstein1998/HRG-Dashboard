@@ -46,11 +46,15 @@ function livingOurValues(positionId: PositionId): Condition {
     label: "Living Our Values review score",
     metric: `lov_${positionId}`,
     source: "manual",
-    unit: "rating",
+    unit: "tenPoint",
     grain: "entered",
+    // The gates are for display only — this category scores proportionally, so
+    // the mark itself decides the payout. They read as "any credit at all" and
+    // "full marks", which is what the Threshold and Target columns should say
+    // about a review scored out of ten.
     threshold: { cmp: "gte", value: 1 },
-    target: { cmp: "gte", value: 2 },
-    note: 'Threshold = review score "Meets". Target = "Exceeds", modelling values consistently and recognised by GM/AGM at least once per quarter.',
+    target: { cmp: "gte", value: 10 },
+    note: "Reviewed out of 10, and the mark is the attainment: 8 earns 80% of this category. Values modelled consistently and recognised by GM/AGM at least once per quarter.",
   };
 }
 
@@ -206,6 +210,7 @@ const DRIVE_THRU: PositionRules = {
       label: "Living Our Values",
       weight: 10,
       isLivingOurValues: true,
+      scoreMode: "proportionalTen",
       conditions: [livingOurValues("driveThru")],
       disqualifiers: [],
       multipliers: [],
@@ -441,6 +446,7 @@ const HOSPITALITY: PositionRules = {
       label: "Living Our Values",
       weight: 10,
       isLivingOurValues: true,
+      scoreMode: "proportionalTen",
       conditions: [livingOurValues("hospitality")],
       disqualifiers: [],
       multipliers: [],
@@ -636,6 +642,7 @@ const QUALITY: PositionRules = {
       label: "Living Our Values",
       weight: 10,
       isLivingOurValues: true,
+      scoreMode: "proportionalTen",
       conditions: [livingOurValues("quality")],
       disqualifiers: [],
       multipliers: [],
@@ -849,6 +856,7 @@ const TRAINING: PositionRules = {
       label: "Living Our Values",
       weight: 10,
       isLivingOurValues: true,
+      scoreMode: "proportionalTen",
       conditions: [livingOurValues("training")],
       disqualifiers: [],
       multipliers: [],
@@ -926,6 +934,7 @@ const AGM: PositionRules = {
       label: "Living Our Values",
       weight: 5,
       isLivingOurValues: true,
+      scoreMode: "proportionalTen",
       conditions: [livingOurValues("agm")],
       disqualifiers: [],
       multipliers: [],
