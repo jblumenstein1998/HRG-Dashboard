@@ -106,7 +106,11 @@ export type ConditionUnit =
   | "boolean"
   /** 0 = below expectations, 1 = Meets, 2 = Exceeds. */
   | "rating"
-  /** A review marked out of ten, where the mark IS the attainment. */
+  /**
+   * A review, where the mark IS the attainment rather than a gate to clear.
+   * Held on a 0-10 scale and entered at the three levels reviews are given at:
+   * Needs improvement (0), Meets (5), Exceeds (10).
+   */
   | "tenPoint";
 
 export type Condition = {

@@ -54,7 +54,7 @@ function livingOurValues(positionId: PositionId): Condition {
     // about a review scored out of ten.
     threshold: { cmp: "gte", value: 1 },
     target: { cmp: "gte", value: 10 },
-    note: "Reviewed out of 10, and the mark is the attainment: 8 earns 80% of this category. Values modelled consistently and recognised by GM/AGM at least once per quarter.",
+    note: "Needs improvement pays none of this category, Meets half, Exceeds all of it. Values modelled consistently and recognised by GM/AGM at least once per quarter.",
   };
 }
 

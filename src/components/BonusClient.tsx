@@ -470,6 +470,11 @@ function CategoryCard({
   onChange: (criterionId: string, value: string) => void;
 }) {
   const overrideId = categoryOverrideId(positionId, cat.category.id);
+  // Saved inputs with unsaved edits over the top — the same source every other
+  // field on the card reads from, so a click shows immediately rather than
+  // waiting for a save to round-trip through the engine.
+  const overrideValue = values[overrideId] ?? "";
+  const hasOverride = overrideValue.trim() !== "";
   const tone = cat.score === null ? "none" : cat.score >= 1 ? "good" : cat.score >= 0.5 ? "ok" : "bad";
   const derived = cat.category.derivedFrom;
 
@@ -495,13 +500,13 @@ function CategoryCard({
           // input to bend to move a category off a miss was always a guess, and
           // the judgement is the thing worth recording anyway.
           <select
-            value={cat.scoreOverride === null ? "" : String(cat.scoreOverride)}
+            value={overrideValue}
             onChange={(e) => onChange(overrideId, e.target.value)}
             title="Set this category's result by hand"
-            className={`text-[11px] rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-              cat.scoreOverride === null
-                ? "border border-dashed border-gray-300 bg-white text-gray-500"
-                : "border border-amber-300 bg-amber-50 text-amber-800"
+            className={`text-[11px] rounded-md py-0.5 pl-2 pr-6 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+              hasOverride
+                ? "border border-amber-300 bg-amber-50 text-amber-800"
+                : "border border-dashed border-gray-300 bg-white text-gray-500"
             }`}
           >
             <option value="">computed</option>
@@ -510,8 +515,11 @@ function CategoryCard({
             <option value="100">Target · 100%</option>
           </select>
         )}
-        {cat.scoreOverride !== null && locked && (
+        {locked && cat.scoreOverride !== null && (
           <span className="text-[10px] uppercase tracking-wide text-amber-600">overridden</span>
+        )}
+        {!locked && hasOverride && String(cat.scoreOverride ?? "") !== overrideValue && (
+          <span className="text-[10px] uppercase tracking-wide text-amber-600">unsaved</span>
         )}
         <span className="text-xs tabular-nums text-gray-500 w-16 text-right">
           {cat.payout === null ? "—" : `${cat.payout.toFixed(1)} pts`}
@@ -605,13 +613,15 @@ function ConditionRow({
             <div className="text-[10px] leading-snug text-gray-400 max-w-xl">{r.condition.note}</div>
           )}
         </td>
-        <td className="px-3 py-1.5 text-right align-top">
+        <td
+          colSpan={unit === "tenPoint" ? 3 : 1}
+          className="px-3 py-1.5 text-right align-top"
+        >
           {editable ? (
             <UnitField
               unit={unit}
               value={values[r.condition.id] ?? ""}
               onChange={(v) => onChange(r.condition.id, v)}
-              className="w-20 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
             />
           ) : (
             <span
@@ -626,12 +636,8 @@ function ConditionRow({
           )}
         </td>
         {unit === "tenPoint" ? (
-          // Scored proportionally, so there is no gate to clear and no
-          // pass/fail to report — the mark is the whole story.
-          <td colSpan={3} className="px-3 py-1.5 text-right text-xs text-gray-500 align-top">
-            {r.value === null
-              ? "not reviewed"
-              : `${Math.round(Math.min(10, Math.max(0, r.value)) * 10)}% of this category`}
+          <td className={`px-3 py-1.5 text-right text-xs align-top ${TONE_TEXT[tone]}`}>
+            {STATUS_LABEL[r.status]}
           </td>
         ) : (
           <>
@@ -680,10 +686,15 @@ const UNIT_CHOICES: Partial<Record<ConditionUnit, { value: string; label: string
     { value: "1", label: "1 · Meets" },
     { value: "2", label: "2 · Exceeds" },
   ],
-  // Labelled as the attainment it represents, since that is how the category
-  // is scored and how the reviewer thinks about it. The stored value stays the
-  // 0-10 mark the engine divides by ten, so the labels are the only difference.
-  tenPoint: Array.from({ length: 11 }, (_, i) => ({ value: String(i), label: `${i * 10}%` })),
+  // Reviews are given at three levels, so those are the only marks offered.
+  // Stored on the 0-10 scale the engine divides by ten — 5 is a half-credit
+  // Meets — which keeps the proportional scoring and its tests untouched, and
+  // leaves room for finer marks later without a migration.
+  tenPoint: [
+    { value: "0", label: "Needs improvement" },
+    { value: "5", label: "Meets" },
+    { value: "10", label: "Exceeds" },
+  ],
 };
 
 const UNIT_ADORNMENT: Partial<Record<ConditionUnit, { prefix?: string; suffix?: string }>> = {
@@ -693,19 +704,29 @@ const UNIT_ADORNMENT: Partial<Record<ConditionUnit, { prefix?: string; suffix?: 
 };
 
 function UnitField({
-  unit, value, onChange, className, title, placeholder,
+  unit, value, onChange, title, placeholder,
 }: {
   unit: ConditionUnit;
   value: string;
   onChange: (value: string) => void;
-  className?: string;
   title?: string;
   placeholder?: string;
 }) {
+  const frame =
+    "text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-gray-200";
+
   const choices = UNIT_CHOICES[unit];
   if (choices) {
+    // Left-aligned with room for the arrow. Sharing the number box's
+    // `text-right px-2 w-20` pushed the labels against both edges — and Chrome
+    // carries the alignment into the open list, so the options were crammed too.
     return (
-      <select value={value} onChange={(e) => onChange(e.target.value)} title={title} className={className}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        title={title}
+        className={`${frame} py-1 pl-2.5 pr-7 min-w-[8.5rem] text-left`}
+      >
         <option value="">—</option>
         {choices.map((c) => (
           <option key={c.value} value={c.value}>{c.label}</option>
@@ -726,7 +747,7 @@ function UnitField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         title={title}
-        className={`${className ?? ""} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+        className={`${frame} w-20 px-2 py-0.5 text-right tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
       />
       {adornment?.suffix && <span className="text-xs text-gray-400">{adornment.suffix}</span>}
     </span>
