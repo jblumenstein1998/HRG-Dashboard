@@ -299,7 +299,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
         </div>
       </div>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-5 space-y-4">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-4 space-y-3">
         {error && (
           <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 flex items-center justify-between gap-4">
             <span>{error}</span>
@@ -335,7 +335,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
             Nothing computed for {store.name} in {period} yet — the nightly rollup hasn&apos;t run for this period.
           </div>
         ) : (
-          <div className={`space-y-4 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
+          <div className={`space-y-2.5 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
             {SCORECARD_ORDER.map((positionId) => (
               <PositionScorecard
                 key={positionId}
@@ -418,7 +418,7 @@ function PositionScorecard({
       <button
         onClick={() => setOpen((o) => !o)}
         disabled={!result}
-        className={`w-full flex items-center gap-3 px-4 py-3 text-left ${TONE_BG[tone]} ${result ? "hover:brightness-95" : ""} transition disabled:cursor-default`}
+        className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${TONE_BG[tone]} ${result ? "hover:brightness-95" : ""} transition disabled:cursor-default`}
       >
         <span className={`text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
         <span className="text-sm font-semibold text-gray-900">{POSITION_LABELS[positionId]}</span>
@@ -429,7 +429,7 @@ function PositionScorecard({
           <span className="text-[11px] text-gray-500">{result.pendingCount} not entered</span>
         )}
         <span className="ml-auto text-right">
-          <span className={`text-lg font-semibold tabular-nums ${TONE_TEXT[tone]}`}>
+          <span className={`text-base font-semibold tabular-nums ${TONE_TEXT[tone]}`}>
             {result ? fmtScore(result.score) : "—"}
           </span>
           {note && <span className="block text-[10px] leading-tight text-gray-400">{note}</span>}
@@ -438,11 +438,11 @@ function PositionScorecard({
 
       {open && (
         result === null ? (
-          <p className="px-4 py-6 text-sm text-gray-400">Not computed for this period.</p>
+          <p className="px-3 py-3 text-sm text-gray-400">Not computed for this period.</p>
         ) : inputsLoading ? (
-          <p className="px-4 py-6 text-sm text-gray-400 animate-pulse">Loading entries…</p>
+          <p className="px-3 py-3 text-sm text-gray-400 animate-pulse">Loading entries…</p>
         ) : (
-          <div className="px-4 py-3 space-y-3 border-t border-gray-100">
+          <div className="px-3 py-2 space-y-2 border-t border-gray-100">
             {result.categories.map((cat) => (
               <CategoryCard
                 key={cat.category.id}
@@ -480,7 +480,7 @@ function CategoryCard({
 
   return (
     <div className="rounded-lg border border-gray-200 overflow-hidden bg-white">
-      <div className="px-3 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-gray-50 border-b border-gray-100">
+      <div className="px-3 py-1.5 flex flex-wrap items-baseline gap-x-3 bg-gray-50 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-800">{cat.category.label}</span>
         <span className="text-xs text-gray-400">{cat.category.weight}% of total</span>
         <span className={`text-sm tabular-nums ml-auto ${TONE_TEXT[tone]}`}>
@@ -513,7 +513,7 @@ function CategoryCard({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100">
-              <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Criterion</th>
+              <th className="px-3 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Criterion</th>
               <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-32">Actual</th>
               <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">Threshold</th>
               <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">Target</th>
@@ -575,17 +575,17 @@ function ConditionRow({
   return (
     <>
       <tr className={`border-b border-gray-50 ${r.isNearMiss ? "bg-amber-50" : ""}`}>
-        <td className="px-3 py-2 text-gray-800 align-top">
+        <td className="px-3 py-1.5 text-gray-800 align-top">
           {r.condition.label}
           {kind === "disqualifier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-400">disqualifier</span>}
           {kind === "multiplier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-green-600">multiplier {badge}</span>}
           {r.condition.advisory && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-400">not scored</span>}
           {r.condition.source === "manual" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-blue-400">entered</span>}
           {r.condition.note && (
-            <div className="text-[10px] leading-tight text-gray-400 mt-0.5 max-w-xl">{r.condition.note}</div>
+            <div className="text-[10px] leading-snug text-gray-400 max-w-xl">{r.condition.note}</div>
           )}
         </td>
-        <td className="px-3 py-2 text-right align-top">
+        <td className="px-3 py-1.5 text-right align-top">
           {editable ? (
             isLov ? (
               // Reviewed on a fixed scale, so it is picked rather than typed —
@@ -595,7 +595,7 @@ function ConditionRow({
               <select
                 value={values[r.condition.id] ?? ""}
                 onChange={(e) => onChange(r.condition.id, e.target.value)}
-                className="w-28 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+                className="w-24 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
               >
                 <option value="">— not entered</option>
                 {Array.from({ length: 11 }, (_, i) => (
@@ -609,7 +609,7 @@ function ConditionRow({
                 value={values[r.condition.id] ?? ""}
                 onChange={(e) => onChange(r.condition.id, e.target.value)}
                 placeholder={unitPlaceholder(unit)}
-                className="w-28 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+                className="w-24 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
               />
             )
           ) : (
@@ -628,7 +628,7 @@ function ConditionRow({
               onChange={(e) => onChange(overrideId, e.target.value)}
               placeholder="override"
               title={known?.label ?? `Override ${r.condition.label} — replaces the automatic figure for ${r.condition.metric}`}
-              className={`mt-1 w-28 text-xs text-right tabular-nums rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+              className={`mt-0.5 w-24 text-xs text-right tabular-nums rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
                 overridden
                   ? "border border-amber-300 bg-amber-50 text-amber-800"
                   : "border border-dashed border-gray-200 bg-white"
@@ -639,9 +639,9 @@ function ConditionRow({
             <div className="text-[10px] text-amber-600 mt-0.5 uppercase tracking-wide">override</div>
           )}
         </td>
-        <td className="px-3 py-2 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.thresholdUsed, unit)}</td>
-        <td className="px-3 py-2 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.targetUsed, unit)}</td>
-        <td className={`px-3 py-2 text-right text-xs align-top ${TONE_TEXT[tone]}`}>{STATUS_LABEL[r.status]}</td>
+        <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.thresholdUsed, unit)}</td>
+        <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.targetUsed, unit)}</td>
+        <td className={`px-3 py-1.5 text-right text-xs align-top ${TONE_TEXT[tone]}`}>{STATUS_LABEL[r.status]}</td>
       </tr>
       {r.isNearMiss && (
         <tr className="bg-amber-50 border-b border-amber-100">
