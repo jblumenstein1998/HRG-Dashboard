@@ -1184,6 +1184,19 @@ export const OVERRIDABLE_METRICS: { metric: string; label: string; unit: Conditi
 export const OVERRIDE_PREFIX = "override_";
 
 /**
+ * A category's result, decided by a person rather than computed.
+ *
+ * Keyed by position as well as category because the ids are not unique across
+ * scorecards — five positions have a category called "lov". Stored as 0, 50 or
+ * 100, the three results the strict ladder can produce.
+ */
+export const CATEGORY_OVERRIDE_PREFIX = "catscore_";
+
+export function categoryOverrideId(positionId: string, categoryId: string): string {
+  return `${CATEGORY_OVERRIDE_PREFIX}${positionId}_${categoryId}`;
+}
+
+/**
  * Sanity check that every position's weights sum to 100. Called by the engine
  * on first use — a transcription slip here would silently rescale someone's
  * bonus, which is the kind of bug that only shows up in a payroll dispute.

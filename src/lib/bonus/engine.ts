@@ -42,6 +42,7 @@ import {
   TRANSACTION_KICKER,
   TRANSACTION_KICKER_FACTOR,
   assertWeightsValid,
+  categoryOverrideId,
 } from "./rules";
 import { DIRECTOR_IDS } from "./types";
 import type {
@@ -148,7 +149,28 @@ function isScoreable(r: ConditionResult): boolean {
 
 // ── Categories ───────────────────────────────────────────────────────────────
 
-function scoreCategory(category: Category, values: MetricValues): CategoryResult {
+function scoreCategory(
+  category: Category,
+  values: MetricValues,
+  overrideId?: string,
+): CategoryResult {
+  /**
+   * A decision about the outcome, entered on the category itself.
+   *
+   * Applied over everything — a disqualifier, a pending criterion, a computed
+   * score — because its whole purpose is to say "I have seen what this says and
+   * the answer is X". Overriding the inputs instead meant guessing which number
+   * to bend to move a category off a miss, which is a worse thing to record
+   * than the judgement itself.
+   *
+   * Only the three results the strict ladder can produce are accepted; anything
+   * else is ignored rather than trusted, since a stray value here would pay out.
+   */
+  const rawOverride = overrideId ? values.get(overrideId) : undefined;
+  const scoreOverride =
+    rawOverride === 0 || rawOverride === 50 || rawOverride === 100 ? rawOverride : null;
+  const overrideScore = scoreOverride === null ? null : scoreOverride / 100;
+
   const conditions = category.conditions.map((c) => evaluateCondition(c, values));
   const disqualifiers = category.disqualifiers.map((c) => evaluateCondition(c, values));
 
@@ -175,9 +197,10 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
   if (fired) {
     return {
       category,
-      score: 0,
+      score: overrideScore ?? 0,
       multiplier: 1,
-      payout: 0,
+      payout: category.weight * (overrideScore ?? 0),
+      scoreOverride,
       conditions,
       disqualifiers,
       multiplierGroups: groups.map((g) => ({ ...g, fired: false })),
@@ -216,6 +239,8 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
     score = 0;
   }
 
+  if (overrideScore !== null) score = overrideScore;
+
   // A multiplier can only lift a category that scored something — there is
   // nothing to multiply a zero or an unscored category by.
   const eligible = score !== null && score > 0;
@@ -229,7 +254,11 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
   // A near miss is "one condition short of the next level up", which has no
   // meaning where the score is a gradient — and a 5 out of 10 lands on exactly
   // the 0.5 the flag keys off, so without this it would be labelled as one.
-  if (category.scoreMode !== "proportionalTen") markNearMisses(scoreable, score);
+  // A near miss explains a computed score; it says nothing about one that was
+  // decided, so it is not marked on an overridden category either.
+  if (category.scoreMode !== "proportionalTen" && scoreOverride === null) {
+    markNearMisses(scoreable, score);
+  }
 
   return {
     category,
@@ -242,6 +271,7 @@ function scoreCategory(category: Category, values: MetricValues): CategoryResult
     multipliersFired,
     disqualifiedBy: null,
     pendingCount,
+    scoreOverride,
   };
 }
 
@@ -279,7 +309,9 @@ export function scorePosition(
   values: MetricValues
 ): PositionResult {
   const rules = BONUS_RULES[positionId];
-  const categories = rules.categories.map((c) => scoreCategory(c, values));
+  const categories = rules.categories.map((c) =>
+    scoreCategory(c, values, categoryOverrideId(positionId, c.id)),
+  );
 
   const kickerResult = evaluateCondition(TRANSACTION_KICKER, values);
   const kickerFired = kickerResult.status === "target";

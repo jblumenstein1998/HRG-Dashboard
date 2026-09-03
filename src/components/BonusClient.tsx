@@ -39,7 +39,7 @@ import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel } from "@/lib/bonus/periods";
-import { OVERRIDABLE_METRICS, OVERRIDE_PREFIX } from "@/lib/bonus/rules";
+import { OVERRIDE_PREFIX, categoryOverrideId } from "@/lib/bonus/rules";
 import {
   POSITION_LABELS,
   type CategoryResult, type ConditionResult, type ConditionUnit, type PositionId, type PositionResult,
@@ -447,6 +447,7 @@ function PositionScorecard({
               <CategoryCard
                 key={cat.category.id}
                 cat={cat}
+                positionId={positionId}
                 values={values}
                 locked={locked}
                 onChange={onChange}
@@ -460,13 +461,15 @@ function PositionScorecard({
 }
 
 function CategoryCard({
-  cat, values, locked, onChange,
+  cat, positionId, values, locked, onChange,
 }: {
   cat: CategoryResult;
+  positionId: PositionId;
   values: Record<string, string>;
   locked: boolean;
   onChange: (criterionId: string, value: string) => void;
 }) {
+  const overrideId = categoryOverrideId(positionId, cat.category.id);
   const tone = cat.score === null ? "none" : cat.score >= 1 ? "good" : cat.score >= 0.5 ? "ok" : "bad";
   const derived = cat.category.derivedFrom;
 
@@ -487,6 +490,29 @@ function CategoryCard({
           {cat.score === null ? "Not yet scoreable" : `${(cat.score * 100).toFixed(0)}%`}
           {cat.multiplier > 1 && <span className="ml-1 text-xs">×{cat.multiplier}</span>}
         </span>
+        {!locked && (
+          // Overriding the result rather than the numbers behind it. Which
+          // input to bend to move a category off a miss was always a guess, and
+          // the judgement is the thing worth recording anyway.
+          <select
+            value={cat.scoreOverride === null ? "" : String(cat.scoreOverride)}
+            onChange={(e) => onChange(overrideId, e.target.value)}
+            title="Set this category's result by hand"
+            className={`text-[11px] rounded-md px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+              cat.scoreOverride === null
+                ? "border border-dashed border-gray-300 bg-white text-gray-500"
+                : "border border-amber-300 bg-amber-50 text-amber-800"
+            }`}
+          >
+            <option value="">computed</option>
+            <option value="0">Miss · 0%</option>
+            <option value="50">Threshold · 50%</option>
+            <option value="100">Target · 100%</option>
+          </select>
+        )}
+        {cat.scoreOverride !== null && locked && (
+          <span className="text-[10px] uppercase tracking-wide text-amber-600">overridden</span>
+        )}
         <span className="text-xs tabular-nums text-gray-500 w-16 text-right">
           {cat.payout === null ? "—" : `${cat.payout.toFixed(1)} pts`}
         </span>
@@ -553,17 +579,6 @@ function ConditionRow({
   const tone = STATUS_TONE[r.status];
   const editable = r.condition.source === "manual" && !locked;
 
-  /**
-   * Any automatic figure can be overridden, not just a curated few. The engine
-   * has always allowed it — mergeInputs treats any input named
-   * `override_<metric>` as replacing that metric, whatever it is — and the old
-   * three-metric list was only ever a UI whitelist. Vendors are wrong often
-   * enough (see the PAR order outage) that being able to correct any of them
-   * without a deploy is worth more than the tidiness of a short list.
-   *
-   * OVERRIDABLE_METRICS is still consulted, purely for the friendlier wording
-   * it carries on the three metrics that have it.
-   */
   // Compared as rendered text rather than as gates: a two-sided "between" and
   // a one-sided gate can print the same thing, and what matters here is only
   // whether the reader would see the same figure twice.
@@ -571,10 +586,11 @@ function ConditionRow({
   const targetText = fmtGateValue(r.targetUsed, unit);
   const oneGate = thresholdText === targetText;
 
-  const known = OVERRIDABLE_METRICS.find((m) => m.metric === r.condition.metric);
-  const canOverride = r.condition.source === "auto" && !locked;
-  const overrideId = r.condition.source === "auto" ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
-  const overridden = overrideId ? (values[overrideId] ?? "").trim() !== "" : false;
+  // Results are corrected on the category now, not here. The per-metric
+  // mechanism still exists in the engine, so a value entered before the switch
+  // would still apply — surfaced, rather than left to work invisibly.
+  const legacyOverrideId = r.condition.source === "auto" ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
+  const overridden = legacyOverrideId ? (values[legacyOverrideId] ?? "").trim() !== "" : false;
 
   return (
     <>
@@ -605,35 +621,31 @@ function ConditionRow({
               {fmtValue(r.value, unit)}
             </span>
           )}
-          {canOverride && overrideId && (
-            <div className="mt-0.5">
-              <UnitField
-                unit={unit}
-                value={values[overrideId] ?? ""}
-                onChange={(v) => onChange(overrideId, v)}
-                placeholder="override"
-                title={known?.label ?? `Override ${r.condition.label} — replaces the automatic figure for ${r.condition.metric}`}
-                className={`w-20 text-xs text-right tabular-nums rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-                  overridden
-                    ? "border border-amber-300 bg-amber-50 text-amber-800"
-                    : "border border-dashed border-gray-200 bg-white"
-                }`}
-              />
-            </div>
-          )}
           {overridden && (
-            <div className="text-[10px] text-amber-600 mt-0.5 uppercase tracking-wide">override</div>
+            <div className="text-[10px] text-amber-600 mt-0.5 uppercase tracking-wide">value override</div>
           )}
         </td>
-        {oneGate ? (
-          <td colSpan={2} className="px-3 py-1.5 text-center tabular-nums text-gray-400 align-top">{targetText}</td>
+        {unit === "tenPoint" ? (
+          // Scored proportionally, so there is no gate to clear and no
+          // pass/fail to report — the mark is the whole story.
+          <td colSpan={3} className="px-3 py-1.5 text-right text-xs text-gray-500 align-top">
+            {r.value === null
+              ? "not reviewed"
+              : `${Math.round(Math.min(10, Math.max(0, r.value)) * 10)}% of this category`}
+          </td>
         ) : (
           <>
-            <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{thresholdText}</td>
-            <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{targetText}</td>
+            {oneGate ? (
+              <td colSpan={2} className="px-3 py-1.5 text-center tabular-nums text-gray-400 align-top">{targetText}</td>
+            ) : (
+              <>
+                <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{thresholdText}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{targetText}</td>
+              </>
+            )}
+            <td className={`px-3 py-1.5 text-right text-xs align-top ${TONE_TEXT[tone]}`}>{STATUS_LABEL[r.status]}</td>
           </>
         )}
-        <td className={`px-3 py-1.5 text-right text-xs align-top ${TONE_TEXT[tone]}`}>{STATUS_LABEL[r.status]}</td>
       </tr>
       {r.isNearMiss && (
         <tr className="bg-amber-50 border-b border-amber-100">
@@ -668,7 +680,10 @@ const UNIT_CHOICES: Partial<Record<ConditionUnit, { value: string; label: string
     { value: "1", label: "1 · Meets" },
     { value: "2", label: "2 · Exceeds" },
   ],
-  tenPoint: Array.from({ length: 11 }, (_, i) => ({ value: String(i), label: String(i) })),
+  // Labelled as the attainment it represents, since that is how the category
+  // is scored and how the reviewer thinks about it. The stored value stays the
+  // 0-10 mark the engine divides by ten, so the labels are the only difference.
+  tenPoint: Array.from({ length: 11 }, (_, i) => ({ value: String(i), label: `${i * 10}%` })),
 };
 
 const UNIT_ADORNMENT: Partial<Record<ConditionUnit, { prefix?: string; suffix?: string }>> = {
@@ -711,7 +726,7 @@ function UnitField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         title={title}
-        className={className}
+        className={`${className ?? ""} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
       />
       {adornment?.suffix && <span className="text-xs text-gray-400">{adornment.suffix}</span>}
     </span>

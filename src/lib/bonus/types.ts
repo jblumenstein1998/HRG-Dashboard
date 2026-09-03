@@ -279,6 +279,12 @@ export type CategoryResult = {
   disqualifiedBy: string | null;
   /** Conditions still waiting on a manual entry. */
   pendingCount: number;
+  /**
+   * The result a person set by hand — 0, 50 or 100 — or null when the score is
+   * the computed one. Kept separate from `score` so the card can say that a
+   * figure was decided rather than measured.
+   */
+  scoreOverride: number | null;
 };
 
 export type PositionResult = {
