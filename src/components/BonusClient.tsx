@@ -567,6 +567,13 @@ function ConditionRow({
    * OVERRIDABLE_METRICS is still consulted, purely for the friendlier wording
    * it carries on the three metrics that have it.
    */
+  // Compared as rendered text rather than as gates: a two-sided "between" and
+  // a one-sided gate can print the same thing, and what matters here is only
+  // whether the reader would see the same figure twice.
+  const thresholdText = fmtGateValue(r.thresholdUsed, unit);
+  const targetText = fmtGateValue(r.targetUsed, unit);
+  const oneGate = thresholdText === targetText;
+
   const known = OVERRIDABLE_METRICS.find((m) => m.metric === r.condition.metric);
   const canOverride = r.condition.source === "auto" && !locked;
   const overrideId = r.condition.source === "auto" ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
@@ -639,8 +646,14 @@ function ConditionRow({
             <div className="text-[10px] text-amber-600 mt-0.5 uppercase tracking-wide">override</div>
           )}
         </td>
-        <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.thresholdUsed, unit)}</td>
-        <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{fmtGateValue(r.targetUsed, unit)}</td>
+        {oneGate ? (
+          <td colSpan={2} className="px-3 py-1.5 text-center tabular-nums text-gray-400 align-top">{targetText}</td>
+        ) : (
+          <>
+            <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{thresholdText}</td>
+            <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 align-top">{targetText}</td>
+          </>
+        )}
         <td className={`px-3 py-1.5 text-right text-xs align-top ${TONE_TEXT[tone]}`}>{STATUS_LABEL[r.status]}</td>
       </tr>
       {r.isNearMiss && (
