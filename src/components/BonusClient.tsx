@@ -510,7 +510,7 @@ function CategoryCard({
       )}
 
       {rows.length > 0 && (
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
           <thead>
             <tr className="border-b border-gray-100">
               <th className="px-3 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Criterion</th>
@@ -529,7 +529,6 @@ function CategoryCard({
                 badge={note}
                 values={values}
                 locked={locked}
-                isLov={cat.category.isLivingOurValues === true}
                 onChange={onChange}
               />
             ))}
@@ -541,15 +540,13 @@ function CategoryCard({
 }
 
 function ConditionRow({
-  r, kind, badge, values, locked, isLov, onChange,
+  r, kind, badge, values, locked, onChange,
 }: {
   r: ConditionResult;
   kind: "condition" | "disqualifier" | "multiplier";
   badge?: string;
   values: Record<string, string>;
   locked: boolean;
-  /** Living Our Values is picked from a fixed scale rather than typed. */
-  isLov: boolean;
   onChange: (criterionId: string, value: string) => void;
 }) {
   const unit = r.condition.unit;
@@ -582,7 +579,7 @@ function ConditionRow({
   return (
     <>
       <tr className={`border-b border-gray-50 ${r.isNearMiss ? "bg-amber-50" : ""}`}>
-        <td className="px-3 py-1.5 text-gray-800 align-top">
+        <td className="px-3 py-1.5 text-gray-800 align-top break-words">
           {r.condition.label}
           {kind === "disqualifier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-400">disqualifier</span>}
           {kind === "multiplier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-green-600">multiplier {badge}</span>}
@@ -594,31 +591,12 @@ function ConditionRow({
         </td>
         <td className="px-3 py-1.5 text-right align-top">
           {editable ? (
-            isLov ? (
-              // Reviewed on a fixed scale, so it is picked rather than typed —
-              // a free-text box invited values off the scale entirely. The blank
-              // option is load-bearing: it is "not reviewed yet", which the
-              // engine treats as pending, and must stay distinct from a 0.
-              <select
-                value={values[r.condition.id] ?? ""}
-                onChange={(e) => onChange(r.condition.id, e.target.value)}
-                className="w-24 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-              >
-                <option value="">— not entered</option>
-                {Array.from({ length: 11 }, (_, i) => (
-                  <option key={i} value={String(i)}>{i}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="number"
-                step="any"
-                value={values[r.condition.id] ?? ""}
-                onChange={(e) => onChange(r.condition.id, e.target.value)}
-                placeholder={unitPlaceholder(unit)}
-                className="w-24 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-              />
-            )
+            <UnitField
+              unit={unit}
+              value={values[r.condition.id] ?? ""}
+              onChange={(v) => onChange(r.condition.id, v)}
+              className="w-20 text-sm text-right tabular-nums border border-gray-200 rounded-lg px-2 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+            />
           ) : (
             <span
               className={`tabular-nums ${overridden ? "text-amber-700 font-medium" : TONE_TEXT[tone]}`}
@@ -628,19 +606,20 @@ function ConditionRow({
             </span>
           )}
           {canOverride && overrideId && (
-            <input
-              type="number"
-              step="any"
-              value={values[overrideId] ?? ""}
-              onChange={(e) => onChange(overrideId, e.target.value)}
-              placeholder="override"
-              title={known?.label ?? `Override ${r.condition.label} — replaces the automatic figure for ${r.condition.metric}`}
-              className={`mt-0.5 w-24 text-xs text-right tabular-nums rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-                overridden
-                  ? "border border-amber-300 bg-amber-50 text-amber-800"
-                  : "border border-dashed border-gray-200 bg-white"
-              }`}
-            />
+            <div className="mt-0.5">
+              <UnitField
+                unit={unit}
+                value={values[overrideId] ?? ""}
+                onChange={(v) => onChange(overrideId, v)}
+                placeholder="override"
+                title={known?.label ?? `Override ${r.condition.label} — replaces the automatic figure for ${r.condition.metric}`}
+                className={`w-20 text-xs text-right tabular-nums rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                  overridden
+                    ? "border border-amber-300 bg-amber-50 text-amber-800"
+                    : "border border-dashed border-gray-200 bg-white"
+                }`}
+              />
+            </div>
           )}
           {overridden && (
             <div className="text-[10px] text-amber-600 mt-0.5 uppercase tracking-wide">override</div>
@@ -667,12 +646,74 @@ function ConditionRow({
   );
 }
 
-function unitPlaceholder(unit: ConditionUnit): string {
-  switch (unit) {
-    case "boolean": return "1 = yes";
-    case "rating": return "0/1/2";
-    case "percent": return "%";
-    case "currency": return "$";
-    default: return "";
+/**
+ * An entry box shaped like the figure it is asking for.
+ *
+ * A target of "≥ 80%" wants 80 typed into a box that says %, not a bare number
+ * whose scale has to be guessed — and a yes/no, a Meets/Exceeds review or a
+ * mark out of ten should not be a free-text number at all, which is how values
+ * off the scale got entered in the first place.
+ *
+ * Blank is always "not entered", which the engine reads as pending and keeps
+ * distinct from a real 0. It shows as the same em dash a pending value renders
+ * as elsewhere on the card, so the two read alike.
+ */
+const UNIT_CHOICES: Partial<Record<ConditionUnit, { value: string; label: string }[]>> = {
+  boolean: [
+    { value: "1", label: "Yes" },
+    { value: "0", label: "No" },
+  ],
+  rating: [
+    { value: "0", label: "0 · Below" },
+    { value: "1", label: "1 · Meets" },
+    { value: "2", label: "2 · Exceeds" },
+  ],
+  tenPoint: Array.from({ length: 11 }, (_, i) => ({ value: String(i), label: String(i) })),
+};
+
+const UNIT_ADORNMENT: Partial<Record<ConditionUnit, { prefix?: string; suffix?: string }>> = {
+  percent: { suffix: "%" },
+  currency: { prefix: "$" },
+  seconds: { suffix: "sec" },
+};
+
+function UnitField({
+  unit, value, onChange, className, title, placeholder,
+}: {
+  unit: ConditionUnit;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+  title?: string;
+  placeholder?: string;
+}) {
+  const choices = UNIT_CHOICES[unit];
+  if (choices) {
+    return (
+      <select value={value} onChange={(e) => onChange(e.target.value)} title={title} className={className}>
+        <option value="">—</option>
+        {choices.map((c) => (
+          <option key={c.value} value={c.value}>{c.label}</option>
+        ))}
+      </select>
+    );
   }
+
+  const adornment = UNIT_ADORNMENT[unit];
+  return (
+    <span className="inline-flex items-center justify-end gap-1">
+      {adornment?.prefix && <span className="text-xs text-gray-400">{adornment.prefix}</span>}
+      <input
+        type="number"
+        step="any"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        title={title}
+        className={className}
+      />
+      {adornment?.suffix && <span className="text-xs text-gray-400">{adornment.suffix}</span>}
+    </span>
+  );
 }
