@@ -147,7 +147,7 @@ export async function computePeriod(
   // resolved live value must be actively discarded in favour of the snapshot.
   if (!window.isPartial) {
     let frozen = 0;
-    let captured = 0;
+    let dropped = 0;
     for (const [storeId, values] of byStore) {
       const prior = existing.get(storeId);
       for (const metric of POINT_IN_TIME_METRICS) {
@@ -155,20 +155,24 @@ export async function computePeriod(
         if (snapshot !== undefined) {
           values.set(metric, snapshot);
           frozen++;
-        } else if (values.has(metric)) {
-          // No snapshot exists, so this period has never been computed since
-          // it closed. Today's reading is the best available and becomes the
-          // snapshot — worth saying out loud, because for an old period it is
-          // a reading taken long after the fact.
-          captured++;
+        } else if (values.delete(metric)) {
+          // No snapshot, and the period is already closed — so this was never
+          // observed while it was open and today's reading describes some other
+          // period. Dropped rather than stored: the engine reads an absent
+          // metric as pending, and "we do not know" is the honest answer where
+          // "here is a number from months later" is not.
+          //
+          // Only ever hits periods that closed before this was wired up. A
+          // period computed even once while open has a snapshot to freeze.
+          dropped++;
         }
       }
     }
     if (frozen > 0) warnings.push(`${frozen} point-in-time values held at their period-end snapshot`);
-    if (captured > 0) {
+    if (dropped > 0) {
       warnings.push(
-        `${captured} point-in-time values snapshotted now for a period that has already closed — ` +
-          `taken today, not at period end`,
+        `${dropped} point-in-time values left pending: this period closed without ever being ` +
+          `observed, and today's reading describes a different one`,
       );
     }
   }
