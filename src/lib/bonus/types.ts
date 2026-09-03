@@ -85,6 +85,14 @@ export type MetricGrain =
   | "dayCount"
   /** 1 if every week in the period passed, else 0. */
   | "allWeeks"
+  /**
+   * A reading taken at a moment rather than aggregated over the window,
+   * because the source only ever reports "now" — Schoox cannot be asked what a
+   * store's compliance was on a date that has passed. These move while the
+   * period is open and are frozen at the first run after it closes; see
+   * POINT_IN_TIME_METRICS in compute.ts.
+   */
+  | "snapshot"
   /** Typed in by a person; has no time shape of its own. */
   | "entered";
 

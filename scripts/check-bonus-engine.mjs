@@ -137,7 +137,7 @@ try {
     lov_driveThru: 0, lov_quality: 0, lov_training: 0, lov_hospitality: 0, lov_agm: 0,
     hosp_zcase_resolution: 100, hosp_zcase_count: 3, hosp_facility_inspection: 100,
     hosp_health_cleanliness_violation: 0, hosp_recognition: 100, hosp_pulse_check: 1,
-    q_jolt_completion: 100, q_mock_steritech_weekly: 1, q_health_inspection_score: 98,
+    joltCompletePct: 100, q_mock_steritech_weekly: 1, q_health_inspection_score: 98,
     q_mock_steritech_dishonest: 0, q_high_risk: 0, q_health_inspection_100: 0, q_steritech_105: 0,
     q_inventory_counts: 2, q_truck_order_resolution: 24, q_reports_24h: 100,
     t_onboarding_completion: 100, t_lto_compliance: 100, t_onboarding_slack: 1,
@@ -145,7 +145,7 @@ try {
     t_retention_30: 85, t_retention_60: 75, t_retention_90: 75,
     t_shift_lead_pipeline: 2, t_workstream_current: 1, t_pipeline_promotion: 0,
     agm_mock_rer_weekly: 1, agm_mock_rer_dishonest: 0, agm_rer_external_100: 0,
-    gm_labor_pct: 20, gm_zu_completion: 100, gm_servesafe: 1, gm_missed_lto_deadlines: 0,
+    gm_labor_pct: 20, zuComplianceRate: 100, gmServeSafeCurrent: 1, gm_missed_lto_deadlines: 0,
     gm_slack_completion: 100, gm_zu_completed_for_someone: 0, gm_monday_meetings: 1,
   };
   const all = scoreStore("36001", "P7 FY2026", new Map(Object.entries(base)));
@@ -162,7 +162,7 @@ try {
 
   // The worked example the AGM doc states in prose.
   const mixed = new Map(Object.entries(base));
-  mixed.set("q_jolt_completion", 96);
+  mixed.set("joltCompletePct", 96);
   mixed.set("q_inventory_counts", 1);
   mixed.set("q_truck_order_resolution", 60);
   mixed.set("q_reports_24h", 80);

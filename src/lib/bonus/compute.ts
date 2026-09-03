@@ -16,6 +16,12 @@ import { resolveBonusWindow } from "./periods";
 import { scoreStore } from "./engine";
 import type { MetricValues } from "./engine";
 import { OVERRIDE_PREFIX } from "./rules";
+
+/**
+ * Metrics whose source can only ever report the present, so a closed period's
+ * value has to be remembered rather than re-derived. See the freeze below.
+ */
+const POINT_IN_TIME_METRICS = ["zuComplianceRate", "gmServeSafeCurrent"] as const;
 import {
   getInputs, getMetrics, indexInputs, isLocked, saveMetrics, upsertResults,
   type ResultWrite,
@@ -125,6 +131,46 @@ export async function computePeriod(
   }
   if (retained > 0) {
     warnings.push(`${retained} metric values carried forward from the previous run (a vendor did not respond)`);
+  }
+
+  // Freeze the point-in-time metrics once the period is over.
+  //
+  // Schoox reports only the present: there is no way to ask what a store's ZU
+  // compliance was on a date that has passed. So these have to move while the
+  // period is open and stop the moment it closes, or a scorecard would keep
+  // drifting after the period it describes had ended — and a bonus already
+  // approved would quietly change.
+  //
+  // Whatever was stored first wins, which in practice is the last run while the
+  // period was still open, or the first run after it closed. This is not the
+  // generic carry-forward above: that only fills gaps, and here a freshly
+  // resolved live value must be actively discarded in favour of the snapshot.
+  if (!window.isPartial) {
+    let frozen = 0;
+    let captured = 0;
+    for (const [storeId, values] of byStore) {
+      const prior = existing.get(storeId);
+      for (const metric of POINT_IN_TIME_METRICS) {
+        const snapshot = prior?.get(metric);
+        if (snapshot !== undefined) {
+          values.set(metric, snapshot);
+          frozen++;
+        } else if (values.has(metric)) {
+          // No snapshot exists, so this period has never been computed since
+          // it closed. Today's reading is the best available and becomes the
+          // snapshot — worth saying out loud, because for an old period it is
+          // a reading taken long after the fact.
+          captured++;
+        }
+      }
+    }
+    if (frozen > 0) warnings.push(`${frozen} point-in-time values held at their period-end snapshot`);
+    if (captured > 0) {
+      warnings.push(
+        `${captured} point-in-time values snapshotted now for a period that has already closed — ` +
+          `taken today, not at period end`,
+      );
+    }
   }
 
   // Cached so a later rescore (someone typing a number) needs no vendor calls.

@@ -28,6 +28,8 @@ import { getPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
+import { fetchCompletionByLocation } from "../jolt";
+import { fetchZuReport, fetchZuTestReport, SERVSAFE_MANAGER_TEST_ID } from "../schoox";
 import { BONUS_ZCASE_TYPES } from "./goals";
 import { BONUS_RULES } from "./rules";
 import { passesGate, resolveGates, type MetricValues } from "./engine";
@@ -105,6 +107,10 @@ export type ResolveDiagnostics = {
   storesWithCost: number;
   /** ZCases found in the window, estate-wide. Zero means missing data. */
   zcases: number;
+  /** Stores Jolt returned a completion figure for. Five have no deployment. */
+  joltStores: number;
+  /** Stores the ZU snapshot resolved for. */
+  zuStores: number;
   warnings: string[];
 };
 
@@ -327,15 +333,85 @@ export async function resolvePeriodMetrics(
     warnings.push(`ZCase fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // ── Jolt ───────────────────────────────────────────────────────────────────
+  // Checklist completion for the Quality Director, the same Complete (%) the
+  // Jolt tab reports: complete ÷ (done + missed) over the period window.
+  //
+  // Jolt answers for an arbitrary date range, so a closed period can always be
+  // re-derived and this needs no snapshot — unlike the Schoox figures, which
+  // only ever report "now".
+  //
+  // Five stores have no Jolt deployment at all. Those are deliberately left
+  // absent rather than set to 0: the engine reads a missing value as pending,
+  // and scoring "no Jolt" as "failed Jolt" would zero 40% of the Quality card
+  // for stores that were never given the tool.
+  let joltStores = 0;
+  try {
+    const completion = await fetchCompletionByLocation(window.start, window.end);
+    const byName = new Map(completion.locations.map((l) => [l.store, l]));
+    for (const store of BONUS_STORES) {
+      const v = vals(store.storeId);
+      if (!v) continue;
+      const row = byName.get(store.name);
+      if (!row || row.completePct === null) continue;
+      put(v, "joltCompletePct", row.completePct);
+      joltStores++;
+    }
+    if (completion.storesWithoutJolt.length > 0) {
+      warnings.push(
+        `No Jolt deployment for ${completion.storesWithoutJolt.join(", ")} — ` +
+          `their Jolt criterion is left pending rather than scored as zero`,
+      );
+    }
+  } catch (err) {
+    warnings.push(`Jolt fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── Zaxby's University (Schoox) ────────────────────────────────────────────
+  // Both figures are point-in-time. Schoox answers only for the present — there
+  // is no way to ask what a store's compliance was on a date that has passed —
+  // so these move while a period is open and are frozen at the first run after
+  // it closes. The freeze lives in compute.ts; this resolver always reports now.
+  let zuStores = 0;
+  try {
+    const [zuReport, zuTests] = await Promise.all([fetchZuReport(), fetchZuTestReport()]);
+    const rateByStore = new Map(zuReport.stores.map((s) => [s.storeId, s]));
+    const testsByStore = new Map(zuTests.stores.map((s) => [s.storeId, s]));
+
+    for (const store of BONUS_STORES) {
+      const v = vals(store.storeId);
+      if (!v) continue;
+
+      put(v, "zuComplianceRate", rateByStore.get(store.storeId)?.complianceRate ?? null);
+
+      // "Certifications current" is one or more people at 100%, not an average:
+      // a store where three people are 60% through has nobody certified. Written
+      // as an explicit 0 when the store's roster is known and nobody qualifies,
+      // since that is a real answer rather than a missing one.
+      const t = testsByStore.get(store.storeId);
+      if (t) {
+        const anyCertified = t.people.some(
+          (p) => (p.results[SERVSAFE_MANAGER_TEST_ID] ?? 0) >= 100,
+        );
+        put(v, "gmServeSafeCurrent", anyCertified ? 1 : 0);
+      }
+      zuStores++;
+    }
+  } catch (err) {
+    warnings.push(`ZU fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   return {
     byStore,
     diagnostics: {
       weeks: weeks.length,
+      zuStores,
       smgPeriodRows: periodRows.length,
       smgWeeklyRows: weeklyRows.length,
       dailyDriveThruDays: dailyDays,
       storesWithCost: costs.size,
       zcases: zcaseRows,
+      joltStores,
       warnings,
     },
   };

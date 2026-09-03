@@ -499,6 +499,12 @@ export function fetchZuReportFresh(): Promise<ZuReport> {
  * catalogue; `scripts/schoox-courses-explore.mjs` prints the full list with ids
  * if one is ever renamed or replaced.
  */
+/**
+ * ServSafe Manager's course id, named because the GM scorecard asks whether a
+ * store has anyone certified and needs to find this row among the others.
+ */
+export const SERVSAFE_MANAGER_TEST_ID = "10936639";
+
 export const ZU_TESTS = [
   { id: "806609", label: "Train-the-Trainer", short: "Train-the-Trainer" },
   // The shift-leader step is measured by the Manager Certification Test, whose

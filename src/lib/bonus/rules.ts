@@ -463,10 +463,19 @@ const QUALITY: PositionRules = {
         {
           id: "q_jolt_completion",
           label: "Jolt checklist completion",
-          metric: "q_jolt_completion",
-          source: "manual",
+          // Jolt's own Complete (%) — complete / (done + missed) — over the
+          // period window, the figure the Jolt tab reports. The metric key is
+          // deliberately not the criterion id: manual entries are stored under
+          // the id, and keeping them apart means an entry made while this was
+          // hand-keyed can no longer shadow the live figure. Correcting a
+          // period now goes through the override field like any other vendor.
+          //
+          // Five stores have no Jolt deployment; they resolve to nothing and
+          // stay pending rather than scoring zero.
+          metric: "joltCompletePct",
+          source: "auto",
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 95 },
           target: { cmp: "gte", value: 100 },
         },
@@ -1020,23 +1029,31 @@ const GM: PositionRules = {
         {
           id: "gm_zu_completion",
           label: "ZU completion rate",
-          metric: "gm_zu_completion",
-          source: "manual",
+          // The store's Average Compliance Rate on the ZU tab. Schoox reports
+          // only the present, so this is a snapshot: it moves while the period
+          // is open and freezes at the first run after it closes.
+          metric: "zuComplianceRate",
+          source: "auto",
           unit: "percent",
-          grain: "entered",
+          grain: "snapshot",
           threshold: { cmp: "gte", value: 100 },
           target: { cmp: "gte", value: 100 },
         },
         {
           id: "gm_servesafe",
           label: "ServeSafe certifications current",
-          metric: "gm_servesafe",
-          source: "manual",
+          // "Current" is at least one person at the store sitting at 100% on
+          // the ServSafe Manager course in ZU — a store with nobody certified
+          // is not current, however many people are part-way through. It stays
+          // a yes/no rather than a completion rate for that reason. Snapshot,
+          // on the same footing as the ZU rate above.
+          metric: "gmServeSafeCurrent",
+          source: "auto",
           unit: "boolean",
-          grain: "entered",
+          grain: "snapshot",
           threshold: { cmp: "gte", value: 1 },
           target: { cmp: "gte", value: 1 },
-          note: "100% current, no lapses.",
+          note: "At least one person at 100% on ServSafe Manager in ZU.",
         },
         {
           id: "gm_missed_lto_deadlines",
