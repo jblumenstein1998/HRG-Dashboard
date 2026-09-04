@@ -21,16 +21,18 @@ import type { Tab } from "@/lib/users/tabs";
 import type { StaffingReport, StoreRoster, HoursReport, StoreHours } from "@/lib/staffing";
 
 /** Hours, #,##0.0 — the one format used everywhere on this screen. */
-function hrs(minutes: number): string {
-  return `${(minutes / 60).toLocaleString("en-US", {
+function hrs(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes)) return "—";
+  return (minutes / 60).toLocaleString("en-US", {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
-  })}h`;
+  }) + "h";
 }
 
 /** Whole dollars. Cents on a wage bill are noise at this scale. */
-function usd(amount: number): string {
-  return `${Math.round(amount).toLocaleString("en-US")}`;
+function usd(amount: number | null | undefined): string {
+  if (amount == null || !Number.isFinite(amount)) return "—";
+  return "(" + "$" + Math.round(amount).toLocaleString("en-US") + ")";
 }
 
 /** A value for <input type="datetime-local">, in the browser's own zone. */
@@ -245,7 +247,7 @@ function HoursSection() {
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-900">Hours by week</span>
         <span className="text-xs text-gray-400">
-regular · overtime, hours then dollars · complete weeks only · overtime at 1.5× the shift rate
+regular / overtime · hours then cost · complete weeks only
         </span>
         <select
           value={weeks}
@@ -322,7 +324,7 @@ function StoreHoursRows({
           <td key={w.weekStart} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
             <span className="text-gray-700">{hrs(w.regularMinutes)}</span>{" "}
             <span className="text-gray-400">{usd(w.regularCost)}</span>
-            <span className="text-gray-300"> · </span>
+            <span className="text-gray-300"> / </span>
             <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
               {hrs(w.overtimeMinutes)}
             </span>{" "}
@@ -359,12 +361,12 @@ function StoreHoursRows({
                       </td>
                       {store.weeks.map((w) => {
                         const row = w.people.find((p) => p.employeeId === id);
-                        if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-gray-300">—</td>;
+                        if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-xs text-gray-300">—</td>;
                         return (
                           <td key={w.weekStart} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
                             <span className="text-gray-600">{hrs(row.regularMinutes)}</span>{" "}
                             <span className="text-gray-400">{usd(row.regularCost)}</span>
-                            <span className="text-gray-300"> · </span>
+                            <span className="text-gray-300"> / </span>
                             <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
                               {hrs(row.overtimeMinutes)}
                             </span>{" "}
