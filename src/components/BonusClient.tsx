@@ -469,12 +469,21 @@ function CategoryCard({
   locked: boolean;
   onChange: (criterionId: string, value: string) => void;
 }) {
+  // Categories start closed. Six positions of several categories each is a very
+  // long page open, and the header already carries the score, the weight and
+  // the override — which is all that is wanted until something looks wrong.
+  const [open, setOpen] = useState(false);
   const overrideId = categoryOverrideId(positionId, cat.category.id);
   // Saved inputs with unsaved edits over the top — the same source every other
   // field on the card reads from, so a click shows immediately rather than
   // waiting for a save to round-trip through the engine.
   const overrideValue = values[overrideId] ?? "";
   const hasOverride = overrideValue.trim() !== "";
+  // "other" is picked before a figure is typed, so the box has to be able to
+  // show while nothing is stored — an empty value means "computed" everywhere
+  // else and would otherwise snap the picker straight back.
+  const [otherPicked, setOtherPicked] = useState(false);
+  const showOtherInput = hasOverride || otherPicked;
   const tone = cat.score === null ? "none" : cat.score >= 1 ? "good" : cat.score >= 0.5 ? "ok" : "bad";
   const derived = cat.category.derivedFrom;
 
@@ -488,32 +497,72 @@ function CategoryCard({
 
   return (
     <div className="rounded-lg border border-gray-200 overflow-hidden bg-white">
-      <div className="px-3 py-1.5 flex flex-wrap items-baseline gap-x-3 bg-gray-50 border-b border-gray-100">
-        <span className="text-sm font-semibold text-gray-800">{cat.category.label}</span>
-        <span className="text-xs text-gray-400">{cat.category.weight}% of total</span>
-        <span className={`text-sm tabular-nums ml-auto ${TONE_TEXT[tone]}`}>
+      <div className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 bg-gray-50 border-b border-gray-100">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-2 text-left min-w-0"
+        >
+          <span className={`text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
+          <span className="text-sm font-semibold text-gray-800">{cat.category.label}</span>
+          <span className="text-xs text-gray-400 whitespace-nowrap">{cat.category.weight}% of total</span>
+          {!open && cat.pendingCount > 0 && (
+            <span className="text-xs text-gray-400 whitespace-nowrap">· {cat.pendingCount} pending</span>
+          )}
+        </button>
+        <span className={`text-sm tabular-nums ml-auto ${hasOverride ? "text-amber-700 font-medium" : TONE_TEXT[tone]}`}>
           {cat.score === null ? "Not yet scoreable" : `${(cat.score * 100).toFixed(0)}%`}
           {cat.multiplier > 1 && <span className="ml-1 text-xs">×{cat.multiplier}</span>}
         </span>
+        {/* What the rules produced, kept in view beside the decision — the
+            reason for overriding is usually that this figure is wrong in a
+            known way, and hiding it removes the evidence. */}
+        {hasOverride && (
+          <span className="text-[11px] text-gray-400 whitespace-nowrap">
+            computed{" "}
+            {cat.computedScore === null ? "not scoreable" : `${(cat.computedScore * 100).toFixed(0)}%`}
+          </span>
+        )}
         {!locked && (
           // Overriding the result rather than the numbers behind it. Which
           // input to bend to move a category off a miss was always a guess, and
           // the judgement is the thing worth recording anyway.
-          <select
-            value={overrideValue}
-            onChange={(e) => onChange(overrideId, e.target.value)}
-            title="Set this category's result by hand"
-            className={`text-[11px] rounded-md py-0.5 pl-2 pr-6 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-              hasOverride
-                ? "border border-amber-300 bg-amber-50 text-amber-800"
-                : "border border-dashed border-gray-300 bg-white text-gray-500"
-            }`}
-          >
-            <option value="">computed</option>
-            <option value="0">Miss · 0%</option>
-            <option value="50">Threshold · 50%</option>
-            <option value="100">Target · 100%</option>
-          </select>
+          <span className="inline-flex items-center gap-1">
+            <select
+              value={showOtherInput ? "other" : ""}
+              onChange={(e) => {
+                const other = e.target.value === "other";
+                setOtherPicked(other);
+                if (!other) onChange(overrideId, "");
+              }}
+              title="Set this category's result by hand"
+              className={`text-[11px] rounded-md py-0.5 pl-2 pr-6 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                hasOverride
+                  ? "border border-amber-300 bg-amber-50 text-amber-800"
+                  : "border border-dashed border-gray-300 bg-white text-gray-500"
+              }`}
+            >
+              <option value="">computed</option>
+              <option value="other">other…</option>
+            </select>
+            {showOtherInput && (
+              <span className="inline-flex items-center gap-0.5">
+                <input
+                  type="number"
+                  step="any"
+                  min={0}
+                  max={100}
+                  inputMode="decimal"
+                  autoFocus={otherPicked && !hasOverride}
+                  value={overrideValue}
+                  onChange={(e) => onChange(overrideId, e.target.value)}
+                  placeholder="0–100"
+                  title="Percentage of this category earned"
+                  className="w-16 text-[11px] text-right tabular-nums rounded-md border border-amber-300 bg-amber-50 text-amber-800 px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-gray-200 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span className="text-[11px] text-amber-700">%</span>
+              </span>
+            )}
+          </span>
         )}
         {locked && cat.scoreOverride !== null && (
           <span className="text-[10px] uppercase tracking-wide text-amber-600">overridden</span>
@@ -526,24 +575,24 @@ function CategoryCard({
         </span>
       </div>
 
-      {cat.disqualifiedBy && (
+      {open && cat.disqualifiedBy && (
         <div className="px-3 py-2 bg-red-50 border-b border-red-100 text-xs text-red-700">
           Disqualified — {cat.disqualifiedBy}. This category scores 0 regardless of the criteria below.
         </div>
       )}
-      {cat.multiplier > 1 && cat.multipliersFired.length > 0 && (
+      {open && cat.multiplier > 1 && cat.multipliersFired.length > 0 && (
         <div className="px-3 py-2 bg-green-50 border-b border-green-100 text-xs text-green-700">
           Multiplier ×{cat.multiplier} — {cat.multipliersFired.map((m) => m.label).join("; ")}
         </div>
       )}
-      {derived && (
+      {open && derived && (
         <div className="px-3 py-2 text-xs text-gray-600 border-b border-gray-100">
           Derived from {derived.map((d) => POSITION_LABELS[d]).join(", ")}, excluding their Living Our Values
           category. The transaction-growth kicker is deliberately not carried up — this position earns its own.
         </div>
       )}
 
-      {rows.length > 0 && (
+      {open && rows.length > 0 && (
         <table className="w-full text-sm table-fixed">
           <thead>
             <tr className="border-b border-gray-100">

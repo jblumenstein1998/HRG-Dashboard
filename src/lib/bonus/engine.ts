@@ -163,12 +163,17 @@ function scoreCategory(
    * to bend to move a category off a miss, which is a worse thing to record
    * than the judgement itself.
    *
-   * Only the three results the strict ladder can produce are accepted; anything
-   * else is ignored rather than trusted, since a stray value here would pay out.
+   * Any percentage of the category from 0 to 100, not just the three results
+   * the strict ladder can produce — a category is often part-earned in a way
+   * the doc has no gate for. Anything outside that range is ignored rather than
+   * trusted, since a stray value here pays out. Exceeding 100% stays the
+   * multipliers' job, which is where the docs put it.
    */
   const rawOverride = overrideId ? values.get(overrideId) : undefined;
   const scoreOverride =
-    rawOverride === 0 || rawOverride === 50 || rawOverride === 100 ? rawOverride : null;
+    typeof rawOverride === "number" && Number.isFinite(rawOverride) && rawOverride >= 0 && rawOverride <= 100
+      ? rawOverride
+      : null;
   const overrideScore = scoreOverride === null ? null : scoreOverride / 100;
 
   const conditions = category.conditions.map((c) => evaluateCondition(c, values));
@@ -198,6 +203,7 @@ function scoreCategory(
     return {
       category,
       score: overrideScore ?? 0,
+      computedScore: 0,
       multiplier: 1,
       payout: category.weight * (overrideScore ?? 0),
       scoreOverride,
@@ -239,6 +245,9 @@ function scoreCategory(
     score = 0;
   }
 
+  // Kept before the override replaces it: the card shows both, so the reader
+  // can see what was decided and what it was decided against.
+  const computedScore = score;
   if (overrideScore !== null) score = overrideScore;
 
   // A multiplier can only lift a category that scored something — there is
@@ -272,6 +281,7 @@ function scoreCategory(
     disqualifiedBy: null,
     pendingCount,
     scoreOverride,
+    computedScore,
   };
 }
 
@@ -428,13 +438,32 @@ function applyDerived(
 ): PositionResult {
   const categories = result.categories.map((c) => {
     if (c.category.id !== categoryId) return c;
+
+    // This runs after scoreCategory, so it has to put back anything that stage
+    // decided. An override on a derived category was being dropped outright:
+    // the score was overwritten with the rolled-up figure and the decision
+    // lost, silently, on the two categories a GM and an AGM are largely
+    // judged by.
+    const overrideScore = c.scoreOverride === null ? null : c.scoreOverride / 100;
+
     if (derivedPct === null) {
-      return { ...c, score: null, payout: null, disqualifiedBy: null };
+      return {
+        ...c,
+        score: overrideScore,
+        computedScore: null,
+        payout: overrideScore === null ? null : c.category.weight * overrideScore,
+        disqualifiedBy: null,
+      };
     }
-    const score = derivedPct / 100;
+
+    const derived = derivedPct / 100;
+    const score = overrideScore ?? derived;
     return {
       ...c,
       score,
+      // The rolled-up figure is what this category computes to, so it is what
+      // the card shows beside an override.
+      computedScore: derived,
       multiplier: 1,
       payout: c.category.weight * score,
       multipliersFired: [{ factor: 1, label: sourceLabel }],
