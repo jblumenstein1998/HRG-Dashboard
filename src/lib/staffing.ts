@@ -27,10 +27,12 @@
  */
 
 import { PERIODS } from "./fiscal";
+import { shiftWorkedMinutesInWindow } from "./parRollup";
 import {
   PAR_LOCATIONS,
   getShifts,
   getShiftsLive,
+  getBusinessHours,
   getEmployees,
   getJobs,
   getStoreTimeZone,
@@ -490,4 +492,150 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
   );
 
   return { weeks, stores, fetchedAt: Date.now() };
+}
+
+// ── Labor before open and after close ────────────────────────────────────────
+
+/**
+ * How much labor a store burns before it opens and after it shuts.
+ *
+ * Open and close come from PAR's own GetBusinessHours per day of week, not from
+ * the first and last order — a store with a slow morning would otherwise look
+ * like it opened late.
+ *
+ * Labor is measured with the same window-overlap the hourly rollup uses, so
+ * break time inside the window is not counted as worked, and a closing shift
+ * that runs past midnight is measured in its own frame rather than wrapping to
+ * a negative span.
+ */
+export type OpenCloseCell = {
+  businessDate: string;
+  /** Null when PAR has no hours for that day of week. */
+  openLabel: string | null;
+  closeLabel: string | null;
+  /** Labor minutes worked strictly before open / strictly after close. */
+  laborMinutes: number;
+  /** How many people contributed any of it. */
+  people: number;
+  /** Earliest clock-in before open, or latest clock-out after close. */
+  edgeLabel: string | null;
+  /** Minutes between that edge and the open/close time. */
+  edgeMinutes: number;
+};
+
+export type StoreOpenClose = {
+  storeId: string;
+  storeName: string;
+  state: "TN" | "VA";
+  open: OpenCloseCell[];
+  close: OpenCloseCell[];
+  error: string | null;
+};
+
+export type OpenCloseReport = {
+  dates: string[];
+  stores: StoreOpenClose[];
+  fetchedAt: number;
+};
+
+export async function getOpenCloseReport(today: string, dayCount: number): Promise<OpenCloseReport> {
+  // Trailing days, ending with today. Today is included deliberately: the
+  // morning has already happened by the time anyone looks, and waiting a day to
+  // see it would make the screen useless for the thing it is for.
+  const dates = Array.from({ length: dayCount }, (_, i) =>
+    shiftLocalDate(today, -(dayCount - 1 - i)),
+  );
+
+  const stores = await Promise.all(
+    PAR_LOCATIONS.map(async (loc): Promise<StoreOpenClose> => {
+      try {
+        const [hours, ...days] = await Promise.all([
+          getBusinessHours(loc.storeId),
+          ...dates.map((d) => getShifts(loc.storeId, d)),
+        ]);
+        const hoursByDay = new Map(hours.map((h) => [h.dayOfWeek, h]));
+
+        const open: OpenCloseCell[] = [];
+        const close: OpenCloseCell[] = [];
+
+        dates.forEach((businessDate, i) => {
+          const shifts = days[i] ?? [];
+          const [y, m, d] = businessDate.split("-").map(Number);
+          const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+          const h = hoursByDay.get(dow);
+
+          if (!h) {
+            const empty = {
+              businessDate, openLabel: null, closeLabel: null,
+              laborMinutes: 0, people: 0, edgeLabel: null, edgeMinutes: 0,
+            };
+            open.push({ ...empty });
+            close.push({ ...empty });
+            return;
+          }
+
+          // Before open: from the earliest clock-in of the day to the open time.
+          let preMinutes = 0;
+          let prePeople = 0;
+          let earliest: number | null = null;
+          // After close: from the close time to the last clock-out.
+          let postMinutes = 0;
+          let postPeople = 0;
+          let latest: number | null = null;
+
+          for (const sh of shifts) {
+            const before = shiftWorkedMinutesInWindow(sh, 0, h.openMinutes);
+            if (before > 0) {
+              preMinutes += before;
+              prePeople += 1;
+              earliest = earliest === null ? sh.startMinutes : Math.min(earliest, sh.startMinutes);
+            }
+            // The upper bound is deliberately far past midnight rather than
+            // 1440: a shift that ends at 1:20am reads as 1520 in its own frame,
+            // and clipping at midnight would drop the part that matters most.
+            const after = shiftWorkedMinutesInWindow(sh, h.closeMinutes, h.closeMinutes + 720);
+            if (after > 0) {
+              postMinutes += after;
+              postPeople += 1;
+              const end = sh.isOpen ? sh.startMinutes + sh.minutesWorked : sh.endMinutes;
+              latest = latest === null ? end : Math.max(latest, end);
+            }
+          }
+
+          open.push({
+            businessDate,
+            openLabel: clockLabel(h.openMinutes),
+            closeLabel: clockLabel(h.closeMinutes),
+            laborMinutes: Math.round(preMinutes),
+            people: prePeople,
+            edgeLabel: earliest === null ? null : clockLabel(earliest),
+            edgeMinutes: earliest === null ? 0 : Math.max(0, Math.round(h.openMinutes - earliest)),
+          });
+
+          close.push({
+            businessDate,
+            openLabel: clockLabel(h.openMinutes),
+            closeLabel: clockLabel(h.closeMinutes),
+            laborMinutes: Math.round(postMinutes),
+            people: postPeople,
+            edgeLabel: latest === null ? null : clockLabel(latest),
+            edgeMinutes: latest === null ? 0 : Math.max(0, Math.round(latest - h.closeMinutes)),
+          });
+        });
+
+        return { storeId: loc.storeId, storeName: loc.name, state: loc.state, open, close, error: null };
+      } catch (err) {
+        return {
+          storeId: loc.storeId,
+          storeName: loc.name,
+          state: loc.state,
+          open: [],
+          close: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }),
+  );
+
+  return { dates, stores, fetchedAt: Date.now() };
 }

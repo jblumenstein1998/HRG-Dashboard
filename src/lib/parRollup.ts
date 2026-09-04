@@ -271,7 +271,7 @@ export async function rerollRange(start: string, end: string, dryRun = false): P
 // totals for every prior day in range — so historical days stay instant and
 // only today ever costs a live call.
 
-function todayCentralISO(): string {
+export function todayCentralISO(): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
     year: "numeric",
@@ -502,7 +502,7 @@ function overlapMinutes(aStart: number, aEnd: number, bStart: number, bEnd: numb
   return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
 }
 
-function shiftWorkedMinutesInWindow(shift: PARShift, windowStart: number, windowEnd: number): number {
+export function shiftWorkedMinutesInWindow(shift: PARShift, windowStart: number, windowEnd: number): number {
   const windowedOverlap = (offsetMinutes: number) => {
     const wStart = windowStart + offsetMinutes;
     const wEnd = windowEnd + offsetMinutes;
