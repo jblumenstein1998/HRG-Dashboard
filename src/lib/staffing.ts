@@ -29,6 +29,7 @@
 import {
   PAR_LOCATIONS,
   getShifts,
+  getShiftsLive,
   getEmployees,
   getJobs,
   getStoreTimeZone,
@@ -41,7 +42,6 @@ export type StaffOnClock = {
   /** PAR's own job name for the shift, e.g. "Cook", "Shift Leader". */
   job: string | null;
   jobId: string | null;
-  area: StaffArea;
   payRate: number | null;
   /** Minutes since local midnight of the shift's business date. */
   startMinutes: number;
@@ -51,10 +51,15 @@ export type StaffOnClock = {
   endLabel: string;
   /** Still clocked in — PAR reports no clock-out yet. */
   isOpen: boolean;
+  /** On a break at the queried minute, per PAR's own recorded break windows. */
+  onBreak: boolean;
   /** Minutes worked on this shift, breaks already excluded by PAR. */
   minutesWorked: number;
-  /** How long they had been on when the query time landed. */
-  minutesOnClockAtQuery: number;
+  /**
+   * Elapsed time since clocking in, at the queried minute. Not the same as
+   * minutesWorked, which is what PAR pays and has breaks taken out.
+   */
+  minutesElapsedAtQuery: number;
   /** Total minutes worked across the seven business dates before this one. */
   trailing7Minutes: number;
   /** Shifts behind that total, so a bare number can be checked. */
@@ -70,8 +75,17 @@ export type StoreRoster = {
   localTime: string;
   localDate: string;
   onClock: StaffOnClock[];
-  /** Sum of payRate across everyone on the clock, when every rate is known. */
+  /**
+   * Sum of the hourly rates on the clock. Salaried people are not in it — PAR
+   * records their rate as 0, and there is no hourly figure to add — so it is
+   * reported alongside a count of who was left out rather than suppressed. An
+   * earlier version blanked the whole store if one salaried manager was on,
+   * which hid the real wages of everyone else to avoid implying the manager
+   * was free.
+   */
   hourlyWageRunRate: number | null;
+  /** People on the clock whose rate PAR reports as 0, i.e. salaried. */
+  salariedOnClock: number;
   error: string | null;
 };
 
@@ -81,29 +95,6 @@ export type StaffingReport = {
   stores: StoreRoster[];
   fetchedAt: number;
 };
-
-/**
- * Front of house, back of house, or neither.
- *
- * PAR has no such field — it carries per-job booleans like IsHostess and
- * OrderEntry, but they are set inconsistently across this estate and several
- * jobs have none of them. So this is a judgement, made on the job name, and it
- * says "—" rather than guessing when a name is unfamiliar. The job name is
- * always shown next to it so a wrong call is visible rather than buried.
- */
-export type StaffArea = "FOH" | "BOH" | "Management" | "Other";
-
-export function classifyJob(jobName: string | null): StaffArea {
-  if (!jobName) return "Other";
-  const n = jobName.toLowerCase();
-  if (/manager|above store|mgr/.test(n)) return "Management";
-  if (/cook|breader|kitchen|prep|utility|dish/.test(n)) return "BOH";
-  if (/cashier|host|drive|front|register|expo|delivery|driver/.test(n)) return "FOH";
-  // Trainers and shift leaders work both sides; calling them either would be a
-  // coin toss dressed up as data.
-  if (/trainer|shift lead|crew lead/.test(n)) return "Other";
-  return "Other";
-}
 
 /**
  * First and last name where PAR has them, falling back to its DisplayName —
@@ -145,9 +136,23 @@ function clockLabel(minutes: number): string {
   return `${h12}:${mm}${suffix}`;
 }
 
-/** Was this shift running at `queryMinutes`, measured in its own start frame? */
+/**
+ * Was this shift running at `queryMinutes`, measured in its own start frame?
+ *
+ * An open shift has no end, and must not be given one. par.ts fills endMinutes
+ * for a shift with no clock-out as start + minutesWorked, which is "as far as
+ * they had got when PAR was asked" — a moving target, and a stale one the
+ * moment it is cached. Comparing against it hid every person currently on the
+ * clock: six were working at Springfield while this screen read zero.
+ */
 function coversMinute(shift: PARShift, queryMinutes: number): boolean {
-  return queryMinutes >= shift.startMinutes && queryMinutes < shift.endMinutes;
+  if (queryMinutes < shift.startMinutes) return false;
+  return shift.isOpen || queryMinutes < shift.endMinutes;
+}
+
+/** Were they on a break at that minute? PAR records the windows; this reads them. */
+function onBreakAt(shift: PARShift, queryMinutes: number): boolean {
+  return shift.breaks.some((b) => queryMinutes >= b.startMinutes && queryMinutes < b.endMinutes);
 }
 
 const TRAILING_DAYS = 7;
@@ -158,7 +163,7 @@ async function rosterForStore(
 ): Promise<StoreRoster> {
   const timeZone = getStoreTimeZone(loc.storeId);
   const { date: localDate, minutes: localMinutes } = zonedParts(at, timeZone);
-  const base: Omit<StoreRoster, "onClock" | "hourlyWageRunRate" | "error"> = {
+  const base: Omit<StoreRoster, "onClock" | "hourlyWageRunRate" | "salariedOnClock" | "error"> = {
     storeId: loc.storeId,
     storeName: loc.name,
     state: loc.state,
@@ -176,11 +181,15 @@ async function rosterForStore(
       shiftLocalDate(localDate, -(i + 1)),
     );
 
+    // The two roster dates are read live; the trailing seven come from cache.
+    // A shift that is still open keeps changing, and the whole question this
+    // screen answers is "right now" — an hour-old snapshot answers a different
+    // one. Past business dates do not move, so caching them is free.
     const [employees, jobs, today, yesterday, ...trailing] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
-      getShifts(loc.storeId, localDate),
-      getShifts(loc.storeId, previousDate),
+      getShiftsLive(loc.storeId, localDate),
+      getShiftsLive(loc.storeId, previousDate),
       ...trailingDates.map((d) => getShifts(loc.storeId, d)),
     ]);
 
@@ -220,15 +229,15 @@ async function rosterForStore(
         name: fullName(emp) ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
         job: jobName,
         jobId: shift.jobId,
-        area: classifyJob(jobName),
         payRate: shift.payRate,
         startMinutes: shift.startMinutes,
         endMinutes: shift.endMinutes,
         startLabel: clockLabel(shift.startMinutes),
         endLabel: shift.isOpen ? "on now" : clockLabel(shift.endMinutes),
         isOpen: shift.isOpen,
+        onBreak: onBreakAt(shift, queryMinutes),
         minutesWorked: shift.minutesWorked,
-        minutesOnClockAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
+        minutesElapsedAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
         trailing7Minutes: trailingAcc?.minutes ?? 0,
         trailing7Shifts: trailingAcc?.shifts ?? 0,
       });
@@ -236,19 +245,19 @@ async function rosterForStore(
 
     onClock.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
 
-    // Only meaningful when every rate is known; a salaried manager reports 0 and
-    // would quietly drag the figure down if treated as a real rate.
     const rates = onClock.map((p) => p.payRate).filter((r): r is number => r !== null && r > 0);
-    const hourlyWageRunRate = rates.length === onClock.length && rates.length > 0
+    const hourlyWageRunRate = rates.length
       ? Math.round(rates.reduce((a, b) => a + b, 0) * 100) / 100
       : null;
+    const salariedOnClock = onClock.length - rates.length;
 
-    return { ...base, onClock, hourlyWageRunRate, error: null };
+    return { ...base, onClock, hourlyWageRunRate, salariedOnClock, error: null };
   } catch (err) {
     return {
       ...base,
       onClock: [],
       hourlyWageRunRate: null,
+      salariedOnClock: 0,
       error: err instanceof Error ? err.message : String(err),
     };
   }

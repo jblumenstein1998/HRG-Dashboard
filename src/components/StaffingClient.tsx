@@ -18,14 +18,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
-import type { StaffingReport, StoreRoster, StaffArea } from "@/lib/staffing";
-
-const AREA_TONE: Record<StaffArea, string> = {
-  FOH: "bg-blue-50 text-blue-700",
-  BOH: "bg-amber-50 text-amber-700",
-  Management: "bg-purple-50 text-purple-700",
-  Other: "bg-gray-100 text-gray-500",
-};
+import type { StaffingReport, StoreRoster } from "@/lib/staffing";
 
 function hrs(minutes: number): string {
   return `${(minutes / 60).toFixed(2)}h`;
@@ -183,10 +176,12 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         </div>
 
         <p className="text-[11px] text-gray-400">
-          Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Hours worked
-          covers the seven business dates before the one shown, and comes from PAR&apos;s own
-          minutes-worked, so breaks are already out. Front of house / back of house is inferred
-          from the job name; the job itself is shown beside it.
+          Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
+          break windows are PAR&apos;s own. <strong>Elapsed</strong> is time since clocking in and
+          includes breaks; <strong>trailing 7d</strong> is PAR&apos;s paid minutes-worked, which
+          excludes them, over the seven business dates before the one shown. Wages sum the hourly rates on the
+          clock; salaried staff carry no rate in PAR and are counted separately rather than
+          added as zero. It is gross pay, not a burdened cost.
         </p>
       </main>
     </div>
@@ -195,10 +190,7 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
 function StoreCard({ store }: { store: StoreRoster }) {
   const [open, setOpen] = useState(true);
-  const byArea = store.onClock.reduce<Record<string, number>>((acc, p) => {
-    acc[p.area] = (acc[p.area] ?? 0) + 1;
-    return acc;
-  }, {});
+  const onBreak = store.onClock.filter((p) => p.onBreak).length;
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -215,19 +207,14 @@ function StoreCard({ store }: { store: StoreRoster }) {
           <>
             <span className="text-xs text-gray-500">
               {store.onClock.length} on the clock
-              {Object.entries(byArea).length > 0 && (
-                <span className="text-gray-400">
-                  {" ("}
-                  {Object.entries(byArea).map(([a, n], i) => (
-                    <span key={a}>{i > 0 && " · "}{n} {a}</span>
-                  ))}
-                  {")"}
-                </span>
-              )}
+              {onBreak > 0 && <span className="text-gray-400"> · {onBreak} on break</span>}
             </span>
             {store.hourlyWageRunRate !== null && (
               <span className="ml-auto text-xs tabular-nums text-gray-500">
-                ${store.hourlyWageRunRate.toFixed(2)}/hr on the floor
+                ${store.hourlyWageRunRate.toFixed(2)}/hr in wages
+                {store.salariedOnClock > 0 && (
+                  <span className="text-gray-400"> · {store.salariedOnClock} salaried</span>
+                )}
               </span>
             )}
           </>
@@ -246,9 +233,8 @@ function StoreCard({ store }: { store: StoreRoster }) {
                 <tr className="border-b border-gray-100">
                   <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Name</th>
                   <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Position</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">Area</th>
                   <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400 w-40">Shift</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">On clock</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">Elapsed</th>
                   <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-20">Rate</th>
                   <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-32">Trailing 7d</th>
                 </tr>
@@ -258,14 +244,12 @@ function StoreCard({ store }: { store: StoreRoster }) {
                   <tr key={`${p.employeeId ?? "?"}-${i}`} className="border-b border-gray-50">
                     <td className="px-3 py-1.5 font-medium text-gray-900">{p.name}</td>
                     <td className="px-3 py-1.5 text-gray-600">{p.job ?? "—"}</td>
-                    <td className="px-3 py-1.5">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${AREA_TONE[p.area]}`}>{p.area}</span>
-                    </td>
                     <td className="px-3 py-1.5 text-gray-600 tabular-nums">
                       {p.startLabel} – {p.endLabel}
-                      {p.isOpen && <span className="ml-1 text-[10px] text-green-600 uppercase tracking-wide">open</span>}
+                      {p.isOpen && <span className="ml-1 text-[10px] text-green-600 uppercase tracking-wide">on now</span>}
+                      {p.onBreak && <span className="ml-1 text-[10px] text-amber-600 uppercase tracking-wide">break</span>}
                     </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-gray-700">{hrs(p.minutesOnClockAtQuery)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-gray-700">{hrs(p.minutesElapsedAtQuery)}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums text-gray-600">
                       {p.payRate === null || p.payRate === 0 ? "—" : `$${p.payRate.toFixed(2)}`}
                     </td>
