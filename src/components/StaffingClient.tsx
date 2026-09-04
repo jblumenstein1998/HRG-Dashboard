@@ -316,7 +316,6 @@ function StoreHoursRows({
     <>
       <tr className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={onToggle}>
         <td className="px-3 py-1.5 font-medium text-gray-900 whitespace-nowrap">
-          <span className={`inline-block mr-1.5 text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
           {store.storeName}
           {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
         </td>
@@ -456,7 +455,6 @@ function StoreCard({ store }: { store: StoreRoster }) {
         onClick={() => setOpen((o) => !o)}
         className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left hover:bg-gray-50 transition"
       >
-        <span className={`text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
         <span className="text-sm font-semibold text-gray-900">{store.storeName}</span>
         <span className="text-xs text-gray-400">{store.state} · {store.localTime} local</span>
         {store.error ? (

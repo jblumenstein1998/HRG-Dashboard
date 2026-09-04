@@ -420,7 +420,6 @@ function PositionScorecard({
         disabled={!result}
         className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${TONE_BG[tone]} ${result ? "hover:brightness-95" : ""} transition disabled:cursor-default`}
       >
-        <span className={`text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
         <span className="text-sm font-semibold text-gray-900">{POSITION_LABELS[positionId]}</span>
         {result?.kickerFired && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">×1.25 kicker</span>
@@ -502,7 +501,6 @@ function CategoryCard({
           onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-2 text-left min-w-0"
         >
-          <span className={`text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
           <span className="text-sm font-semibold text-gray-800">{cat.category.label}</span>
           <span className="text-xs text-gray-400 whitespace-nowrap">{cat.category.weight}% of total</span>
           {!open && cat.pendingCount > 0 && (
