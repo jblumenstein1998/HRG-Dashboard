@@ -245,7 +245,7 @@ function HoursSection() {
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-900">Hours by week</span>
         <span className="text-xs text-gray-400">
-          regular over overtime · complete weeks only · overtime costed at 1.5× the shift rate
+regular · overtime, hours then dollars · complete weeks only · overtime at 1.5× the shift rate
         </span>
         <select
           value={weeks}
@@ -319,13 +319,16 @@ function StoreHoursRows({
           {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
         </td>
         {store.weeks.map((w) => (
-          <td key={w.weekStart} className="px-3 py-1 text-right tabular-nums whitespace-nowrap">
-            <div className="text-gray-700">
-              {hrs(w.regularMinutes)} <span className="text-gray-400">{usd(w.regularCost)}</span>
-            </div>
-            <div className={w.overtimeMinutes > 0 ? "text-amber-700" : "text-gray-300"}>
-              {hrs(w.overtimeMinutes)} <span className={w.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>{usd(w.overtimeCost)}</span>
-            </div>
+          <td key={w.weekStart} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+            <span className="text-gray-700">{hrs(w.regularMinutes)}</span>{" "}
+            <span className="text-gray-400">{usd(w.regularCost)}</span>
+            <span className="text-gray-300"> · </span>
+            <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
+              {hrs(w.overtimeMinutes)}
+            </span>{" "}
+            <span className={w.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
+              {usd(w.overtimeCost)}
+            </span>
           </td>
         ))}
       </tr>
@@ -358,13 +361,16 @@ function StoreHoursRows({
                         const row = w.people.find((p) => p.employeeId === id);
                         if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-gray-300">—</td>;
                         return (
-                          <td key={w.weekStart} className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
-                            <div className="text-gray-600">
-                              {hrs(row.regularMinutes)} <span className="text-gray-400">{usd(row.regularCost)}</span>
-                            </div>
-                            <div className={row.overtimeMinutes > 0 ? "text-amber-700" : "text-gray-300"}>
-                              {hrs(row.overtimeMinutes)} <span className={row.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>{usd(row.overtimeCost)}</span>
-                            </div>
+                          <td key={w.weekStart} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+                            <span className="text-gray-600">{hrs(row.regularMinutes)}</span>{" "}
+                            <span className="text-gray-400">{usd(row.regularCost)}</span>
+                            <span className="text-gray-300"> · </span>
+                            <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
+                              {hrs(row.overtimeMinutes)}
+                            </span>{" "}
+                            <span className={row.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
+                              {usd(row.overtimeCost)}
+                            </span>
                           </td>
                         );
                       })}
