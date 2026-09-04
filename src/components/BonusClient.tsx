@@ -406,10 +406,10 @@ function PositionScorecard({
   locked: boolean;
   onChange: (criterionId: string, value: string) => void;
 }) {
-  // Collapsed state lives per position so a long scorecard can be folded away
-  // while working on another; everything starts open because the point of the
-  // page is reading them in sequence.
-  const [open, setOpen] = useState(true);
+  // Closed to start, like the categories inside them. The page opens as the
+  // six positions with their scores, which is the question being asked most of
+  // the time; opening one is how you ask why.
+  const [open, setOpen] = useState(false);
   const tone = bonusTone(result?.score ?? null);
   const note = result ? coverageNote(result.scoreableWeight, result.pendingCount) : null;
 
