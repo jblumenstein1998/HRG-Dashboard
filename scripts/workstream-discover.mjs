@@ -43,12 +43,22 @@ async function getToken() {
         client_id: id,
         client_secret: secret,
         name: "HRG Dashboard discovery",
+        // Required. Must be a subset of what the Super Admin ticked when the
+        // credentials were created, or the reads below 403.
+        scopes: ["employees", "locations", "departments", "positions"],
       }),
     });
     const text = await res.text();
     if (!res.ok) {
       console.error(`  /tokens failed: ${res.status}`);
       console.error(`  ${text.slice(0, 500)}`);
+      if (res.status === 400 || res.status === 422) {
+        console.error(
+          "  A 400/422 here may mean /tokens wants these as query parameters rather\n" +
+          "  than a JSON body — the docs describe them as query-based. If so, fix it\n" +
+          "  here and in mintToken() in src/lib/workstream.ts together.",
+        );
+      }
       process.exit(1);
     }
     const parsed = JSON.parse(text);

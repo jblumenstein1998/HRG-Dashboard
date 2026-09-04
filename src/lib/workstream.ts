@@ -98,6 +98,21 @@ const sem = new Semaphore(3);
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
+/**
+ * The permissions this app asks for, and deliberately no more.
+ *
+ * `POST /tokens` requires a scope list, and the token a Super Admin creates in
+ * the dashboard carries whatever was ticked there — so these two have to agree
+ * or a read fails with a 403 that looks like a bug in the endpoint rather than
+ * a missing permission.
+ *
+ * Workstream also offers company_users, company_roles, team_members and
+ * imported_employee_infos. None of them are asked for. Nothing here reads a
+ * user register, and a token that could is a token that will eventually be
+ * used to.
+ */
+const SCOPES = ["employees", "locations", "departments", "positions"] as const;
+
 type CachedToken = { token: string; expiresAt: number };
 let cached: CachedToken | null = null;
 /** In-flight mint, so a cold instance answering N requests mints once. */
@@ -120,6 +135,7 @@ async function mintToken(): Promise<CachedToken> {
       client_id: clientId,
       client_secret: clientSecret,
       name: "HRG Dashboard",
+      scopes: SCOPES,
     }),
   });
 

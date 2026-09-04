@@ -149,11 +149,21 @@ Still to design:
 
 ## Prerequisites
 
-1. **Credentials.** `WORKSTREAM_CLIENT_ID` / `WORKSTREAM_CLIENT_SECRET` require
-   Workstream support to enable the OAuth App module (help@workstream.is); only
-   a Super Admin can request it. Until then, `WORKSTREAM_ACCESS_TOKEN` works —
-   minted by hand in the dashboard, valid seven days, fine for scripts and
-   useless in production.
+1. **Credentials.** Two steps, and being a Super Admin only covers the second:
+
+   - Workstream support must enable the **OAuth App module** on the company
+     (help@workstream.is). Nobody can switch it on from inside the dashboard.
+   - Then, in **Admin View → Company Settings → Integrations → Access Token**, a
+     Super Admin creates a token, ticking `employees`, `locations`,
+     `departments` and `positions` — the same four `SCOPES` that `mintToken()`
+     asks for. The two lists have to agree, or reads fail with a 403 that reads
+     like a broken endpoint rather than a missing permission. The client id and
+     secret appear at
+     `https://hr.workstream.us/#/account?currentPanel=accesstoken`.
+
+   Until the module is on, `WORKSTREAM_ACCESS_TOKEN` works — minted by hand in
+   that same screen, valid seven days, fine for scripts and useless in
+   production. Refreshing a token from the ••• menu breaks whatever is using it.
 2. **Run the discovery script**, paste the location uuids into `storeMap.ts`.
 3. **Run `scripts/migrate-workstream-links.mjs`** to create the table.
 4. **Work the queue** at `/admin/workstream-links`, one store at a time.
