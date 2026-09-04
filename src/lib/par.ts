@@ -176,6 +176,10 @@ export type PARShift = {
   endMinutes:   number;
   minutesWorked: number;
   jobId: string | null;
+  /** PAR's employee id, joins to PAREmployee.id. */
+  employeeId: string | null;
+  /** Hourly rate as PAR recorded it on this shift. Salaried roles report 0. */
+  payRate: number | null;
   // True if this employee hasn't clocked out yet. PAR represents "no clock-out
   // yet" as an EndTime whose DateTime is the sentinel 0001-01-01 — NOT a missing
   // tag — so this can't be inferred from endDt being null.
@@ -244,6 +248,9 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
 
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
     const jobId = tagVal(top, "JobId");
+    const employeeId = tagVal(top, "EmployeeId");
+    const rawRate = Number.parseFloat(tagVal(top, "PayRate") ?? "");
+    const payRate = Number.isFinite(rawRate) ? rawRate : null;
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
     const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
     const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
@@ -276,7 +283,7 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     });
 
     const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
-    return { startMinutes, endMinutes, minutesWorked, jobId, isOpen, breaks };
+    return { startMinutes, endMinutes, minutesWorked, jobId, employeeId, payRate, isOpen, breaks };
   });
 }
 
@@ -300,6 +307,61 @@ export const getOrders = unstable_cache(
 // Job definitions change when someone edits them in the back office, which is
 // rare — a day's cache is plenty, and it keeps GetJobs off the per-day path
 // entirely when a range is being backfilled.
+/**
+ * One person, as much of them as this app has any business holding.
+ *
+ * GetEmployees returns an HR file: alongside the name and job it carries SSN,
+ * date of birth, home address, personal phone numbers, payroll id, and the PIN
+ * and card number the person logs into the POS with. None of that is read.
+ * The narrowing happens here, at the boundary, so the sensitive fields exist
+ * only for the microseconds this parser runs and can never reach a cache, an
+ * API response or a browser.
+ *
+ * Pay rate is deliberately taken from the shift rather than from here — the
+ * staffing tab wants what someone was paid for the shift being looked at, and
+ * that avoids holding a current rate for the other 180 people who are not on it.
+ */
+export type PAREmployee = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  /** Their default job. A shift carries its own, which wins where they differ. */
+  jobId: string | null;
+  terminated: boolean;
+};
+
+export const getEmployees = unstable_cache(
+  async (storeId: string): Promise<PAREmployee[]> => {
+    const xml = await soapPost(
+      "Settings2.svc",
+      "http://www.brinksoftware.com/webservices/settings/v2/ISettingsWebService2/GetEmployees",
+      `<GetEmployees xmlns="http://www.brinksoftware.com/webservices/settings/v2"><request></request></GetEmployees>`,
+      getLocationToken(storeId),
+    );
+    return allTags(xml, "Employee").flatMap(e => {
+      // Jobs is a nested array whose entries carry their own Id and JobId, which
+      // would otherwise be matched first by tagVal's naive first-match regex —
+      // the same trap as Order.Entries and Shift.Breaks above.
+      const top = stripTag(e, "Jobs");
+      const id = tagVal(top, "Id");
+      if (!id) return [];
+      const firstName = tagVal(top, "FirstName") ?? "";
+      const lastName = tagVal(top, "LastName") ?? "";
+      return [{
+        id,
+        firstName,
+        lastName,
+        displayName: tagVal(top, "DisplayName") || [firstName, lastName].filter(Boolean).join(" ") || id,
+        jobId: tagVal(top, "JobId"),
+        terminated: tagVal(top, "Terminated") === "true",
+      }];
+    });
+  },
+  ["par-employees"],
+  { revalidate: 60 * 60 * 24, tags: ["par-data"] },
+);
+
 export const getJobs = unstable_cache(
   async (storeId: string): Promise<PARJob[]> => {
     const xml = await soapPost(
