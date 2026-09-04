@@ -218,17 +218,19 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
  * nothing has changed.
  */
 function HoursSection() {
-  const [weeks, setWeeks] = useState(4);
+  // "2" / "4" are weeks; "periods" is the last two pay periods.
+  const [range, setRange] = useState<"2" | "4" | "periods">("4");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
     { key: "", data: null, error: null },
   );
 
-  const requestKey = String(weeks);
+  const query = range === "periods" ? "periods=2" : `weeks=${range}`;
+  const requestKey = query;
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/staffing/hours?weeks=${weeks}`)
+    fetch(`/api/staffing/hours?${query}`)
       .then(async (r) => {
         const json = await r.json();
         if (!r.ok) throw new Error(json.error ?? "Failed to load");
@@ -237,7 +239,7 @@ function HoursSection() {
       .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
       .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [requestKey, weeks]);
+  }, [requestKey, query]);
 
   const loading = state.key !== requestKey;
   const data = state.data;
@@ -245,16 +247,18 @@ function HoursSection() {
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
-        <span className="text-sm font-semibold text-gray-900">Hours by week</span>
+        <span className="text-sm font-semibold text-gray-900">Hours</span>
         <span className="text-xs text-gray-400">
-regular / overtime · hours then cost · complete weeks only
+regular / overtime · hours then cost · completed spans only
         </span>
         <select
-          value={weeks}
-          onChange={(e) => { setWeeks(Number(e.target.value)); setExpanded(null); }}
+          value={range}
+          onChange={(e) => { setRange(e.target.value as "2" | "4" | "periods"); setExpanded(null); }}
           className="ml-auto text-xs border border-gray-200 rounded-lg py-0.5 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
         >
-          {[2, 4, 6, 8].map((n) => <option key={n} value={n}>{n} weeks</option>)}
+          <option value="2">2 weeks</option>
+          <option value="4">4 weeks</option>
+          <option value="periods">Last 2 pay periods</option>
         </select>
         {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
       </div>
@@ -268,8 +272,8 @@ regular / overtime · hours then cost · complete weeks only
               <tr className="border-b border-gray-100">
                 <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Store</th>
                 {data.weeks.map((w) => (
-                  <th key={w.start} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
-                    {w.start.slice(5).replace("-", "/")}
+                  <th key={w.start} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap" title={`${w.start} – ${w.end}`}>
+                    {w.label}
                   </th>
                 ))}
               </tr>

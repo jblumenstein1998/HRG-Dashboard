@@ -26,6 +26,7 @@
  * 6:30pm is how you end up an hour out for half the estate.
  */
 
+import { PERIODS } from "./fiscal";
 import {
   PAR_LOCATIONS,
   getShifts,
@@ -323,8 +324,11 @@ export type StoreHours = {
   error: string | null;
 };
 
+export type HoursSpan = { start: string; end: string; label: string };
+
 export type HoursReport = {
-  weeks: { start: string; end: string }[];
+  /** The columns, oldest first. Weeks or pay periods depending on the request. */
+  weeks: HoursSpan[];
   stores: StoreHours[];
   fetchedAt: number;
 };
@@ -359,18 +363,35 @@ function eachDate(start: string, end: string): string[] {
  * The last `count` complete Monday–Sunday weeks before the week containing
  * `today`. The current week is excluded on purpose; see the note above.
  */
-export function recentCompleteWeeks(today: string, count: number): { start: string; end: string }[] {
+export function recentCompleteWeeks(today: string, count: number): HoursSpan[] {
   const thisMonday = mondayOf(today);
-  const weeks: { start: string; end: string }[] = [];
+  const weeks: HoursSpan[] = [];
   for (let i = count; i >= 1; i--) {
     const start = shiftLocalDate(thisMonday, -7 * i);
-    weeks.push({ start, end: shiftLocalDate(start, 6) });
+    weeks.push({ start, end: shiftLocalDate(start, 6), label: start.slice(5).replace("-", "/") });
   }
   return weeks;
 }
 
-export async function getStoreHours(today: string, weekCount: number): Promise<HoursReport> {
-  const weeks = recentCompleteWeeks(today, weekCount);
+/**
+ * The last `count` completed pay periods.
+ *
+ * A pay period here is the fiscal period from lib/fiscal — four or five weeks,
+ * which is what the bonus docs mean when they say "pay-period" and what the
+ * bonus engine already scores against. If payroll actually runs on a different
+ * cycle, this is the line to change and nothing else.
+ *
+ * Only completed periods: one still running reports less overtime than it will
+ * finish with, the same reason the weekly columns stop at the last full week.
+ */
+export function recentCompletePeriods(today: string, count: number): HoursSpan[] {
+  return PERIODS.filter((p) => p.end < today)
+    .slice(-count)
+    .map((p) => ({ start: p.start, end: p.end, label: `P${p.period}` }));
+}
+
+export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
+  const weeks = spans;
 
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
