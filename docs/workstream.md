@@ -33,13 +33,34 @@ start_date, applied_date, hired_date, onboard_date,
 status, termination_date, termination_note
 ```
 
-**No location. No department. No job title. No pay rate.** The documented
-`embed` parameter is accepted and silently ignored in every syntax (comma list,
-repeated params, `include`, `expand`; `embed[]` 400s). There are no
-`/v2/employees/{uuid}/job_assignments` or `.../earning_rates` sub-resources —
-both 404. And there is no route from a location to its people: `location_uuid`,
+**No location. No department. No job title. No pay rate.**
+
+The docs put those on the profile as nested objects — `job_assignments` with
+`earning_rates`, `company`, `location`, `department`, and on v1
+`compensation`, `employment_details` and `work_location`. They are on the
+employee profile in the Workstream UI, too. They do not come back here. What
+was tried, all returning the same twelve flat fields:
+
+- `embed` on the **list** endpoint, as a comma list, as repeated params, as
+  `include`, as `expand` (`embed[]` 400s)
+- `embed` on the **single-employee** endpoint, `/v2/employees/{uuid}` — every
+  documented v2 embed together, and `job_assignments` alone
+- the whole of **v1**, `/employees` and `/employees/{uuid}`, with
+  `compensation,employment_details,work_location,position,location,department`
+- `/team_members` and `/team_members/{uuid}`, same embeds
+- `custom_fields` (empty) and `custom_field_values`
+- the sub-resources `/v2/employees/{uuid}/job_assignments` and
+  `.../earning_rates` — both 404
+
+And there is no route from a location to its people: `location_uuid`,
 `location` and `location_uuids[]` leave the total count at 1,222, and
 `/locations/{uuid}/employees` is a 404.
+
+**It is not a permissions problem.** Removing the positions scope from the
+token made `/positions` and `/position_applications` return `403 Forbiden`
+immediately, with the same token. So this API refuses loudly when a scope is
+missing — it does not silently drop fields. Whatever is withholding the
+profile data is not the scope list.
 
 The filters do work, which is how we know the ignored ones are genuinely
 ignored: `status=active` → 451, `status=offboarded` → 730,
@@ -57,30 +78,62 @@ That last line is the one that hurts. Per-store retention is a per-store bonus
 gate, and Workstream will not say which store anyone works at.
 
 Whether this is the whole API or only this account is **not established**. The
-documented fields may sit behind a module HRG doesn't have, or behind
-OAuth-app credentials rather than a hand-minted dashboard token. Re-run the
-discovery script after any credential change before concluding anything.
+fields exist in the product — they are on the profile screen — so the question
+for Workstream support is specific:
+
+> Our `GET /v2/employees` and `GET /v2/employees/{uuid}` return only names,
+> status and dates. The documented `embed` values — `job_assignments`,
+> `earning_rates`, `company`, `location`, `department` — are accepted and
+> ignored, on both the list and the single-employee endpoint, and on v1 with
+> `compensation` / `employment_details` / `work_location`. A missing scope
+> gives us a clean 403, so this is not a permissions error we can see. What
+> enables those nested objects on our account?
+
+Re-run the discovery script after any answer before concluding anything.
 
 The tax and bank embeds are PII and rate-limited harder than anything else.
 Nothing in the codebase requests them.
 
 ## The store join
 
-`src/lib/bonus/storeMap.ts` gained `workstreamLocationUuid`, filled in **by
-hand** from the discovery script's output. Deliberately not matched at runtime
-on name: a name-matched store link would attach one restaurant's roster to
-another's hours — wrong rather than missing.
+`src/lib/bonus/storeMap.ts` carries `workstreamLocationUuid`, and it is filled
+in from **evidence rather than names**.
 
-**As of the 2026-09-04 measurement this field has nothing to do.** Employees
-carry no location, so knowing a location's uuid buys nothing yet. The uuids are
-recorded because they cost nothing to record and are the first thing needed if
-the association ever appears.
+Workstream's manager logins are store mailboxes carrying the PAR store number —
+`hampton57002@zaxbys.com` — and each user's `permission_config.locations` names
+the location uuid they administer. Joining those gives a PAR store id and a
+Workstream location uuid in one record, with nobody reading a name. Eight of the
+twelve stores are pinned that way; the discovery script prints the derivation.
 
-The uuids also expose a wrinkle worth knowing: Workstream has **31 locations for
-13 restaurants** — each store appears twice, once as `HRG Columbia LLC` and
-again as `HRG Columbia LLC - Corporate`, plus a `Hudson Restaurant Group LLC`
-parent. Any future per-store logic has to decide which twin is the restaurant,
-which is exactly the judgement a person makes once when pasting a uuid in.
+It earns its keep on the first try. The mailbox for **57006 is
+`chesapeake57006@zaxbys.com` and it administers Hillcrest** — 57006 is
+Hillcrest's PAR id and the word "chesapeake" is a leftover. A name match would
+have put Hillcrest's people under Chesapeake and looked perfectly sensible.
+
+The four Tennessee stores have no numbered mailbox and rest on a unique name
+plus a second signal: Workstream carries a `- Corporate` twin of every location,
+and **no user administers any twin** (0 users, against 3–8 for each operating
+restaurant). The plain names are the restaurants.
+
+**As of the 2026-09-04 measurement these uuids have nothing to do**, because
+employees carry no location. They are recorded because they cost nothing and are
+the first thing needed if the association appears.
+
+### Portland, and the count of restaurants
+
+Workstream has 31 locations: 16 real ones, 15 `- Corporate` twins. Of the real
+ones, 13 are the restaurants — the PAR twelve plus **Portland** — with
+`Hudson Restaurant Group LLC` as the parent, and Hohenwald and Lafayette
+alongside (2–3 managers each).
+
+Portland is **not** in `BONUS_STORES`. Every row there is keyed on a PAR store
+id, and Portland has none — no `PAR_TOKEN_*`, no Net-Chef location, and
+`lib/jolt.ts` already excludes it for the same reason. Putting it in would not
+give it hours; it would give twelve working stores and one that throws on every
+PAR call. It is recorded in `WORKSTREAM_ONLY_LOCATIONS` instead, with Hohenwald
+and Lafayette, so a later reader knows they were seen and left out deliberately.
+When Portland gets a PAR store number and token it moves up, and nothing else
+changes.
 
 ## The employee join
 

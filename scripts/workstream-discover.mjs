@@ -159,6 +159,38 @@ function parStores() {
 const stores = parStores();
 console.log(`\nRead ${stores.length} stores from src/lib/bonus/storeMap.ts`);
 
+/**
+ * The store map, derived from evidence instead of from names.
+ *
+ * Workstream's manager logins are store mailboxes carrying the PAR store number
+ * (`hampton57002@zaxbys.com`), and each user's `permission_config.locations`
+ * names the uuid they administer. Joining those two gives a PAR store id and a
+ * Workstream location uuid in the same record, with nobody reading a name.
+ *
+ * It matters: 57006's mailbox is `chesapeake57006@zaxbys.com` and administers
+ * Hillcrest. Name matching would have put Hillcrest's people under Chesapeake.
+ */
+async function deriveFromManagers(locName) {
+  const users = await getAll("/company_users");
+  if (!users.ok) {
+    console.log(`  (could not read /company_users: ${users.status})`);
+    return { derived: new Map(), userCounts: new Map() };
+  }
+
+  const derived = new Map();
+  const userCounts = new Map();
+  for (const u of users.rows) {
+    const locs = u.permission_config?.locations ?? [];
+    for (const l of locs) userCounts.set(l.uuid, (userCounts.get(l.uuid) ?? 0) + 1);
+
+    const storeId = (u.user?.email ?? "").match(/(\d{5})/)?.[1];
+    if (!storeId || locs.length !== 1) continue;
+    derived.set(storeId, locs[0].uuid);
+    console.log(`  ${storeId}  ${(u.user?.email ?? "").padEnd(36)} ${locName.get(locs[0].uuid) ?? locs[0].uuid}`);
+  }
+  return { derived, userCounts };
+}
+
 /** A guess, printed as a guess. Matches on store number, then on address, then on name. */
 function guessStore(loc) {
   const hay = [loc.name, loc.address, loc.city].filter(Boolean).join(" ").toLowerCase();
@@ -179,14 +211,25 @@ if (!locations.ok) {
   console.error(`  failed: ${locations.status} ${locations.body}`);
 } else {
   console.log(`  envelope: ${locations.envelope}`);
-  console.log(`  ${locations.rows.length} locations\n`);
+  console.log(`  ${locations.rows.length} locations`);
+
+  const locName = new Map(locations.rows.map((l) => [l.uuid, l.name]));
+
+  console.log("\n  Store ids from numbered manager mailboxes — this is the evidence:");
+  const { derived, userCounts } = await deriveFromManagers(locName);
+
+  console.log("\n  Every location. `users` is how many managers administer it —");
+  console.log("  an operating restaurant has several; the `- Corporate` twins have none.");
+  console.log("\n  users  store  uuid                                  name");
   for (const l of locations.rows) {
-    console.log(`  ${l.uuid ?? l.id ?? "(no uuid field!)"}`);
-    console.log(`    name    : ${l.name ?? ""}`);
-    console.log(`    address : ${[l.address, l.city, l.state, l.zipcode].filter(Boolean).join(", ")}`);
-    console.log(`    looks like: ${guessStore(l)}`);
+    const storeId = [...derived.entries()].find(([, uuid]) => uuid === l.uuid)?.[0];
+    console.log(
+      `  ${String(userCounts.get(l.uuid) ?? 0).padStart(5)}  ${(storeId ?? "—").padStart(5)}  ${l.uuid}  ${l.name ?? ""}`
+        + (storeId ? "" : `   [${guessStore(l)}]`),
+    );
   }
-  console.log("\n  Paste each uuid into workstreamLocationUuid in src/lib/bonus/storeMap.ts.");
+  console.log("\n  Anything without a store id above is a name match and wants a human.");
+  console.log("  Paste confirmed uuids into workstreamLocationUuid in src/lib/bonus/storeMap.ts.");
 }
 
 // ── Departments ──────────────────────────────────────────────────────────────
