@@ -101,6 +101,43 @@ several are system-generated ("… is rejected by Columbia Zaxby's at hiring
 complete stage"), and several are housekeeping. It cannot separate voluntary
 from involuntary turnover, so it cannot carry a regretted-turnover metric.
 
+### Where position and pay actually live
+
+In **Workstream Payroll**, on the job assignment attached to a payroll team
+member — not on the recruiting/onboarding employee record the API hands out.
+
+The account plainly has that module. `/company_roles` spells the vocabulary out:
+`configure_payroll`, `manage_payroll_operations`, `manage_payroll_team_members`,
+`read_payroll_reports_dashboards_and_analytics`, `view_worker_direct_deposit`,
+alongside `manage_schedules`, `manage_attendance` and the time-off permissions.
+So HRG runs payroll, scheduling and attendance in Workstream, and none of the
+three is reachable through the public API.
+
+The documented data model matches: `job_assignments` → `earning_rates` →
+`latest_earning_snapshot` with dated `periods`, and an
+`external_earning_code_id` for syncing to a payroll engine. That is a payroll
+schema, and `/team_members` — the endpoint whose name matches
+`manage_payroll_team_members` — returns only its identity subset: name, status,
+start date.
+
+**So the data is there, and the public API on this tier doesn't project it.**
+
+### The other way in: Custom Reports / Data Export
+
+The same permission list carries `edit_custom_reports`,
+`edit_data_export_report` and `edit_data_export_template`. Workstream has a
+reporting and export feature, and a report can name columns the API won't.
+
+That is likely the faster route to position and rate per person than waiting on
+an API change, and it is worth asking about in the same breath. What to check:
+whether a custom report can include employee, location, job title and rate; and
+whether it can be scheduled to somewhere this app can collect it, rather than
+being a manual download somebody remembers to do.
+
+Also worth knowing before anyone re-plans hours: `manage_schedules` and
+`manage_attendance` mean Workstream may hold schedules and clock data too. The
+public API exposes neither, so PAR remains the clock regardless.
+
 ### v1 and v2 are different populations
 
 `GET /employees` (v1) returns **248 records with statuses `in_progress` (144),
