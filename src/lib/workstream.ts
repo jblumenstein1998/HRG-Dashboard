@@ -10,22 +10,45 @@
  *
  * Workstream sells itself as payroll, but the public API exposes **no payroll
  * runs** — no paychecks, no gross or net pay, no hours, no timesheets, no pay
- * period register. What it exposes that is payroll-shaped is:
+ * period register. Hours are PAR's, and lib/staffing.ts already computes them.
  *
- *   earning_rates      the rate of record, per job assignment, with an
- *                      effective_date, so rate history is reconstructable
- *   direct_deposits    bank routing/account, per employee
- *   federal_tax        W-4 setup
- *   state_tax          state withholding setup
+ * More than that, and worse: measured against the live HRG account on
+ * 2026-09-04 with a dashboard access token, `/v2/employees` returns **only**
  *
- * Hours are PAR's, not Workstream's — lib/staffing.ts already computes regular
- * and overtime minutes from PAR shifts. So labour *cost* stays a PAR question;
- * Workstream contributes the rate of record to check PAR's `PayRate` against,
- * and the job title that PAR only knows as an unlabelled job id.
+ *   uuid, first_name, middle_initial, last_name, preferred_name,
+ *   start_date, applied_date, hired_date, onboard_date,
+ *   status, termination_date, termination_note
  *
- * The last three embeds above are personally identifying and Workstream rate
- * limits them harder than everything else. Nothing in this module requests
- * them, and nothing should without a reason that survives being written down.
+ * and nothing else. No location. No department. No job assignment, so no job
+ * title. No earning rate, so no pay rate. The `embed` parameter documented for
+ * this endpoint is accepted and silently ignored, in every syntax tried
+ * (comma list, repeated params, `include`, `expand`); `embed[]` is a 400. There
+ * are no `/v2/employees/{uuid}/job_assignments` or `.../earning_rates`
+ * sub-resources — both 404 — and no route from a location to its people:
+ * `location_uuid`, `location` and `location_uuids[]` are all ignored (the total
+ * count does not move), and `/locations/{uuid}/employees` is a 404.
+ * `/team_members` is the same record under another name.
+ *
+ * The filters, by contrast, do work — `status`, `hired_date.gte` and
+ * `termination_date.gte` each move the count, while an invented parameter does
+ * not. So the shape of what is available is precise:
+ *
+ *   answerable    company-wide headcount, hires and terminations over any date
+ *                 window — i.e. retention and turnover
+ *   unanswerable  anything per store, anyone's position, anyone's pay rate
+ *
+ * Whether that is the whole API or only this account is not established. The
+ * documented fields may sit behind a module HRG does not have, or behind the
+ * OAuth-app credentials rather than a hand-minted dashboard token. So the types
+ * below still describe the documented shape and the helpers that read it are
+ * left in place: they return null today and start returning answers the moment
+ * the fields appear, rather than needing to be written again. Re-run
+ * scripts/workstream-discover.mjs after any credential change.
+ *
+ * The direct_deposits, federal_tax and state_tax embeds are personally
+ * identifying and rate limited harder than everything else. Nothing in this
+ * module requests them, and nothing should without a reason that survives being
+ * written down.
  *
  * ── Authentication ───────────────────────────────────────────────────────────
  *
@@ -256,41 +279,61 @@ export async function wsFetch<T>(path: string, query: WsQuery = {}): Promise<T> 
 }
 
 /**
- * Unwraps a list response.
+ * Pagination as the API reports it: `{ data: [...], meta: {...} }`.
  *
- * The v2 docs describe a paginated list but do not pin the envelope, and the v1
- * endpoints return a bare array. Rather than guess once and be wrong for a
- * whole feature, accept a bare array or any of the usual single-key envelopes.
- * scripts/workstream-discover.mjs prints the real shape — once it is confirmed
- * against the live account this can collapse to the one true case.
+ * Confirmed against the live account — /locations, /departments, /positions,
+ * /v2/employees and /team_members all use it. `imported_employee_infos` is the
+ * one exception and returns its own key, which is why the bare-array and
+ * named-key fallbacks survive rather than collapsing to `data` alone.
  */
-function unwrapList<T>(payload: unknown): T[] {
-  if (Array.isArray(payload)) return payload as T[];
+type WsMeta = {
+  total_count?: number;
+  current_page?: number;
+  next_page?: number | null;
+  total_pages?: number;
+};
+
+function unwrapList<T>(payload: unknown): { rows: T[]; meta: WsMeta | null } {
+  if (Array.isArray(payload)) return { rows: payload as T[], meta: null };
   if (payload && typeof payload === "object") {
     const obj = payload as Record<string, unknown>;
-    for (const key of ["data", "results", "items", "records", "employees", "positions", "locations", "departments"]) {
-      if (Array.isArray(obj[key])) return obj[key] as T[];
+    const meta = (obj.meta ?? null) as WsMeta | null;
+    if (Array.isArray(obj.data)) return { rows: obj.data as T[], meta };
+    for (const key of ["results", "items", "records", "employees", "positions", "locations", "departments", "team_members", "position_applications", "imported_employee_infos"]) {
+      if (Array.isArray(obj[key])) {
+        // These endpoints put the counts at the top level rather than in meta.
+        return { rows: obj[key] as T[], meta: (meta ?? obj) as WsMeta };
+      }
     }
   }
-  return [];
+  return { rows: [], meta: null };
 }
 
 /**
  * Every page of a paginated endpoint.
  *
- * Stops on a short page rather than trusting a total count, because the v1
- * endpoints report no count at all and a wrong one is indistinguishable from a
- * filter that stopped applying. `MAX_PAGES` is the backstop.
+ * `meta.next_page` is authoritative where it appears — it is the only thing
+ * that distinguishes "that was the last page" from "the page came back short
+ * for some other reason". Falls back to the short-page rule for the endpoints
+ * that report no meta at all, with `MAX_PAGES` as the backstop either way.
  */
 export async function wsPaged<T>(path: string, query: WsQuery = {}): Promise<T[]> {
   const perPage = Math.min(MAX_PER_PAGE, Number(query.per_page ?? MAX_PER_PAGE));
   const out: T[] = [];
 
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  let page = 1;
+  for (let i = 0; i < MAX_PAGES; i++) {
     const payload = await wsFetch<unknown>(path, { ...query, page, per_page: perPage });
-    const rows = unwrapList<T>(payload);
+    const { rows, meta } = unwrapList<T>(payload);
     out.push(...rows);
+
+    if (meta && meta.next_page !== undefined) {
+      if (meta.next_page === null) return out;
+      page = meta.next_page;
+      continue;
+    }
     if (rows.length < perPage) return out;
+    page += 1;
   }
   throw new Error(`Workstream: ${path} exceeded ${MAX_PAGES} pages — check the filters`);
 }
@@ -335,8 +378,15 @@ export type WsEmployee = {
   first_name: string | null;
   middle_initial: string | null;
   last_name: string | null;
-  email: string | null;
-  phone: string | null;
+  /**
+   * What they go by. Often the shorter form of the legal first name, and
+   * occasionally the *only* form anyone at the store would recognise — so it is
+   * worth showing a reviewer, though never worth matching on unaided.
+   */
+  preferred_name: string | null;
+  /** Absent from the list endpoint on the HRG account. See the header. */
+  email?: string | null;
+  phone?: string | null;
   status: WsEmployeeStatus | string;
   /** Dates are YYYY-MM-DD. */
   applied_date: string | null;
@@ -345,9 +395,14 @@ export type WsEmployee = {
   start_date: string | null;
   termination_date: string | null;
   termination_note: string | null;
-  location: WsNamedRef | null;
-  department: WsNamedRef | null;
-  job_assignments: WsJobAssignment[] | null;
+  /**
+   * Documented, and not returned on the HRG account by any means found — see
+   * the header. Optional rather than deleted so that `primaryAssignment` and
+   * `hourlyRate` keep compiling and start working the day the fields appear.
+   */
+  location?: WsNamedRef | null;
+  department?: WsNamedRef | null;
+  job_assignments?: WsJobAssignment[] | null;
 };
 
 export type WsLocation = {
@@ -361,39 +416,74 @@ export type WsLocation = {
 
 export type WsDepartment = { uuid: string; name: string | null };
 
-/** A job requisition — the thing applicants apply *to*, not a person's job. */
+/**
+ * A job requisition — the thing applicants apply *to*, not a person's job.
+ *
+ * `pay_amount` is advertising copy, not a rate: "Starting at $14.00", "Up to
+ * $20.00". It is a string because that is what it is, and it must never be
+ * parsed into a number and shown as somebody's pay.
+ *
+ * There is no location field. The store appears only as a slug inside
+ * `job_url` (".../zaxbys/springfield-26019/..."), which is not something to
+ * build a store join on.
+ */
 export type WsPosition = {
   uuid: string;
+  digest_key: string | null;
   title: string | null;
+  overview: string | null;
   status: string | null;
+  /** The requisition number, e.g. "0118". */
+  number: string | null;
   access: string | null;
-  location_name: string | null;
-  created_at: string | null;
+  pay_amount: string | null;
+  /** "hour", "year". */
+  pay_frequency: string | null;
+  job_type: string | null;
+  remote_type: string | null;
+  job_url: string | null;
 };
 
+/**
+ * An application to a position.
+ *
+ * The only record in this API that carries a contact detail — email and phone
+ * are populated here where they are empty on the employee. If a person-level
+ * join ever needs a stronger key than a name, this is where one exists.
+ *
+ * It does not name the position or the location it was for, despite being the
+ * application *to* a position.
+ */
 export type WsApplicant = {
   uuid: string;
+  digest_key: string | null;
   first_name: string | null;
   last_name: string | null;
+  /** First and last already joined, as the API returns it. */
+  name: string | null;
   email: string | null;
   phone: string | null;
   status: string | null;
-  position_uuid: string | null;
-  position_title: string | null;
-  location_name: string | null;
-  applied_at: string | null;
+  /** Where they are in the pipeline, e.g. "Hiring Complete". */
+  current_stage: string | null;
+  /** Where the application came from, e.g. "Indeed". */
+  referer_source: string | null;
+  application_date: string | null;
+  latest_interview_date: string | null;
   hired_at: string | null;
 };
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /**
- * The embeds every employee read needs and none it doesn't.
+ * The embeds the docs say carry the title, the rate and the store.
  *
- * `job_assignments` carries the title and the earning rates, which is the whole
- * reason for using v2 over v1. `location` and `department` come back as bare
- * uuids without them. The tax and bank embeds are deliberately absent — see the
- * header.
+ * Sent, and ignored — see the header. Kept because sending it costs nothing and
+ * the day it starts working is the day everything downstream starts working
+ * too, whereas a caller that had stopped asking would look like it had never
+ * wanted the data.
+ *
+ * The tax and bank embeds are deliberately absent.
  */
 export const EMPLOYEE_EMBED = "job_assignments,location,department";
 
@@ -446,31 +536,38 @@ export type ListPositionsOptions = {
   /** "pending" | "published" | "closed" | "deleted" | "cache". */
   status?: string;
   title?: string;
-  locationName?: string;
 };
 
 export async function listPositions(opts: ListPositionsOptions = {}): Promise<WsPosition[]> {
   return wsPaged<WsPosition>("/positions", {
     status: opts.status,
     title: opts.title,
-    location_name: opts.locationName,
   });
 }
 
 export type ListApplicantsOptions = {
+  /** Required in practice — see below. */
   status?: string;
-  positionUuid?: string;
-  locationName?: string;
   /** Hire-date window, YYYY-MM-DD — the recruiting funnel's conversion end. */
   hiredOnOrAfter?: string;
   hiredOnOrBefore?: string;
 };
 
+/**
+ * Applications, which must be filtered.
+ *
+ * Unfiltered, `/position_applications` times out at the gateway — a 504 on
+ * every attempt, at any page size. With `status` it answers immediately. So a
+ * status is required here rather than optional-with-a-default: a caller that
+ * forgets one gets a clear error instead of a minute of retries and a failure
+ * that reads like an outage.
+ */
 export async function listApplicants(opts: ListApplicantsOptions = {}): Promise<WsApplicant[]> {
+  if (!opts.status) {
+    throw new Error("Workstream: listApplicants needs a status — unfiltered, the endpoint times out");
+  }
   return wsPaged<WsApplicant>("/position_applications", {
     status: opts.status,
-    position_uuid: opts.positionUuid,
-    location_name: opts.locationName,
     "hired_at.gte": opts.hiredOnOrAfter,
     "hired_at.lte": opts.hiredOnOrBefore,
   });
@@ -482,6 +579,19 @@ export async function listApplicants(opts: ListApplicantsOptions = {}): Promise<
 export function employeeName(e: WsEmployee): string | null {
   const full = [e.first_name, e.last_name].filter(Boolean).join(" ").trim();
   return full || null;
+}
+
+/**
+ * What they go by, when it isn't just their first name again.
+ *
+ * Shown to a reviewer beside the legal name, because "Amy Schutt (Amy)" is
+ * noise but "Robert Ellison (Trey)" is the whole reason PAR and Workstream
+ * disagree about who someone is.
+ */
+export function preferredName(e: WsEmployee): string | null {
+  const pref = (e.preferred_name ?? "").trim();
+  if (!pref) return null;
+  return pref.toLowerCase() === (e.first_name ?? "").trim().toLowerCase() ? null : pref;
 }
 
 /**

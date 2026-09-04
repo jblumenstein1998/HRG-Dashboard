@@ -366,7 +366,12 @@ function Candidate({
   return (
     <li className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
       <div className="min-w-[12rem]">
-        <div className="text-sm font-medium text-gray-900">{candidate.name ?? "(no name)"}</div>
+        <div className="text-sm font-medium text-gray-900">
+          {candidate.name ?? "(no name)"}
+          {candidate.goesBy && (
+            <span className="ml-1.5 font-normal text-gray-500">goes by {candidate.goesBy}</span>
+          )}
+        </div>
         <div className="text-xs text-gray-500">
           {candidate.title ?? "no position"} · {money(candidate.hourlyRate)}
           {candidate.hiredDate ? ` · hired ${candidate.hiredDate}` : ""}

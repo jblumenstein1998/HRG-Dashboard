@@ -37,7 +37,7 @@
  */
 
 import type { WsEmployee } from "./workstream";
-import { employeeName, hourlyRate, primaryAssignment } from "./workstream";
+import { employeeName, hourlyRate, preferredName, primaryAssignment } from "./workstream";
 
 // ── The two sides ────────────────────────────────────────────────────────────
 
@@ -193,6 +193,17 @@ function scoreNames(par: ParPerson, ws: WsEmployee): { score: number; reasons: s
   const lastExact = pLast === wLast;
   const lastLike = similarity(pLast, wLast);
 
+  // Workstream holds a preferred name, and it is often the only name the store
+  // uses — PAR will say "Trey Ellison" where Workstream's legal record says
+  // "Robert". Treated as an alternative first name for ranking only: a
+  // preferred name that matches is strong evidence for a human, and still not
+  // grounds for an automatic link.
+  const wPreferred = normalizeName(preferredName(ws)).split(" ")[0] ?? "";
+  if (lastExact && wPreferred && wPreferred === pFirst && pFirst !== wFirst) {
+    reasons.push(`last name matches; Workstream has them as "${ws.first_name}" but they go by "${ws.preferred_name}"`);
+    return { score: 92, reasons };
+  }
+
   let score: number;
   if (lastExact && pFirst === wFirst) {
     score = 100;
@@ -261,6 +272,8 @@ function scoreCorroboration(par: ParPerson, ws: WsEmployee): { delta: number; re
 export type MatchCandidate = {
   workstreamUuid: string;
   name: string | null;
+  /** What they go by, when it differs from the legal first name. */
+  goesBy: string | null;
   title: string | null;
   hourlyRate: number | null;
   hiredDate: string | null;
@@ -316,6 +329,7 @@ function toCandidate(ws: WsEmployee, score = 0, reasons: string[] = []): MatchCa
   return {
     workstreamUuid: ws.uuid,
     name: employeeName(ws),
+    goesBy: preferredName(ws),
     title: assignment?.title ?? null,
     hourlyRate: hourlyRate(ws),
     hiredDate: ws.hired_date ?? ws.start_date ?? null,

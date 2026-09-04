@@ -11,43 +11,76 @@ against `POST /tokens`; tokens last seven days. Rate limiting is a 429 with
 `per_page` (max 100). Date filters take `.gte` / `.lte` suffixes. There are no
 webhooks.
 
-| Endpoint | What it's good for |
+### What it returns, measured — not what the docs describe
+
+Run against the live HRG account on **2026-09-04**, with a dashboard access
+token. `scripts/workstream-discover.mjs` reproduces all of this.
+
+| Endpoint | Result |
 | --- | --- |
-| `/v2/employees?embed=job_assignments,location,department` | names, hire and termination dates, position title, pay rate of record |
-| `/locations`, `/departments` | the store map's missing key |
-| `/positions`, `/position_applications` | the recruiting funnel |
+| `/v2/employees` | 1,222 people. **Names, status, and dates. Nothing else.** |
+| `/team_members` | the same record under another name |
+| `/locations` | 31 — 13 restaurants, each with a `- Corporate` twin, plus the parent LLC |
+| `/departments` | 4 — Crew, Shift Lead, Store Leadership, Above Store Leadership |
+| `/positions` | job postings. `pay_amount` is advertising copy ("Starting at $14.00") |
+| `/position_applications` | 504s unfiltered; works with `status=`. Carries email and phone |
 
-### The thing that changes the plan
+An employee record is exactly:
 
-**There is no payroll-run data in the public API.** No paychecks, no gross or
-net pay, no hours, no timesheets, no pay-period register. What exists that looks
-like payroll is:
+```
+uuid, first_name, middle_initial, last_name, preferred_name,
+start_date, applied_date, hired_date, onboard_date,
+status, termination_date, termination_note
+```
 
-- `earning_rates` — the rate of record, per job assignment, with an
-  `effective_date`, so rate *history* is reconstructable
-- `direct_deposits`, `federal_tax`, `state_tax` — setup, not payments
+**No location. No department. No job title. No pay rate.** The documented
+`embed` parameter is accepted and silently ignored in every syntax (comma list,
+repeated params, `include`, `expand`; `embed[]` 400s). There are no
+`/v2/employees/{uuid}/job_assignments` or `.../earning_rates` sub-resources —
+both 404. And there is no route from a location to its people: `location_uuid`,
+`location` and `location_uuids[]` leave the total count at 1,222, and
+`/locations/{uuid}/employees` is a 404.
 
-So "pull payroll data" resolves to **rates and titles from Workstream, hours
-from PAR**. That is not a workaround; it is the correct division. PAR is the
-clock. `src/lib/staffing.ts` already computes regular and overtime minutes and
-costs them at the rate recorded *on each shift*, which is what people were
-actually paid. Workstream contributes what they are *supposed* to be paid, which
-is a different and also useful number — where the two disagree, somebody wants
-to know, and the staffing tab now says so.
+The filters do work, which is how we know the ignored ones are genuinely
+ignored: `status=active` → 451, `status=offboarded` → 730,
+`hired_date.gte=2026-01-01` → 227, `termination_date.gte=2026-01-01` → 609, and
+an invented parameter → 1,222.
+
+### So the shape of what's possible is
+
+**Answerable:** company-wide headcount, hires and terminations across any date
+window — retention and turnover, which is what the bonus scorecard wanted.
+
+**Not answerable:** anything per store, anyone's position, anyone's pay rate.
+
+That last line is the one that hurts. Per-store retention is a per-store bonus
+gate, and Workstream will not say which store anyone works at.
+
+Whether this is the whole API or only this account is **not established**. The
+documented fields may sit behind a module HRG doesn't have, or behind
+OAuth-app credentials rather than a hand-minted dashboard token. Re-run the
+discovery script after any credential change before concluding anything.
 
 The tax and bank embeds are PII and rate-limited harder than anything else.
 Nothing in the codebase requests them.
 
 ## The store join
 
-`src/lib/bonus/storeMap.ts` gained `workstreamLocationUuid`. It is filled in **by
-hand**, from `node --env-file=.env.local scripts/workstream-discover.mjs`, which
-prints every Workstream location beside the PAR store it resembles.
+`src/lib/bonus/storeMap.ts` gained `workstreamLocationUuid`, filled in **by
+hand** from the discovery script's output. Deliberately not matched at runtime
+on name: a name-matched store link would attach one restaurant's roster to
+another's hours — wrong rather than missing.
 
-Deliberately not matched at runtime on name. Twelve stores change about never,
-and a name-matched store link would attach one restaurant's roster to another's
-hours — wrong rather than missing. A store with no uuid simply has no Workstream
-data, and every screen says so instead of guessing.
+**As of the 2026-09-04 measurement this field has nothing to do.** Employees
+carry no location, so knowing a location's uuid buys nothing yet. The uuids are
+recorded because they cost nothing to record and are the first thing needed if
+the association ever appears.
+
+The uuids also expose a wrinkle worth knowing: Workstream has **31 locations for
+13 restaurants** — each store appears twice, once as `HRG Columbia LLC` and
+again as `HRG Columbia LLC - Corporate`, plus a `Hudson Restaurant Group LLC`
+parent. Any future per-store logic has to decide which twin is the restaurant,
+which is exactly the judgement a person makes once when pasting a uuid in.
 
 ## The employee join
 
@@ -113,6 +146,24 @@ employee, and one confirmed claim per Workstream person *per store*.
 Decisions record the email of whoever made them, because the question a wrong
 link raises six months later is "who said these were the same person?".
 
+### What the measurement did to the join
+
+The queue and its rules are unchanged and still correct — but with no title and
+no rate coming back, the only thing Workstream currently contributes to a linked
+person is their **full name**, and the only corroboration a reviewer gets is
+what PAR already knew. Two consequences:
+
+- The pay-rate evidence in the candidate list is dead weight until rates appear.
+  It is left in place because it costs nothing and is the strongest signal the
+  moment it exists.
+- **65 pairs of people share a first and last name inside Workstream alone**
+  (one name four times over), so those can never auto-link and will always need
+  a human. That is the queue's floor, before PAR's side is even considered.
+
+`preferred_name` turned out to be the one genuinely useful extra field: PAR will
+have someone as "Trey Ellison" where Workstream's legal record says "Robert", so
+a matching preferred name is ranked high and shown to the reviewer as "goes by".
+
 ## What the staffing tab shows now
 
 `StaffOnClock` and `EmployeeWeekHours` each carry a `workstream` field, null
@@ -137,6 +188,10 @@ The one design decision already made, in `employedOn()`: retention is answered
 as a **date test**, never by reading `status`. `status` is only ever the present
 tense, and "how many people did we have in P3" is a question about the past.
 
+The date filters are live-verified, so the arithmetic is available today —
+**company-wide only**. Per store is impossible until Workstream associates an
+employee with a location, which is the single question to put to their support.
+
 Still to design:
 
 - a snapshot table, so a period's headcount stays answerable after Workstream's
@@ -146,6 +201,9 @@ Still to design:
 - 90-day retention of new hires, which is the recruiting-side number
 - a daily cron, a seventh entry in `vercel.json`, gated on `CRON_SECRET` like the
   other six
+
+A company-wide turnover number is worth having on its own, but it cannot gate a
+per-store bonus. Worth deciding deliberately rather than by default.
 
 ## Prerequisites
 
