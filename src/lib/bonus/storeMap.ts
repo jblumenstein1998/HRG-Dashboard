@@ -43,23 +43,39 @@ export type BonusStore = {
    * rather than a hunt through the scoring code.
    */
   smgUnitKey: string;
+  /**
+   * Workstream's location uuid, or null until someone has looked.
+   *
+   * Deliberately not derived from the location's name at runtime. Workstream
+   * names its locations by street address and store number in a format nobody
+   * here controls, and a name-matched store link would silently attach one
+   * restaurant's roster to another's hours — which is worse than an empty
+   * column, because it is wrong rather than missing.
+   *
+   * Fill these in by hand from `node --env-file=.env.local
+   * scripts/workstream-discover.mjs`, which prints every location with its uuid
+   * next to the PAR store it looks like. A person reads that list once and
+   * pastes the uuids here; that is the confirmation step, and it is cheap
+   * because there are twelve stores and they change about never.
+   */
+  workstreamLocationUuid: string | null;
 };
 
 export const BONUS_STORES: BonusStore[] = [
   // Tennessee
-  { storeId: "28901", name: "Columbia",    state: "TN", berryFragment: "222 s. james m campbell", netchefLocationId: 689,  smgUnitKey: "28901" },
-  { storeId: "36001", name: "Springfield", state: "TN", berryFragment: "3509 tom austin",         netchefLocationId: 771,  smgUnitKey: "36001" },
-  { storeId: "42601", name: "White House", state: "TN", berryFragment: "800 hwy. 76",             netchefLocationId: 1002, smgUnitKey: "42601" },
-  { storeId: "56301", name: "Brentwood",   state: "TN", berryFragment: "471 old hickory",         netchefLocationId: 425,  smgUnitKey: "56301" },
-  { storeId: "61401", name: "Spring Hill", state: "TN", berryFragment: "4882 port royal",         netchefLocationId: 632,  smgUnitKey: "61401" },
+  { storeId: "28901", name: "Columbia",    state: "TN", berryFragment: "222 s. james m campbell", netchefLocationId: 689,  smgUnitKey: "28901", workstreamLocationUuid: null },
+  { storeId: "36001", name: "Springfield", state: "TN", berryFragment: "3509 tom austin",         netchefLocationId: 771,  smgUnitKey: "36001", workstreamLocationUuid: null },
+  { storeId: "42601", name: "White House", state: "TN", berryFragment: "800 hwy. 76",             netchefLocationId: 1002, smgUnitKey: "42601", workstreamLocationUuid: null },
+  { storeId: "56301", name: "Brentwood",   state: "TN", berryFragment: "471 old hickory",         netchefLocationId: 425,  smgUnitKey: "56301", workstreamLocationUuid: null },
+  { storeId: "61401", name: "Spring Hill", state: "TN", berryFragment: "4882 port royal",         netchefLocationId: 632,  smgUnitKey: "61401", workstreamLocationUuid: null },
   // Virginia
-  { storeId: "57001", name: "College",     state: "VA", berryFragment: "6120 college",            netchefLocationId: 465,  smgUnitKey: "57001" },
-  { storeId: "57002", name: "Hampton",     state: "VA", berryFragment: "2201 todds",              netchefLocationId: 901,  smgUnitKey: "57002" },
-  { storeId: "57003", name: "Oyster",      state: "VA", berryFragment: "531 oyster point",        netchefLocationId: 950,  smgUnitKey: "57003" },
-  { storeId: "57004", name: "Chesapeake",  state: "VA", berryFragment: "2316 chesapeake square",  netchefLocationId: 868,  smgUnitKey: "57004" },
-  { storeId: "57005", name: "Jefferson",   state: "VA", berryFragment: "12834 jefferson",         netchefLocationId: 886,  smgUnitKey: "57005" },
-  { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006" },
-  { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007" },
+  { storeId: "57001", name: "College",     state: "VA", berryFragment: "6120 college",            netchefLocationId: 465,  smgUnitKey: "57001", workstreamLocationUuid: null },
+  { storeId: "57002", name: "Hampton",     state: "VA", berryFragment: "2201 todds",              netchefLocationId: 901,  smgUnitKey: "57002", workstreamLocationUuid: null },
+  { storeId: "57003", name: "Oyster",      state: "VA", berryFragment: "531 oyster point",        netchefLocationId: 950,  smgUnitKey: "57003", workstreamLocationUuid: null },
+  { storeId: "57004", name: "Chesapeake",  state: "VA", berryFragment: "2316 chesapeake square",  netchefLocationId: 868,  smgUnitKey: "57004", workstreamLocationUuid: null },
+  { storeId: "57005", name: "Jefferson",   state: "VA", berryFragment: "12834 jefferson",         netchefLocationId: 886,  smgUnitKey: "57005", workstreamLocationUuid: null },
+  { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006", workstreamLocationUuid: null },
+  { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007", workstreamLocationUuid: null },
 ];
 
 export const BONUS_STORE_IDS: string[] = BONUS_STORES.map((s) => s.storeId);
@@ -73,6 +89,18 @@ export function storeById(storeId: string): BonusStore | null {
 
 export function storeByNetchefId(locationId: number): BonusStore | null {
   return BY_NETCHEF.get(locationId) ?? null;
+}
+
+/**
+ * Resolve a Workstream location uuid to a store.
+ *
+ * An exact uuid lookup against the table above, so a location nobody has
+ * mapped yet returns null and its people stay out of every store's roster
+ * rather than landing in an arbitrary one.
+ */
+export function storeByWorkstreamLocation(uuid: string | null | undefined): BonusStore | null {
+  if (!uuid) return null;
+  return BONUS_STORES.find((s) => s.workstreamLocationUuid === uuid) ?? null;
 }
 
 /**

@@ -23,6 +23,7 @@ export default function TabOptions({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
         </option>
       ))}
       {isAdmin && <option value="/admin">Users &amp; Access</option>}
+      {isAdmin && <option value="/admin/workstream-links">Workstream Links</option>}
     </>
   );
 }

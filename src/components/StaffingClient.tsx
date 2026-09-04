@@ -521,10 +521,25 @@ function StoreHoursRows({
 }) {
   // Everyone who appears in any week, ordered by the overtime they racked up
   // across the whole window — the question the drawer is opened to answer.
-  const people = new Map<string, { name: string; job: string | null; total: number }>();
+  // `job` is the job they clocked in as; `position` is what Workstream hired
+  // them as. Both are shown, because they are different claims and disagreeing
+  // is normal — a Shift Leader on a Cook shift is a Tuesday, not an error.
+  const people = new Map<string, {
+    name: string;
+    job: string | null;
+    position: string | null;
+    rateOfRecord: number | null;
+    total: number;
+  }>();
   for (const w of store.weeks) {
     for (const p of w.people) {
-      const row = people.get(p.employeeId) ?? { name: p.name, job: p.job, total: 0 };
+      const row = people.get(p.employeeId) ?? {
+        name: p.name,
+        job: p.job,
+        position: p.workstream?.position ?? null,
+        rateOfRecord: p.workstream?.rateOfRecord ?? null,
+        total: 0,
+      };
       row.total += p.overtimeMinutes;
       people.set(p.employeeId, row);
     }
@@ -575,7 +590,17 @@ function StoreHoursRows({
                     <tr key={id} className="border-b border-gray-100 last:border-0">
                       <td className="px-2 py-1 text-gray-800 whitespace-nowrap">
                         {meta.name}
-                        {meta.job && <span className="ml-2 text-[11px] text-gray-400">{meta.job}</span>}
+                        {meta.position && (
+                          <span className="ml-2 text-[11px] text-gray-600">{meta.position}</span>
+                        )}
+                        {meta.rateOfRecord != null && (
+                          <span className="ml-1.5 text-[11px] text-gray-400 tabular-nums">
+                            ${meta.rateOfRecord.toFixed(2)}/hr
+                          </span>
+                        )}
+                        {meta.job && meta.job !== meta.position && (
+                          <span className="ml-2 text-[11px] text-gray-400">clocks in as {meta.job}</span>
+                        )}
                       </td>
                       {store.weeks.map((w) => {
                         const row = w.people.find((p) => p.employeeId === id);
@@ -731,6 +756,25 @@ function StoreCard({ store }: { store: StoreRoster }) {
                       {/* The real title, always — the grouping above is provisional and
                           this is what PAR actually says. */}
                       <div className="text-[11px] text-gray-500 truncate">{p.job ?? "no position recorded"}</div>
+                      {/* Workstream's half, only where the two records have been
+                          joined. A rate that disagrees with what the shift was
+                          costed at is worth seeing, so it is stated rather than
+                          reconciled. */}
+                      {p.workstream && (
+                        <div className="text-[11px] text-gray-400 truncate">
+                          {p.workstream.position ?? "no position in Workstream"}
+                          {p.workstream.rateOfRecord != null && (
+                            <span className="tabular-nums">
+                              {" · "}${p.workstream.rateOfRecord.toFixed(2)} on file
+                              {p.payRate != null
+                                && p.payRate > 0
+                                && Math.abs(p.payRate - p.workstream.rateOfRecord) > 0.005 && (
+                                  <span className="text-amber-700"> ≠ shift rate</span>
+                                )}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="text-[11px] text-gray-500 tabular-nums">
                         {p.startLabel}–{p.endLabel}
                         {p.isOpen && <span className="ml-1 text-green-600">on now</span>}

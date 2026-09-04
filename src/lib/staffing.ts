@@ -38,6 +38,7 @@ import {
   getStoreTimeZone,
   type PARShift,
 } from "./par";
+import { linkedRosterOrEmpty } from "./workstreamRoster";
 
 export type StaffOnClock = {
   employeeId: string | null;
@@ -67,6 +68,36 @@ export type StaffOnClock = {
   trailing7Minutes: number;
   /** Shifts behind that total, so a bare number can be checked. */
   trailing7Shifts: number;
+  /**
+   * What Workstream says about this person, where they have been joined to a
+   * Workstream record. Null throughout when they haven't been — see
+   * lib/workstreamLink.ts for why nothing is guessed here.
+   */
+  workstream: WorkstreamFacts | null;
+};
+
+/**
+ * Workstream's half of a person, hung off a PAR row.
+ *
+ * `position` is the title Workstream holds, which is what someone was hired as
+ * — not the same claim as PAR's `job`, which is what they clocked in as for
+ * this particular shift. A Shift Leader working a Cook shift is a normal
+ * Tuesday, and showing both is the point: one is the job, the other is the
+ * night.
+ *
+ * `rateOfRecord` is likewise not `payRate`. PAR's is what the shift was costed
+ * at; Workstream's is what the person is supposed to be paid. Where they
+ * disagree, somebody wants to know.
+ */
+export type WorkstreamFacts = {
+  /** Workstream's full name. PAR's DisplayName truncates the surname. */
+  fullName: string | null;
+  position: string | null;
+  rateOfRecord: number | null;
+  hiredDate: string | null;
+  terminationDate: string | null;
+  /** How the two records were joined: a name match, or a person's decision. */
+  linkedBy: "auto" | "confirmed";
 };
 
 export type StoreRoster = {
@@ -188,9 +219,12 @@ async function rosterForStore(
     // A shift that is still open keeps changing, and the whole question this
     // screen answers is "right now" — an hour-old snapshot answers a different
     // one. Past business dates do not move, so caching them is free.
-    const [employees, jobs, today, yesterday, ...trailing] = await Promise.all([
+    const [employees, jobs, linked, today, yesterday, ...trailing] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
+      // Never throws: an unreachable Workstream costs the position column, not
+      // the screen.
+      linkedRosterOrEmpty(loc.storeId),
       getShiftsLive(loc.storeId, localDate),
       getShiftsLive(loc.storeId, previousDate),
       ...trailingDates.map((d) => getShifts(loc.storeId, d)),
@@ -226,10 +260,16 @@ async function rosterForStore(
       const job = shift.jobId ? jobById.get(shift.jobId) : undefined;
       const jobName = job?.name ?? null;
       const trailingAcc = shift.employeeId ? trailingByEmployee.get(shift.employeeId) : undefined;
+      const ws = shift.employeeId ? linked.get(shift.employeeId) : undefined;
 
       onClock.push({
         employeeId: shift.employeeId,
-        name: fullName(emp) ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
+        // Workstream's name wins where there is one: PAR's is a first name and
+        // a last initial, and a roster is read to find a person.
+        name:
+          ws?.name
+          ?? fullName(emp)
+          ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
         job: jobName,
         jobId: shift.jobId,
         payRate: shift.payRate,
@@ -243,6 +283,16 @@ async function rosterForStore(
         minutesElapsedAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
         trailing7Minutes: trailingAcc?.minutes ?? 0,
         trailing7Shifts: trailingAcc?.shifts ?? 0,
+        workstream: ws
+          ? {
+              fullName: ws.name,
+              position: ws.title,
+              rateOfRecord: ws.hourlyRate,
+              hiredDate: ws.hiredDate,
+              terminationDate: ws.terminationDate,
+              linkedBy: ws.linkedBy,
+            }
+          : null,
       });
     }
 
@@ -304,6 +354,12 @@ export type EmployeeWeekHours = {
   /** Minutes worked at a rate PAR reports as 0, i.e. salaried. Costed at nothing. */
   unratedMinutes: number;
   shifts: number;
+  /**
+   * Position and rate of record from Workstream, where this PAR employee has
+   * been joined to a Workstream one. Null when they haven't — the hours are
+   * still right, there is simply nobody to attribute them to on the other side.
+   */
+  workstream: WorkstreamFacts | null;
 };
 
 export type StoreWeekHours = {
@@ -398,9 +454,10 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
       try {
-        const [employees, jobs] = await Promise.all([
+        const [employees, jobs, linked] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
+          linkedRosterOrEmpty(loc.storeId),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
         const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
@@ -435,9 +492,10 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                 unratedMinutes += shiftUnrated;
 
                 if (!sh.employeeId) continue;
+                const ws = linked.get(sh.employeeId);
                 const row = byEmployee.get(sh.employeeId) ?? {
                   employeeId: sh.employeeId,
-                  name: fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
+                  name: ws?.name ?? fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
                   job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
                   regularMinutes: 0,
                   overtimeMinutes: 0,
@@ -445,6 +503,16 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                   overtimeCost: 0,
                   unratedMinutes: 0,
                   shifts: 0,
+                  workstream: ws
+                    ? {
+                        fullName: ws.name,
+                        position: ws.title,
+                        rateOfRecord: ws.hourlyRate,
+                        hiredDate: ws.hiredDate,
+                        terminationDate: ws.terminationDate,
+                        linkedBy: ws.linkedBy,
+                      }
+                    : null,
                 };
                 row.regularMinutes += sh.regularMinutes;
                 row.overtimeMinutes += sh.overtimeMinutes;
