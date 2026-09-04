@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStoreHours, recentCompleteWeeks, recentCompletePeriods } from "@/lib/staffing";
+import { todayCentralISO } from "@/lib/parRollup";
 
 /**
  * Regular and overtime hours, per store, per complete week.
@@ -20,7 +21,10 @@ export async function GET(req: NextRequest) {
   const rawToday = p.get("today");
   const today = rawToday && /^\d{4}-\d{2}-\d{2}$/.test(rawToday)
     ? rawToday
-    : new Date().toISOString().slice(0, 10);
+    // Central, not UTC: at 11pm in Tennessee the UTC date has already rolled
+    // over, which asked for a business date that had barely started and dropped
+    // the day everyone actually wanted to see.
+    : todayCentralISO();
 
   // A pay period is four or five weeks, so two of them is roughly eight weeks of
   // shifts per store — cached, but a cold run is not cheap.

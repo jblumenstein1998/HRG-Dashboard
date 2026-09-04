@@ -18,7 +18,9 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
-import type { StaffingReport, StoreRoster, HoursReport, StoreHours } from "@/lib/staffing";
+import type {
+  StaffingReport, StoreRoster, HoursReport, StoreHours, OpenCloseReport,
+} from "@/lib/staffing";
 
 /** Hours, #,##0.0 — the one format used everywhere on this screen. */
 function hrs(minutes: number | null | undefined): string {
@@ -186,6 +188,8 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           )}
         </div>
 
+        <OpenCloseSection />
+
         <HoursSection />
 
         <p className="text-[11px] text-gray-400">
@@ -202,6 +206,118 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         </p>
       </main>
     </div>
+  );
+}
+
+/**
+ * Labor spent before the doors open and after they shut.
+ *
+ * Open and close are PAR's own business hours per day of week, so a slow
+ * morning does not read as a late open. The labor is the same window overlap
+ * the hourly rollup uses: break time inside the window is not counted, and a
+ * closing shift running past midnight is measured in its own frame rather than
+ * wrapping into a negative span.
+ */
+function OpenCloseSection() {
+  const [side, setSide] = useState<"open" | "close">("open");
+  const [state, setState] = useState<{ loaded: boolean; data: OpenCloseReport | null; error: string | null }>(
+    { loaded: false, data: null, error: null },
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/staffing/openclose?days=5")
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        return json as OpenCloseReport;
+      })
+      .then((json) => { if (!cancelled) setState({ loaded: true, data: json, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ loaded: true, data: null, error: String(err?.message ?? err) }); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const data = state.data;
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
+        <span className="text-sm font-semibold text-gray-900">
+          Labor {side === "open" ? "before open" : "after close"}
+        </span>
+        <span className="text-xs text-gray-400">
+          {side === "open"
+            ? "hours worked before the doors open · people · first clock-in"
+            : "hours worked after close · people · last clock-out"}
+        </span>
+        <div className="ml-auto flex rounded-lg border border-gray-200 overflow-hidden">
+          {(["open", "close"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setSide(v)}
+              className={`text-xs px-3 py-1 transition ${
+                side === v ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {v === "open" ? "Open" : "Close"}
+            </button>
+          ))}
+        </div>
+        {!state.loaded && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+
+      {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {data && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Store</th>
+                {data.dates.map((d) => (
+                  <th key={d} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
+                    {d.slice(5).replace("-", "/")}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.stores.map((store) => {
+                const cells = side === "open" ? store.open : store.close;
+                return (
+                  <tr key={store.storeId} className="border-b border-gray-50">
+                    <td className="px-3 py-1 font-medium text-gray-900 whitespace-nowrap">
+                      {store.storeName}
+                      {cells[0]?.openLabel && (
+                        <span className="ml-2 text-[11px] font-normal text-gray-400">
+                          {side === "open" ? cells[0].openLabel : cells[0].closeLabel}
+                        </span>
+                      )}
+                      {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
+                    </td>
+                    {cells.map((c) => (
+                      <td key={c.businessDate} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+                        {c.people === 0 ? (
+                          <span className="text-gray-300">—</span>
+                        ) : (
+                          <>
+                            <span className="text-gray-800 font-medium">{hrs(c.laborMinutes)}</span>{" "}
+                            <span className="text-gray-400">{c.people}p</span>{" "}
+                            <span className="text-gray-400" title={side === "open" ? "first clock-in" : "last clock-out"}>
+                              {c.edgeLabel}
+                            </span>
+                          </>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

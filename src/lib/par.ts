@@ -386,6 +386,61 @@ export const getEmployees = unstable_cache(
   { revalidate: 60 * 60 * 24, tags: ["par-data"] },
 );
 
+/**
+ * When a store opens and closes, per day of week.
+ *
+ * PAR states these as ISO-8601 durations from midnight — PT10H30M is 10:30 —
+ * which is why they are held as minutes rather than as clock strings: the whole
+ * point is arithmetic against shift times, which are also minutes from midnight.
+ *
+ * A close at or before the open means the store trades past midnight, so the
+ * close is pushed into the next day rather than left to read as a negative
+ * trading day.
+ */
+export type PARBusinessHours = {
+  /** Day of week, 0 = Sunday, as JavaScript counts them. */
+  dayOfWeek: number;
+  openMinutes: number;
+  closeMinutes: number;
+};
+
+const DAY_INDEX: Record<string, number> = {
+  Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6,
+};
+
+/** "PT10H30M" -> 630. */
+function isoDurationToMinutes(text: string | null): number | null {
+  if (!text) return null;
+  const h = Number(text.match(/(\d+)H/)?.[1] ?? 0);
+  const m = Number(text.match(/(\d+)M/)?.[1] ?? 0);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
+
+export const getBusinessHours = unstable_cache(
+  async (storeId: string): Promise<PARBusinessHours[]> => {
+    const xml = await soapPost(
+      "Settings2.svc",
+      "http://www.brinksoftware.com/webservices/settings/v2/ISettingsWebService2/GetBusinessHours",
+      `<GetBusinessHours xmlns="http://www.brinksoftware.com/webservices/settings/v2"><request></request></GetBusinessHours>`,
+      getLocationToken(storeId),
+    );
+    return allTags(xml, "BusinessHour").flatMap(b => {
+      const day = DAY_INDEX[tagVal(b, "DayOfWeek") ?? ""];
+      const openMinutes = isoDurationToMinutes(tagVal(b, "OpenTime"));
+      const closeMinutes = isoDurationToMinutes(tagVal(b, "CloseTime"));
+      if (day === undefined || openMinutes === null || closeMinutes === null) return [];
+      return [{
+        dayOfWeek: day,
+        openMinutes,
+        closeMinutes: closeMinutes <= openMinutes ? closeMinutes + 1440 : closeMinutes,
+      }];
+    });
+  },
+  ["par-business-hours", PARSE_VERSION],
+  { revalidate: 60 * 60 * 24, tags: ["par-data"] },
+);
+
 export const getJobs = unstable_cache(
   async (storeId: string): Promise<PARJob[]> => {
     const xml = await soapPost(
