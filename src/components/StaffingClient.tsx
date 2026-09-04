@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
-import type { StaffingReport, StoreRoster } from "@/lib/staffing";
+import type { StaffingReport, StoreRoster, HoursReport, StoreHours } from "@/lib/staffing";
 
 function hrs(minutes: number): string {
   return `${(minutes / 60).toFixed(2)}h`;
@@ -175,6 +175,8 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           )}
         </div>
 
+        <HoursSection />
+
         <p className="text-[11px] text-gray-400">
           Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
           break windows are PAR&apos;s own. <strong>Elapsed</strong> is time since clocking in and
@@ -188,8 +190,239 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   );
 }
 
+/**
+ * Regular and overtime hours by store and week.
+ *
+ * Overtime is PAR's own OvertimeMinutesWorked, not a 40-hour rule applied here.
+ * The workweek a payroll provider uses, and the rules around it, are not
+ * visible to this app, and a locally computed figure that disagreed with
+ * someone's pay would be worse than no figure at all.
+ *
+ * Only complete weeks are shown. A week in progress always reports less
+ * overtime than it will finish with, which reads as a store improving when
+ * nothing has changed.
+ */
+function HoursSection() {
+  const [weeks, setWeeks] = useState(4);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
+    { key: "", data: null, error: null },
+  );
+
+  const requestKey = String(weeks);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/staffing/hours?weeks=${weeks}`)
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        return json as HoursReport;
+      })
+      .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
+    return () => { cancelled = true; };
+  }, [requestKey, weeks]);
+
+  const loading = state.key !== requestKey;
+  const data = state.data;
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
+        <span className="text-sm font-semibold text-gray-900">Hours by week</span>
+        <span className="text-xs text-gray-400">regular / overtime, complete weeks only</span>
+        <select
+          value={weeks}
+          onChange={(e) => { setWeeks(Number(e.target.value)); setExpanded(null); }}
+          className="ml-auto text-xs border border-gray-200 rounded-lg py-0.5 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+        >
+          {[2, 4, 6, 8].map((n) => <option key={n} value={n}>{n} weeks</option>)}
+        </select>
+        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+
+      {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {data && (
+        <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Store</th>
+                {data.weeks.map((w) => (
+                  <th key={w.start} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
+                    {w.start.slice(5).replace("-", "/")}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.stores.map((store) => (
+                <StoreHoursRows
+                  key={store.storeId}
+                  store={store}
+                  open={expanded === store.storeId}
+                  onToggle={() => setExpanded(expanded === store.storeId ? null : store.storeId)}
+                  weekCount={data.weeks.length}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StoreHoursRows({
+  store, open, onToggle, weekCount,
+}: {
+  store: StoreHours;
+  open: boolean;
+  onToggle: () => void;
+  weekCount: number;
+}) {
+  // Everyone who appears in any week, ordered by the overtime they racked up
+  // across the whole window — the question the drawer is opened to answer.
+  const people = new Map<string, { name: string; job: string | null; total: number }>();
+  for (const w of store.weeks) {
+    for (const p of w.people) {
+      const row = people.get(p.employeeId) ?? { name: p.name, job: p.job, total: 0 };
+      row.total += p.overtimeMinutes;
+      people.set(p.employeeId, row);
+    }
+  }
+  const ranked = [...people.entries()].sort((a, b) => b[1].total - a[1].total);
+
+  return (
+    <>
+      <tr className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={onToggle}>
+        <td className="px-3 py-1.5 font-medium text-gray-900 whitespace-nowrap">
+          <span className={`inline-block mr-1.5 text-[10px] text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
+          {store.storeName}
+          {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
+        </td>
+        {store.weeks.map((w) => (
+          <td key={w.weekStart} className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
+            <span className="text-gray-700">{(w.regularMinutes / 60).toFixed(1)}</span>
+            <span className="text-gray-300"> / </span>
+            <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-400"}>
+              {(w.overtimeMinutes / 60).toFixed(1)}
+            </span>
+          </td>
+        ))}
+      </tr>
+
+      {open && (
+        <tr className="border-b border-gray-200 bg-gray-50">
+          <td colSpan={weekCount + 1} className="px-3 py-2">
+            {ranked.length === 0 ? (
+              <p className="text-sm text-gray-400">No shifts in this window.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Employee</th>
+                    {store.weeks.map((w) => (
+                      <th key={w.weekStart} className="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
+                        {w.weekStart.slice(5).replace("-", "/")}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranked.map(([id, meta]) => (
+                    <tr key={id} className="border-b border-gray-100 last:border-0">
+                      <td className="px-2 py-1 text-gray-800 whitespace-nowrap">
+                        {meta.name}
+                        {meta.job && <span className="ml-2 text-[11px] text-gray-400">{meta.job}</span>}
+                      </td>
+                      {store.weeks.map((w) => {
+                        const row = w.people.find((p) => p.employeeId === id);
+                        if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-gray-300">—</td>;
+                        return (
+                          <td key={w.weekStart} className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                            <span className="text-gray-600">{(row.regularMinutes / 60).toFixed(1)}</span>
+                            <span className="text-gray-300"> / </span>
+                            <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
+                              {(row.overtimeMinutes / 60).toFixed(1)}
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/**
+ * Which bucket a job title falls in.
+ *
+ * An explicit list of the titles PAR actually returns, not a pattern match over
+ * the names — the last version of this screen inferred front/back of house from
+ * the words in a title and was quietly wrong. A title that is not on this list
+ * is not guessed at: it appears under "Other" with its real name, so a new or
+ * renamed job shows up as something to look at rather than silently joining a
+ * group it does not belong to.
+ *
+ * Provisional by agreement. Positions get their real definitions when payroll
+ * is integrated, and this map goes away.
+ */
+const JOB_GROUPS: { key: string; label: string; titles: string[] }[] = [
+  { key: "cooks", label: "Cooks", titles: ["Cook", "Catering Cook"] },
+  { key: "cashiers", label: "Cashiers", titles: ["Cashier"] },
+  {
+    key: "managers",
+    label: "Managers",
+    titles: [
+      "Salary - General Manager",
+      "Salary - Assistant Manager",
+      "Hourly - Assistant Manager",
+      "SAL Mgr Asst Gen",
+      "Shift Leader",
+      "Salary - Catering Manager",
+      "Hourly - Catering Manager",
+      "Above Store",
+    ],
+  },
+];
+
+const GROUP_TONE: Record<string, string> = {
+  cooks: "bg-amber-50 border-amber-200",
+  cashiers: "bg-blue-50 border-blue-200",
+  managers: "bg-purple-50 border-purple-200",
+  other: "bg-gray-50 border-gray-200",
+};
+
+function groupOf(job: string | null): string {
+  if (!job) return "other";
+  return JOB_GROUPS.find((g) => g.titles.includes(job))?.key ?? "other";
+}
+
 function StoreCard({ store }: { store: StoreRoster }) {
   const [open, setOpen] = useState(true);
+
+  const grouped = new Map<string, typeof store.onClock>();
+  for (const p of store.onClock) {
+    const key = groupOf(p.job);
+    const list = grouped.get(key) ?? [];
+    list.push(p);
+    grouped.set(key, list);
+  }
+
+  const sections = [
+    ...JOB_GROUPS.map((g) => ({ key: g.key, label: g.label, people: grouped.get(g.key) ?? [] })),
+    { key: "other", label: "Other", people: grouped.get("other") ?? [] },
+  ].filter((s) => s.people.length > 0);
+
   const onBreak = store.onClock.filter((p) => p.onBreak).length;
 
   return (
@@ -209,6 +442,13 @@ function StoreCard({ store }: { store: StoreRoster }) {
               {store.onClock.length} on the clock
               {onBreak > 0 && <span className="text-gray-400"> · {onBreak} on break</span>}
             </span>
+            {sections.length > 0 && (
+              <span className="text-xs text-gray-400">
+                {sections.map((s, i) => (
+                  <span key={s.key}>{i > 0 && " · "}{s.people.length} {s.label.toLowerCase()}</span>
+                ))}
+              </span>
+            )}
             {store.hourlyWageRunRate !== null && (
               <span className="ml-auto text-xs tabular-nums text-gray-500">
                 ${store.hourlyWageRunRate.toFixed(2)}/hr in wages
@@ -227,40 +467,40 @@ function StoreCard({ store }: { store: StoreRoster }) {
             Nobody clocked in at this time.
           </p>
         ) : (
-          <div className="overflow-x-auto border-t border-gray-100">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Name</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Position</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400 w-40">Shift</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-24">Elapsed</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-20">Rate</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 w-32">Trailing 7d</th>
-                </tr>
-              </thead>
-              <tbody>
-                {store.onClock.map((p, i) => (
-                  <tr key={`${p.employeeId ?? "?"}-${i}`} className="border-b border-gray-50">
-                    <td className="px-3 py-1.5 font-medium text-gray-900">{p.name}</td>
-                    <td className="px-3 py-1.5 text-gray-600">{p.job ?? "—"}</td>
-                    <td className="px-3 py-1.5 text-gray-600 tabular-nums">
-                      {p.startLabel} – {p.endLabel}
-                      {p.isOpen && <span className="ml-1 text-[10px] text-green-600 uppercase tracking-wide">on now</span>}
-                      {p.onBreak && <span className="ml-1 text-[10px] text-amber-600 uppercase tracking-wide">break</span>}
-                    </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-gray-700">{hrs(p.minutesElapsedAtQuery)}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-gray-600">
-                      {p.payRate === null || p.payRate === 0 ? "—" : `$${p.payRate.toFixed(2)}`}
-                    </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums text-gray-700">
-                      {hrs(p.trailing7Minutes)}
-                      <span className="ml-1 text-[10px] text-gray-400">{p.trailing7Shifts} shifts</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="border-t border-gray-100 p-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {sections.map((section) => (
+              <div key={section.key} className={`rounded-lg border ${GROUP_TONE[section.key] ?? GROUP_TONE.other}`}>
+                <div className="px-2.5 py-1.5 flex items-baseline gap-2 border-b border-black/5">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-700">{section.label}</span>
+                  <span className="text-xs text-gray-500">{section.people.length}</span>
+                </div>
+                <ul className="divide-y divide-black/5">
+                  {section.people.map((p, i) => (
+                    <li key={`${p.employeeId ?? "?"}-${i}`} className="px-2.5 py-1.5">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-sm font-medium text-gray-900 truncate">{p.name}</span>
+                        {p.onBreak && (
+                          <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
+                        )}
+                        <span className="ml-auto text-xs tabular-nums text-gray-600">
+                          {p.payRate === null || p.payRate === 0 ? "salaried" : `$${p.payRate.toFixed(2)}`}
+                        </span>
+                      </div>
+                      {/* The real title, always — the grouping above is provisional and
+                          this is what PAR actually says. */}
+                      <div className="text-[11px] text-gray-500 truncate">{p.job ?? "no position recorded"}</div>
+                      <div className="text-[11px] text-gray-500 tabular-nums">
+                        {p.startLabel}–{p.endLabel}
+                        {p.isOpen && <span className="ml-1 text-green-600">on now</span>}
+                      </div>
+                      <div className="text-[11px] text-gray-400 tabular-nums">
+                        {hrs(p.minutesElapsedAtQuery)} elapsed · {hrs(p.trailing7Minutes)} in 7d
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         )
       )}

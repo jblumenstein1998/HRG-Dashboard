@@ -56,6 +56,17 @@ const sem = new Semaphore(5);
 
 const CACHE_REVALIDATE_SECONDS = 60 * 60; // 1 hr
 
+/**
+ * Bumped whenever a parser below starts reading a field it did not before.
+ *
+ * unstable_cache keys on the arguments, not on the shape of what was stored, so
+ * a cached entry written by an older parser is served back missing the new
+ * fields — silently, and for as long as the TTL runs. Adding regular/overtime
+ * minutes to a shift did exactly that: a week that was already cached reported
+ * zero hours for every store while a week that was not reported correctly.
+ */
+const PARSE_VERSION = "v2";
+
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
 function tagVal(xml: string, tag: string): string | null {
@@ -180,6 +191,14 @@ export type PARShift = {
   employeeId: string | null;
   /** Hourly rate as PAR recorded it on this shift. Salaried roles report 0. */
   payRate: number | null;
+  /**
+   * PAR's own split of the shift into straight time and overtime. Taken rather
+   * than derived: overtime depends on a payroll workweek and on rules this app
+   * has no sight of, and a total computed here would disagree with what people
+   * are actually paid.
+   */
+  regularMinutes: number;
+  overtimeMinutes: number;
   // True if this employee hasn't clocked out yet. PAR represents "no clock-out
   // yet" as an EndTime whose DateTime is the sentinel 0001-01-01 — NOT a missing
   // tag — so this can't be inferred from endDt being null.
@@ -251,6 +270,8 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     const employeeId = tagVal(top, "EmployeeId");
     const rawRate = Number.parseFloat(tagVal(top, "PayRate") ?? "");
     const payRate = Number.isFinite(rawRate) ? rawRate : null;
+    const regularMinutes = parseInt(tagVal(top, "RegularMinutesWorked") ?? "0") || 0;
+    const overtimeMinutes = parseInt(tagVal(top, "OvertimeMinutesWorked") ?? "0") || 0;
     const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
     const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
     const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
@@ -283,7 +304,10 @@ function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
     });
 
     const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
-    return { startMinutes, endMinutes, minutesWorked, jobId, employeeId, payRate, isOpen, breaks };
+    return {
+      startMinutes, endMinutes, minutesWorked, jobId, employeeId, payRate,
+      regularMinutes, overtimeMinutes, isOpen, breaks,
+    };
   });
 }
 
@@ -300,7 +324,7 @@ export const getOrders = unstable_cache(
     );
     return parseOrdersXml(xml, getStoreTimeZone(storeId));
   },
-  ["par-orders"],
+  ["par-orders", PARSE_VERSION],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 
@@ -358,7 +382,7 @@ export const getEmployees = unstable_cache(
       }];
     });
   },
-  ["par-employees"],
+  ["par-employees", PARSE_VERSION],
   { revalidate: 60 * 60 * 24, tags: ["par-data"] },
 );
 
@@ -380,7 +404,7 @@ export const getJobs = unstable_cache(
       }];
     });
   },
-  ["par-jobs"],
+  ["par-jobs", PARSE_VERSION],
   { revalidate: 60 * 60 * 24, tags: ["par-data"] },
 );
 
@@ -418,7 +442,7 @@ export const getShifts = unstable_cache(
     );
     return withoutNonLaborJobs(parseShiftsXml(xml, getStoreTimeZone(storeId)), excluded);
   },
-  ["par-shifts"],
+  ["par-shifts", PARSE_VERSION],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
 

@@ -274,3 +274,150 @@ export async function getStaffingAt(at: Date): Promise<StaffingReport> {
   const stores = await Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, at)));
   return { at: at.toISOString(), stores, fetchedAt: Date.now() };
 }
+
+// ── Hours by store by week ───────────────────────────────────────────────────
+
+/**
+ * Regular and overtime hours, per store, per week, with the people behind them.
+ *
+ * The split is PAR's own — every shift carries RegularMinutesWorked and
+ * OvertimeMinutesWorked — rather than something derived here from a 40-hour
+ * rule. Overtime depends on a payroll workweek and on rules this app cannot
+ * see, and a number computed locally would disagree with what people are
+ * actually paid, which is the one thing a screen about overtime must not do.
+ *
+ * Weeks run Monday to Sunday and only complete ones are shown. A week still in
+ * progress reports less overtime than it will finish with, and a figure that
+ * climbs all week reads as a store improving when nothing has changed.
+ */
+export type EmployeeWeekHours = {
+  employeeId: string;
+  name: string;
+  job: string | null;
+  regularMinutes: number;
+  overtimeMinutes: number;
+  shifts: number;
+};
+
+export type StoreWeekHours = {
+  weekStart: string;
+  weekEnd: string;
+  regularMinutes: number;
+  overtimeMinutes: number;
+  people: EmployeeWeekHours[];
+};
+
+export type StoreHours = {
+  storeId: string;
+  storeName: string;
+  state: "TN" | "VA";
+  weeks: StoreWeekHours[];
+  error: string | null;
+};
+
+export type HoursReport = {
+  weeks: { start: string; end: string }[];
+  stores: StoreHours[];
+  fetchedAt: number;
+};
+
+/** The Monday on or before a date. */
+function mondayOf(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay(); // 0 = Sunday
+  dt.setUTCDate(dt.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  return dt.toISOString().slice(0, 10);
+}
+
+function eachDate(start: string, end: string): string[] {
+  const out: string[] = [];
+  for (let d = start; d <= end; d = shiftLocalDate(d, 1)) out.push(d);
+  return out;
+}
+
+/**
+ * The last `count` complete Monday–Sunday weeks before the week containing
+ * `today`. The current week is excluded on purpose; see the note above.
+ */
+export function recentCompleteWeeks(today: string, count: number): { start: string; end: string }[] {
+  const thisMonday = mondayOf(today);
+  const weeks: { start: string; end: string }[] = [];
+  for (let i = count; i >= 1; i--) {
+    const start = shiftLocalDate(thisMonday, -7 * i);
+    weeks.push({ start, end: shiftLocalDate(start, 6) });
+  }
+  return weeks;
+}
+
+export async function getStoreHours(today: string, weekCount: number): Promise<HoursReport> {
+  const weeks = recentCompleteWeeks(today, weekCount);
+
+  const stores = await Promise.all(
+    PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
+      try {
+        const [employees, jobs] = await Promise.all([
+          getEmployees(loc.storeId),
+          getJobs(loc.storeId),
+        ]);
+        const empById = new Map(employees.map((e) => [e.id, e]));
+        const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
+
+        const weekRows = await Promise.all(
+          weeks.map(async (w): Promise<StoreWeekHours> => {
+            const days = await Promise.all(
+              eachDate(w.start, w.end).map((d) => getShifts(loc.storeId, d)),
+            );
+
+            const byEmployee = new Map<string, EmployeeWeekHours>();
+            let regularMinutes = 0;
+            let overtimeMinutes = 0;
+
+            for (const day of days) {
+              for (const sh of day) {
+                regularMinutes += sh.regularMinutes;
+                overtimeMinutes += sh.overtimeMinutes;
+                if (!sh.employeeId) continue;
+                const row = byEmployee.get(sh.employeeId) ?? {
+                  employeeId: sh.employeeId,
+                  name: fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
+                  job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
+                  regularMinutes: 0,
+                  overtimeMinutes: 0,
+                  shifts: 0,
+                };
+                row.regularMinutes += sh.regularMinutes;
+                row.overtimeMinutes += sh.overtimeMinutes;
+                row.shifts += 1;
+                byEmployee.set(sh.employeeId, row);
+              }
+            }
+
+            // Whoever is deepest into overtime first — the question this table
+            // is opened to answer.
+            const people = [...byEmployee.values()].sort(
+              (a, b) =>
+                b.overtimeMinutes - a.overtimeMinutes ||
+                b.regularMinutes - a.regularMinutes ||
+                a.name.localeCompare(b.name),
+            );
+
+            return { weekStart: w.start, weekEnd: w.end, regularMinutes, overtimeMinutes, people };
+          }),
+        );
+
+        return { storeId: loc.storeId, storeName: loc.name, state: loc.state, weeks: weekRows, error: null };
+      } catch (err) {
+        return {
+          storeId: loc.storeId,
+          storeName: loc.name,
+          state: loc.state,
+          weeks: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }),
+  );
+
+  return { weeks, stores, fetchedAt: Date.now() };
+}
