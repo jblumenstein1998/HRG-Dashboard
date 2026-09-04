@@ -159,6 +159,9 @@ function parStores() {
 const stores = parStores();
 console.log(`\nRead ${stores.length} stores from src/lib/bonus/storeMap.ts`);
 
+/** uuid → location name, filled in by the Locations section and read later. */
+const locNameGlobal = new Map();
+
 /**
  * The store map, derived from evidence instead of from names.
  *
@@ -214,6 +217,7 @@ if (!locations.ok) {
   console.log(`  ${locations.rows.length} locations`);
 
   const locName = new Map(locations.rows.map((l) => [l.uuid, l.name]));
+  for (const [k, v] of locName) locNameGlobal.set(k, v);
 
   console.log("\n  Store ids from numbered manager mailboxes — this is the evidence:");
   const { derived, userCounts } = await deriveFromManagers(locName);
@@ -263,7 +267,13 @@ if (!positions.ok) {
 // ── Employees ────────────────────────────────────────────────────────────────
 
 console.log("\n=== Employees ==========================================================");
-const employees = await getAll("/v2/employees", { embed: "job_assignments,location,department" });
+// The parentheses are mandatory. Without them the parameter is accepted and
+// ignored, and every nested object silently disappears — which reads as an API
+// that does not have the data. `information` is never requested: it returns
+// plaintext SSNs.
+const employees = await getAll("/v2/employees", {
+  embed: "(job_assignments,company,location,department)",
+});
 if (!employees.ok) {
   console.error(`  failed: ${employees.status} ${employees.body}`);
   console.error("  (a 403 here usually means the API user lacks the employees scope)");
@@ -277,36 +287,69 @@ if (!employees.ok) {
   console.log("  by status:");
   for (const [k, n] of [...byStatus.entries()].sort()) console.log(`    ${String(n).padStart(4)}  ${k}`);
 
+  // The location that counts is the one on the job assignment. The employee's
+  // own `location` is routinely null even when embedded.
+  const primary = (e) => {
+    const all = e.job_assignments ?? [];
+    return all.find((a) => a.primary && a.status === "active")
+      ?? all.find((a) => a.status === "active")
+      ?? all.find((a) => a.primary)
+      ?? all[0]
+      ?? null;
+  };
+
   const byLocation = new Map();
   for (const e of rows) {
-    const key = e.location?.uuid ? `${e.location.uuid}  ${e.location.name ?? ""}` : "(no location)";
+    const a = primary(e);
+    const uuid = a?.location_id ?? a?.working_location?.core_location_id ?? e.location?.uuid ?? null;
+    const key = uuid ? `${uuid}  ${locNameGlobal.get(uuid) ?? ""}` : "(no location)";
     byLocation.set(key, (byLocation.get(key) ?? 0) + 1);
   }
-  console.log("\n  by location:");
-  for (const [k, n] of [...byLocation.entries()].sort()) console.log(`    ${String(n).padStart(4)}  ${k}`);
+  console.log("\n  by location, from the job assignment:");
+  for (const [k, n] of [...byLocation.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`    ${String(n).padStart(4)}  ${k}`);
+  }
 
   const titles = new Map();
-  let withRate = 0;
-  let hourly = 0;
+  const earningTypes = new Map();
+  const periods = new Map();
+  let withAssignment = 0;
+  let withHourly = 0;
   for (const e of rows) {
-    for (const a of e.job_assignments ?? []) {
-      const t = a.title ?? "(untitled)";
-      titles.set(t, (titles.get(t) ?? 0) + 1);
+    const assignments = e.job_assignments ?? [];
+    if (assignments.length) withAssignment++;
+    for (const a of assignments) {
+      titles.set(a.title ?? "(untitled)", (titles.get(a.title ?? "(untitled)") ?? 0) + 1);
       const rates = a.earning_rates ?? [];
-      if (rates.length) withRate++;
-      if (rates.some((r) => (r.period ?? "").toLowerCase() === "hour" || (r.earning_type ?? "").toLowerCase() === "hourly")) {
-        hourly++;
+      for (const r of rates) {
+        const t = (r.earning_type ?? "(none)").toLowerCase();
+        earningTypes.set(t, (earningTypes.get(t) ?? 0) + 1);
+        periods.set(r.period ?? "(none)", (periods.get(r.period ?? "(none)") ?? 0) + 1);
       }
+      if (rates.some((r) => (r.earning_type ?? "").toLowerCase() === "hourly")) withHourly++;
     }
   }
-  console.log("\n  job assignment titles:");
+
+  console.log(`\n  employees carrying a job assignment: ${withAssignment} of ${rows.length}`);
+  console.log("  (the rest are offboarded or still onboarding)");
+
+  console.log("\n  job titles:");
   for (const [t, n] of [...titles.entries()].sort((a, b) => b[1] - a[1])) {
     console.log(`    ${String(n).padStart(4)}  ${t}`);
   }
-  console.log(`\n  assignments carrying any earning rate: ${withRate}`);
-  console.log(`  assignments carrying an hourly rate   : ${hourly}`);
-  console.log("  (if the second number is ~0, `period`/`earning_type` are spelled differently");
-  console.log("   than hourlyRate() in src/lib/workstream.ts assumes — fix it there)");
+
+  // A person holds several rates at once, one per earning type — not a history.
+  // hourlyRate() in src/lib/workstream.ts reads the `hourly` row and nothing
+  // else, so if that count is ~0 the vocabulary has changed and it needs fixing.
+  console.log("\n  earning types (one row each, per assignment):");
+  for (const [t, n] of [...earningTypes.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`    ${String(n).padStart(4)}  ${t}`);
+  }
+  console.log("\n  periods:");
+  for (const [t, n] of [...periods.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`    ${String(n).padStart(4)}  ${t}`);
+  }
+  console.log(`\n  assignments carrying an hourly rate: ${withHourly}`);
 
   // How many people could ever link automatically. This is the number that
   // says whether the review queue is a morning's work or a fortnight's.

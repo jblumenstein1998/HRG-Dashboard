@@ -11,6 +11,35 @@ against `POST /tokens`; tokens last seven days. Rate limiting is a 429 with
 `per_page` (max 100). Date filters take `.gte` / `.lte` suffixes. There are no
 webhooks.
 
+### The embed syntax, which is the whole ballgame
+
+Embedded resources must be wrapped in **parentheses**:
+
+```
+GET /v2/employees?embed=(job_assignments,company,location,department)
+```
+
+Without them the parameter is accepted and **silently ignored**, and every
+employee comes back as twelve flat fields — no location, no job title, no pay.
+A bare comma list, repeated `embed` params, `include` and `expand` all fail the
+same quiet way. Only `embed[]` is honest enough to return a 400.
+
+That is worth stating plainly because it is indistinguishable from an API that
+does not hold the data, and this document previously said exactly that. With
+the parentheses, everything documented comes back.
+
+### Never ask for `information`
+
+The `information` embed returns **social security numbers in plaintext**, plus
+date of birth, ethnicity, gender and marital status. `address`,
+`emergency_contact`, `eligibility`, `direct_deposits`, `federal_tax` and
+`state_tax` are the same class of thing.
+
+None are in `EMPLOYEE_EMBED` and none should be. This dashboard shows who is on
+shift and what a store costs; no screen in it is improved by an SSN, and data
+never fetched cannot be leaked, logged or cached. If a feature ever seems to
+need one, that is a conversation, not a string to extend.
+
 ### What it returns, measured — not what the docs describe
 
 Run against the live HRG account on **2026-09-04**, with a dashboard access
@@ -33,39 +62,51 @@ start_date, applied_date, hired_date, onboard_date,
 status, termination_date, termination_note
 ```
 
-**No location. No department. No job title. No pay rate.**
+…**and with `embed=(…)` it also carries `job_assignments`, `company`,
+`location` and `department`** — which is the position, the pay and the store.
 
-The docs put those on the profile as nested objects — `job_assignments` with
-`earning_rates`, `company`, `location`, `department`, and on v1
-`compensation`, `employment_details` and `work_location`. They are on the
-employee profile in the Workstream UI, too. They do not come back here. What
-was tried, all returning the same twelve flat fields:
+Measured across the whole company:
 
-- `embed` on the **list** endpoint, as a comma list, as repeated params, as
-  `include`, as `expand` (`embed[]` 400s)
-- `embed` on the **single-employee** endpoint, `/v2/employees/{uuid}` — every
-  documented v2 embed together, and `job_assignments` alone
-- the whole of **v1**, `/employees` and `/employees/{uuid}`, with
-  `compensation,employment_details,work_location,position,location,department`
-- `/team_members` and `/team_members/{uuid}`, same embeds
-- `custom_fields` (empty) and `custom_field_values`
-- the sub-resources `/v2/employees/{uuid}/job_assignments` and
-  `.../earning_rates` — both 404
+- **868 of 1,224** employees carry a job assignment; the rest are offboarded or
+  still onboarding
+- **871** assignments carry an hourly rate
+- job titles are exactly the operating vocabulary: Crew 550, Cook 101,
+  Cashier 98, Shift Lead 56, Director 36, Crew Trainer 18, General Manager 17,
+  AGM 12, District Manager 6, Director of Operations 2
+- every assignment carries a `location_id` that joins straight to
+  `BONUS_STORES.workstreamLocationUuid`, and the per-store counts are sensible:
+  College 94, Chesapeake 90, Hampton 83, Columbia 78 … Brentwood 37,
+  Portland 24
+- a full paged fetch with these embeds takes **about 35 seconds**, which is why
+  `workstreamRoster.ts` caches it for an hour instead of reading per request
 
-And there is no route from a location to its people: `location_uuid`,
-`location` and `location_uuids[]` leave the total count at 1,222, and
-`/locations/{uuid}/employees` is a 404.
+There is still no route *from* a location to its people — `location_uuid`,
+`location` and `location_uuids[]` are ignored as filters, and
+`/locations/{uuid}/employees` 404s — but that no longer matters, because the
+location arrives on each employee's assignment and grouping happens here.
 
-**It is not a permissions problem.** Removing the positions scope from the
-token made `/positions` and `/position_applications` return `403 Forbiden`
-immediately, with the same token. So this API refuses loudly when a scope is
-missing — it does not silently drop fields. Whatever is withholding the
-profile data is not the scope list.
+Note the filters do work: `status=active` → 450, `status=offboarded` → 731,
+`hired_date.gte=2026-01-01` → 227, and an invented parameter → 1,224. And a
+missing scope is a loud `403`, not silently dropped data — removing the
+positions scope made `/positions` fail immediately. Both facts are what made
+the ignored `embed` so misleading: everything else in this API fails honestly.
 
-The filters do work, which is how we know the ignored ones are genuinely
-ignored: `status=active` → 451, `status=offboarded` → 730,
-`hired_date.gte=2026-01-01` → 227, `termination_date.gte=2026-01-01` → 609, and
-an invented parameter → 1,222.
+### Rates are concurrent, not historical
+
+An assignment carries several `earning_rates` at once, one per earning type —
+a Cashier has `hourly` 13.50 **and** `overtime` 20.25, plus `pto`, `sick` and
+`paid_holiday` rows. Across the company: hourly 932, overtime 840, pto 39,
+paid_holiday 38, salaried 32, sick 31, and a few
+rest_and_recovery / non_productive / double_overtime.
+
+So "their pay rate" means the row whose `earning_type` is `hourly`. Summing or
+averaging these invents a number nobody is paid. `period` is `hourly` or
+`annually` — not `hour`/`year` as the docs imply, which is a real trap because
+the wrong spelling silently matches nothing.
+
+`effective_date` is **null on every row**, so rate history is not
+reconstructable from `earning_rates`. `latest_earning_snapshot` holds dated
+periods if that is ever needed.
 
 ### How much of it is actually filled in
 
@@ -120,19 +161,19 @@ schema, and `/team_members` — the endpoint whose name matches
 `manage_payroll_team_members` — returns only its identity subset: name, status,
 start date.
 
-**So the data is there, and the public API on this tier doesn't project it.**
+**And the API does project it** — through `embed=(job_assignments,…)`, which is
+why the assignment carries `location_id`, `title` and `earning_rates` while the
+bare employee record carries none of them.
 
-### The other way in: Custom Reports / Data Export
+### Not needed: Custom Reports / Data Export
 
 The same permission list carries `edit_custom_reports`,
-`edit_data_export_report` and `edit_data_export_template`. Workstream has a
-reporting and export feature, and a report can name columns the API won't.
+`edit_data_export_report` and `edit_data_export_template`, so Workstream also
+has a reporting and export feature. It was the fallback plan while the embeds
+looked dead, and it is not needed now — an export somebody schedules is a
+worse dependency than an API call, and this one works.
 
-That is likely the faster route to position and rate per person than waiting on
-an API change, and it is worth asking about in the same breath. What to check:
-whether a custom report can include employee, location, job title and rate; and
-whether it can be scheduled to somewhere this app can collect it, rather than
-being a manual download somebody remembers to do.
+Worth remembering only if a future need lands outside what the API exposes.
 
 Also worth knowing before anyone re-plans hours: `manage_schedules` and
 `manage_attendance` mean Workstream may hold schedules and clock data too. The
@@ -151,27 +192,15 @@ before anyone reaches for v1 to fill a gap in v2.
 
 ### So the shape of what's possible is
 
-**Answerable:** company-wide headcount, hires and terminations across any date
-window — retention and turnover, which is what the bonus scorecard wanted.
+**Answerable:** headcount, hires and terminations over any date window, **per
+store**; each person's job title and rate of record; the whole retention and
+turnover question the bonus scorecard wanted.
 
-**Not answerable:** anything per store, anyone's position, anyone's pay rate.
+**Not answerable:** hours, timesheets, paychecks, gross or net pay. Those are
+payroll runs and the public API has none. PAR remains the clock.
 
-That last line is the one that hurts. Per-store retention is a per-store bonus
-gate, and Workstream will not say which store anyone works at.
-
-Whether this is the whole API or only this account is **not established**. The
-fields exist in the product — they are on the profile screen — so the question
-for Workstream support is specific:
-
-> Our `GET /v2/employees` and `GET /v2/employees/{uuid}` return only names,
-> status and dates. The documented `embed` values — `job_assignments`,
-> `earning_rates`, `company`, `location`, `department` — are accepted and
-> ignored, on both the list and the single-employee endpoint, and on v1 with
-> `compensation` / `employment_details` / `work_location`. A missing scope
-> gives us a clean 403, so this is not a permissions error we can see. What
-> enables those nested objects on our account?
-
-Re-run the discovery script after any answer before concluding anything.
+No support ticket is needed. The data was there the whole time, behind a pair
+of parentheses.
 
 The tax and bank embeds are PII and rate-limited harder than anything else.
 Nothing in the codebase requests them.
@@ -197,9 +226,10 @@ plus a second signal: Workstream carries a `- Corporate` twin of every location,
 and **no user administers any twin** (0 users, against 3–8 for each operating
 restaurant). The plain names are the restaurants.
 
-**As of the 2026-09-04 measurement these uuids have nothing to do**, because
-employees carry no location. They are recorded because they cost nothing and are
-the first thing needed if the association appears.
+These uuids are load-bearing: every job assignment carries a `location_id` that
+is one of them, so this table is what turns a Workstream roster into a per-store
+one. The counts come out sensibly — College 94, Chesapeake 90, Hampton 83,
+Columbia 78, down to Brentwood 37 and Portland 24.
 
 ### Portland, and the count of restaurants
 
@@ -283,17 +313,15 @@ link raises six months later is "who said these were the same person?".
 
 ### What the measurement did to the join
 
-The queue and its rules are unchanged and still correct — but with no title and
-no rate coming back, the only thing Workstream currently contributes to a linked
-person is their **full name**, and the only corroboration a reviewer gets is
-what PAR already knew. Two consequences:
+The queue and its rules are unchanged, and the evidence a reviewer sees is now
+real: each candidate carries a job title and an hourly rate of record, and the
+rate comparison against what PAR paid on a recent shift is a genuine signal
+rather than a placeholder.
 
-- The pay-rate evidence in the candidate list is dead weight until rates appear.
-  It is left in place because it costs nothing and is the strongest signal the
-  moment it exists.
-- **65 pairs of people share a first and last name inside Workstream alone**
-  (one name four times over), so those can never auto-link and will always need
-  a human. That is the queue's floor, before PAR's side is even considered.
+One number sets the floor on the work: **65 pairs of people share a first and
+last name inside Workstream alone** (one name four times over). Those can never
+auto-link and will always need a human, before PAR's side is even considered.
+The rate agreement is what will settle most of them quickly.
 
 `preferred_name` turned out to be the one genuinely useful extra field: PAR will
 have someone as "Trey Ellison" where Workstream's legal record says "Robert", so
@@ -323,9 +351,14 @@ The one design decision already made, in `employedOn()`: retention is answered
 as a **date test**, never by reading `status`. `status` is only ever the present
 tense, and "how many people did we have in P3" is a question about the past.
 
-The date filters are live-verified, so the arithmetic is available today —
-**company-wide only**. Per store is impossible until Workstream associates an
-employee with a location, which is the single question to put to their support.
+The date filters are live-verified and each assignment carries its store, so
+**per-store retention is available today** — which is what the bonus gate needs.
+
+The one caveat is coverage: 868 of 1,224 employees carry an assignment, so the
+356 without one have no store. They are overwhelmingly offboarded people, which
+matters precisely because turnover counts leavers. Whoever writes the metric has
+to decide what a terminated employee with no surviving assignment belongs to,
+rather than let them fall out of every store's denominator unnoticed.
 
 Still to design:
 
@@ -337,8 +370,11 @@ Still to design:
 - a daily cron, a seventh entry in `vercel.json`, gated on `CRON_SECRET` like the
   other six
 
-A company-wide turnover number is worth having on its own, but it cannot gate a
-per-store bonus. Worth deciding deliberately rather than by default.
+And a decision to make deliberately rather than by default: whether turnover
+counts against the store on the assignment at the time of leaving, or the store
+someone spent most of their tenure at. Workstream keeps one current assignment
+per person, not a posting history, so a transfer in month eleven currently lands
+the whole departure on the receiving store.
 
 ## Prerequisites
 

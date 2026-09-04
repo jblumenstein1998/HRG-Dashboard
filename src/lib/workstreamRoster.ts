@@ -28,10 +28,12 @@ import { BONUS_STORES, storeById } from "./bonus/storeMap";
 import { dateRange, getEmployees, getJobs, getShifts } from "./par";
 import {
   EMPLOYEE_EMBED,
+  employeeLocationId,
   employeeName,
   hourlyRate,
+  jobTitle,
   listEmployees,
-  primaryAssignment,
+  overtimeRate,
   type WsEmployee,
 } from "./workstream";
 import {
@@ -70,7 +72,9 @@ const workstreamByLocation = unstable_cache(
     const all = await listEmployees({ embed: EMPLOYEE_EMBED });
     const out: Record<string, WsEmployee[]> = {};
     for (const e of all) {
-      const uuid = e.location?.uuid;
+      // The location on the job assignment, not the employee's own — the latter
+      // is routinely null even when embedded. See employeeLocationId.
+      const uuid = employeeLocationId(e);
       if (!uuid) continue;
       (out[uuid] ??= []).push(e);
     }
@@ -243,6 +247,8 @@ export type LinkedPerson = {
   name: string | null;
   title: string | null;
   hourlyRate: number | null;
+  /** What payroll pays for overtime, where Workstream states it. */
+  overtimeRate: number | null;
   hiredDate: string | null;
   terminationDate: string | null;
   linkedBy: "auto" | "confirmed";
@@ -281,8 +287,9 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
       parEmployeeId: p.parEmployeeId,
       workstreamUuid: e.uuid,
       name: employeeName(e),
-      title: primaryAssignment(e)?.title ?? null,
+      title: jobTitle(e),
       hourlyRate: hourlyRate(e),
+      overtimeRate: overtimeRate(e),
       hiredDate: e.hired_date ?? e.start_date ?? null,
       terminationDate: e.termination_date ?? null,
       linkedBy: p.state,

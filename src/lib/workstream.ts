@@ -6,49 +6,48 @@
  * *earning rate*. It is the only system that knows a person's hire date and
  * termination date, which makes it the only possible source for retention.
  *
- * ── What this API is not ─────────────────────────────────────────────────────
+ * ── The embed syntax, which is the whole ballgame ────────────────────────────
  *
- * Workstream sells itself as payroll, but the public API exposes **no payroll
- * runs** — no paychecks, no gross or net pay, no hours, no timesheets, no pay
- * period register. Hours are PAR's, and lib/staffing.ts already computes them.
+ * Embedded resources must be wrapped in **parentheses**:
  *
- * More than that, and worse: measured against the live HRG account on
- * 2026-09-04 with a dashboard access token, `/v2/employees` returns **only**
+ *     ?embed=(job_assignments,company,location,department)
  *
- *   uuid, first_name, middle_initial, last_name, preferred_name,
- *   start_date, applied_date, hired_date, onboard_date,
- *   status, termination_date, termination_note
+ * Without them the parameter is accepted and silently ignored, and the employee
+ * comes back as twelve flat fields — no location, no title, no pay. That looks
+ * exactly like an API that does not have the data, and it cost a day of
+ * concluding so. A bare comma list, repeated `embed` params, `include` and
+ * `expand` all fail the same quiet way; `embed[]` is at least an honest 400.
  *
- * and nothing else. No location. No department. No job assignment, so no job
- * title. No earning rate, so no pay rate. The `embed` parameter documented for
- * this endpoint is accepted and silently ignored, in every syntax tried
- * (comma list, repeated params, `include`, `expand`); `embed[]` is a 400. There
- * are no `/v2/employees/{uuid}/job_assignments` or `.../earning_rates`
- * sub-resources — both 404 — and no route from a location to its people:
- * `location_uuid`, `location` and `location_uuids[]` are all ignored (the total
- * count does not move), and `/locations/{uuid}/employees` is a 404.
- * `/team_members` is the same record under another name.
+ * With the parentheses the account returns everything documented: the job
+ * assignment with its title and location, and the earning rates behind it.
  *
- * The filters, by contrast, do work — `status`, `hired_date.gte` and
- * `termination_date.gte` each move the count, while an invented parameter does
- * not. So the shape of what is available is precise:
+ * ── Never ask for `information` ───────────────────────────────────────────────
  *
- *   answerable    company-wide headcount, hires and terminations over any date
- *                 window — i.e. retention and turnover
- *   unanswerable  anything per store, anyone's position, anyone's pay rate
+ * The `information` embed returns **social security numbers in plaintext**,
+ * along with date of birth, ethnicity, gender and marital status. `address`,
+ * `emergency_contact`, `eligibility`, `direct_deposits`, `federal_tax` and
+ * `state_tax` are the same class of thing.
  *
- * Whether that is the whole API or only this account is not established. The
- * documented fields may sit behind a module HRG does not have, or behind the
- * OAuth-app credentials rather than a hand-minted dashboard token. So the types
- * below still describe the documented shape and the helpers that read it are
- * left in place: they return null today and start returning answers the moment
- * the fields appear, rather than needing to be written again. Re-run
- * scripts/workstream-discover.mjs after any credential change.
+ * None of them appear in EMPLOYEE_EMBED and none should. This dashboard shows
+ * who is on shift and what a store costs; there is no screen in it that an SSN
+ * belongs on, and data you never fetch is data you cannot leak, log or cache.
+ * If a future feature seems to need one of these, that is a conversation to
+ * have out loud, not a string to extend.
  *
- * The direct_deposits, federal_tax and state_tax embeds are personally
- * identifying and rate limited harder than everything else. Nothing in this
- * module requests them, and nothing should without a reason that survives being
- * written down.
+ * ── What is genuinely not here ───────────────────────────────────────────────
+ *
+ * No payroll runs — no paychecks, no gross or net pay, no hours, no timesheets,
+ * no pay period register. Hours are PAR's, and lib/staffing.ts computes them.
+ * So Workstream gives the rate of record and the job title; PAR gives the clock
+ * and what each shift was actually costed at, and where the two rates disagree
+ * somebody wants to know.
+ *
+ * Measured against the live account on 2026-09-04: 1,224 employees, 868 with a
+ * job assignment, 896 assignments carrying a location id. Titles are Crew,
+ * Cook, Cashier, Shift Lead, Crew Trainer, Director, AGM, General Manager,
+ * District Manager and Director of Operations. A full paged fetch with these
+ * embeds takes about 35 seconds, which is why workstreamRoster.ts caches it for
+ * an hour rather than reading it per request.
  *
  * ── Authentication ───────────────────────────────────────────────────────────
  *
@@ -340,32 +339,78 @@ export async function wsPaged<T>(path: string, query: WsQuery = {}): Promise<T[]
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/** A pay rate of record. `amount` is a string in the API; parse at the edge. */
+/**
+ * One rate of record. A person has several at once — not a history.
+ *
+ * A Cashier comes back with `hourly` 13.50 *and* `overtime` 20.25, plus rows
+ * for `pto`, `sick`, `paid_holiday` at their own amounts. So "their pay rate"
+ * means the row whose `earning_type` is `hourly`, and summing or averaging
+ * these would invent a number nobody is paid. Seen in the wild: hourly,
+ * overtime, double_overtime, pto, sick, paid_holiday, salaried,
+ * rest_and_recovery, non_productive.
+ *
+ * `amount` is a number here, unlike most money in this API. `period` is
+ * "hourly" or "annually" — not "hour"/"year" as the docs imply.
+ *
+ * `effective_date` is null on every row on this account, so rate history is
+ * *not* reconstructable from these; `latest_earning_snapshot` is where dated
+ * periods live if that is ever needed.
+ */
 export type WsEarningRate = {
   id: string;
   name: string | null;
-  /** e.g. "hourly", "salary". */
   earning_type: string | null;
-  amount: string | number | null;
-  /** e.g. "hour", "year". */
+  amount: number | string | null;
+  /** "hourly" | "annually". */
   period: string | null;
   status: string | null;
+  /** Payroll's own code, e.g. "hourly", "overtime". */
+  external_earning_code_id: string | null;
   effective_date: string | null;
 };
 
+/** A dated snapshot of what someone earned. Not read today; see WsEarningRate. */
+export type WsEarningSnapshot = {
+  id: string;
+  version: number | null;
+  created_at: string | null;
+  periods: {
+    id: string;
+    start_date: string | null;
+    end_date: string | null;
+    earning_rates_data: WsEarningRate[] | null;
+  }[] | null;
+};
+
+/**
+ * A job at a location, with the pay behind it. The thing this whole module is
+ * for.
+ *
+ * `location_id` is a Workstream location uuid and joins straight to
+ * BONUS_STORES.workstreamLocationUuid — which is what makes per-store possible.
+ * `working_location.core_location_id` says the same thing and is used as a
+ * fallback.
+ *
+ * `primary` and `status` disagree more often than you would like: people carry
+ * inactive assignments from a previous store or role. See primaryAssignment.
+ */
 export type WsJobAssignment = {
   id: string;
   job_id: string | null;
-  /** Exactly one assignment per employee is the primary one. */
   primary: boolean;
+  /** "active" | "inactive". */
   status: string | null;
-  /** The position name a manager would recognise, e.g. "Cook", "Shift Leader". */
+  /** "Crew", "Cook", "Cashier", "Shift Lead", "General Manager"… */
   title: string | null;
   location_id: string | null;
   department_id: string | null;
   managerial: boolean | null;
   soc_code: string | null;
+  created_at: string | null;
+  working_location: { id: string; core_location_id: string | null } | null;
+  manage_locations: unknown[] | null;
   earning_rates: WsEarningRate[] | null;
+  latest_earning_snapshot: WsEarningSnapshot | null;
 };
 
 export type WsNamedRef = { uuid: string; name: string | null };
@@ -396,10 +441,11 @@ export type WsEmployee = {
   termination_date: string | null;
   termination_note: string | null;
   /**
-   * Documented, and not returned on the HRG account by any means found — see
-   * the header. Optional rather than deleted so that `primaryAssignment` and
-   * `hourlyRate` keep compiling and start working the day the fields appear.
+   * All present only when asked for with EMPLOYEE_EMBED — and the top-level
+   * `location` is frequently null even then, because the location that matters
+   * is the one on the job assignment. Read it through employeeLocationId().
    */
+  company?: WsNamedRef | null;
   location?: WsNamedRef | null;
   department?: WsNamedRef | null;
   job_assignments?: WsJobAssignment[] | null;
@@ -476,16 +522,16 @@ export type WsApplicant = {
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /**
- * The embeds the docs say carry the title, the rate and the store.
+ * Everything this app needs and nothing it doesn't.
  *
- * Sent, and ignored — see the header. Kept because sending it costs nothing and
- * the day it starts working is the day everything downstream starts working
- * too, whereas a caller that had stopped asking would look like it had never
- * wanted the data.
+ * The parentheses are required — without them the parameter is ignored and the
+ * nested objects silently vanish. See the header.
  *
- * The tax and bank embeds are deliberately absent.
+ * `information`, `address`, `emergency_contact`, `eligibility`,
+ * `direct_deposits`, `federal_tax` and `state_tax` are deliberately absent.
+ * The first of those returns plaintext SSNs.
  */
-export const EMPLOYEE_EMBED = "job_assignments,location,department";
+export const EMPLOYEE_EMBED = "(job_assignments,company,location,department)";
 
 export type ListEmployeesOptions = {
   /** Any of "hired", "onboarding", "active", "offboarded". Omit for all. */
@@ -604,10 +650,31 @@ export function preferredName(e: WsEmployee): string | null {
  */
 export function primaryAssignment(e: WsEmployee): WsJobAssignment | null {
   const all = e.job_assignments ?? [];
-  return all.find((a) => a.primary)
+  // Active beats primary, because a stale assignment is often still flagged
+  // primary after someone moves store or role — and the live one is the one a
+  // staffing screen is asking about.
+  return all.find((a) => a.primary && a.status === "active")
     ?? all.find((a) => a.status === "active")
+    ?? all.find((a) => a.primary)
     ?? all[0]
     ?? null;
+}
+
+/**
+ * Which store someone works at, as a Workstream location uuid.
+ *
+ * Taken from the job assignment rather than the employee's top-level
+ * `location`, which is frequently null even when embedded. Join it to
+ * BONUS_STORES.workstreamLocationUuid.
+ */
+export function employeeLocationId(e: WsEmployee): string | null {
+  const a = primaryAssignment(e);
+  return a?.location_id ?? a?.working_location?.core_location_id ?? e.location?.uuid ?? null;
+}
+
+/** The job title of record, e.g. "Shift Lead". */
+export function jobTitle(e: WsEmployee): string | null {
+  return primaryAssignment(e)?.title ?? null;
 }
 
 /**
@@ -623,18 +690,47 @@ export function primaryAssignment(e: WsEmployee): WsJobAssignment | null {
  * `asOf` wins, which is what makes rate history reconstructable.
  */
 export function hourlyRate(e: WsEmployee, asOf?: string): number | null {
+  return rateOfType(e, "hourly", asOf);
+}
+
+/**
+ * What overtime is paid at, where Workstream states it.
+ *
+ * Worth reading rather than deriving: staffing.ts multiplies the base rate by a
+ * constant to cost overtime, and this is the number payroll will actually use.
+ */
+export function overtimeRate(e: WsEmployee, asOf?: string): number | null {
+  return rateOfType(e, "overtime", asOf);
+}
+
+/** Annual salary, for the people `hourlyRate` correctly refuses to answer for. */
+export function annualSalary(e: WsEmployee, asOf?: string): number | null {
+  return rateOfType(e, "salaried", asOf);
+}
+
+/**
+ * One earning type's amount off the primary assignment.
+ *
+ * A person holds several rates at once — hourly, overtime, pto, sick, holiday —
+ * so the type has to be named. Inactive rates are ignored, and where a rate
+ * carries an `effective_date` the latest one on or before `asOf` wins. On this
+ * account every effective_date is null, so that ordering is inert today and
+ * correct the day it isn't.
+ */
+function rateOfType(e: WsEmployee, earningType: string, asOf?: string): number | null {
   const rates = primaryAssignment(e)?.earning_rates ?? [];
   const cutoff = asOf ?? "9999-12-31";
 
-  const hourly = rates
-    .filter((r) => (r.period ?? "").toLowerCase() === "hour" || (r.earning_type ?? "").toLowerCase() === "hourly")
+  const matching = rates
+    .filter((r) => (r.earning_type ?? "").toLowerCase() === earningType)
+    .filter((r) => (r.status ?? "active").toLowerCase() === "active")
     .filter((r) => !r.effective_date || r.effective_date <= cutoff)
     .sort((a, b) => (a.effective_date ?? "").localeCompare(b.effective_date ?? ""));
 
-  const latest = hourly[hourly.length - 1];
+  const latest = matching[matching.length - 1];
   if (!latest) return null;
   const amount = typeof latest.amount === "number" ? latest.amount : Number.parseFloat(latest.amount ?? "");
-  return Number.isFinite(amount) ? amount : null;
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 /**
