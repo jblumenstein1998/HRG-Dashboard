@@ -296,6 +296,10 @@ export type EmployeeWeekHours = {
   job: string | null;
   regularMinutes: number;
   overtimeMinutes: number;
+  regularCost: number;
+  overtimeCost: number;
+  /** Minutes worked at a rate PAR reports as 0, i.e. salaried. Costed at nothing. */
+  unratedMinutes: number;
   shifts: number;
 };
 
@@ -304,6 +308,10 @@ export type StoreWeekHours = {
   weekEnd: string;
   regularMinutes: number;
   overtimeMinutes: number;
+  regularCost: number;
+  overtimeCost: number;
+  /** Minutes in the week worked by someone with no hourly rate on file. */
+  unratedMinutes: number;
   people: EmployeeWeekHours[];
 };
 
@@ -320,6 +328,17 @@ export type HoursReport = {
   stores: StoreHours[];
   fetchedAt: number;
 };
+
+/**
+ * What an overtime hour costs, as a multiple of the base rate.
+ *
+ * PAR records the hours as regular and overtime but not what it pays for them,
+ * so this is the one number here that is neither read from a vendor nor
+ * measured: the FLSA time-and-a-half, applied to the rate on the shift. It is
+ * stated on the screen for that reason. Anywhere your payroll differs — a
+ * double-time rule, a shift differential — the overtime column will be low.
+ */
+const OVERTIME_MULTIPLIER = 1.5;
 
 /** The Monday on or before a date. */
 function mondayOf(iso: string): string {
@@ -372,11 +391,26 @@ export async function getStoreHours(today: string, weekCount: number): Promise<H
             const byEmployee = new Map<string, EmployeeWeekHours>();
             let regularMinutes = 0;
             let overtimeMinutes = 0;
+            let regularCost = 0;
+            let overtimeCost = 0;
+            let unratedMinutes = 0;
 
             for (const day of days) {
               for (const sh of day) {
+                // Each shift is costed at its own recorded rate rather than at a
+                // person's current one: a raise mid-window should not silently
+                // reprice the weeks before it.
+                const rate = sh.payRate ?? 0;
+                const shiftRegularCost = (sh.regularMinutes / 60) * rate;
+                const shiftOvertimeCost = (sh.overtimeMinutes / 60) * rate * OVERTIME_MULTIPLIER;
+                const shiftUnrated = rate > 0 ? 0 : sh.regularMinutes + sh.overtimeMinutes;
+
                 regularMinutes += sh.regularMinutes;
                 overtimeMinutes += sh.overtimeMinutes;
+                regularCost += shiftRegularCost;
+                overtimeCost += shiftOvertimeCost;
+                unratedMinutes += shiftUnrated;
+
                 if (!sh.employeeId) continue;
                 const row = byEmployee.get(sh.employeeId) ?? {
                   employeeId: sh.employeeId,
@@ -384,10 +418,16 @@ export async function getStoreHours(today: string, weekCount: number): Promise<H
                   job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
                   regularMinutes: 0,
                   overtimeMinutes: 0,
+                  regularCost: 0,
+                  overtimeCost: 0,
+                  unratedMinutes: 0,
                   shifts: 0,
                 };
                 row.regularMinutes += sh.regularMinutes;
                 row.overtimeMinutes += sh.overtimeMinutes;
+                row.regularCost += shiftRegularCost;
+                row.overtimeCost += shiftOvertimeCost;
+                row.unratedMinutes += shiftUnrated;
                 row.shifts += 1;
                 byEmployee.set(sh.employeeId, row);
               }
@@ -402,7 +442,16 @@ export async function getStoreHours(today: string, weekCount: number): Promise<H
                 a.name.localeCompare(b.name),
             );
 
-            return { weekStart: w.start, weekEnd: w.end, regularMinutes, overtimeMinutes, people };
+            return {
+              weekStart: w.start,
+              weekEnd: w.end,
+              regularMinutes,
+              overtimeMinutes,
+              regularCost: Math.round(regularCost * 100) / 100,
+              overtimeCost: Math.round(overtimeCost * 100) / 100,
+              unratedMinutes,
+              people,
+            };
           }),
         );
 

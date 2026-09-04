@@ -20,8 +20,17 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
 import type { StaffingReport, StoreRoster, HoursReport, StoreHours } from "@/lib/staffing";
 
+/** Hours, #,##0.0 — the one format used everywhere on this screen. */
 function hrs(minutes: number): string {
-  return `${(minutes / 60).toFixed(2)}h`;
+  return `${(minutes / 60).toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}h`;
+}
+
+/** Whole dollars. Cents on a wage bill are noise at this scale. */
+function usd(amount: number): string {
+  return `${Math.round(amount).toLocaleString("en-US")}`;
 }
 
 /** A value for <input type="datetime-local">, in the browser's own zone. */
@@ -231,7 +240,9 @@ function HoursSection() {
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-900">Hours by week</span>
-        <span className="text-xs text-gray-400">regular / overtime, complete weeks only</span>
+        <span className="text-xs text-gray-400">
+          regular over overtime · complete weeks only · overtime costed at 1.5× the shift rate
+        </span>
         <select
           value={weeks}
           onChange={(e) => { setWeeks(Number(e.target.value)); setExpanded(null); }}
@@ -304,12 +315,13 @@ function StoreHoursRows({
           {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
         </td>
         {store.weeks.map((w) => (
-          <td key={w.weekStart} className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
-            <span className="text-gray-700">{(w.regularMinutes / 60).toFixed(1)}</span>
-            <span className="text-gray-300"> / </span>
-            <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-400"}>
-              {(w.overtimeMinutes / 60).toFixed(1)}
-            </span>
+          <td key={w.weekStart} className="px-3 py-1 text-right tabular-nums whitespace-nowrap">
+            <div className="text-gray-700">
+              {hrs(w.regularMinutes)} <span className="text-gray-400">{usd(w.regularCost)}</span>
+            </div>
+            <div className={w.overtimeMinutes > 0 ? "text-amber-700" : "text-gray-300"}>
+              {hrs(w.overtimeMinutes)} <span className={w.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>{usd(w.overtimeCost)}</span>
+            </div>
           </td>
         ))}
       </tr>
@@ -343,11 +355,12 @@ function StoreHoursRows({
                         if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-gray-300">—</td>;
                         return (
                           <td key={w.weekStart} className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
-                            <span className="text-gray-600">{(row.regularMinutes / 60).toFixed(1)}</span>
-                            <span className="text-gray-300"> / </span>
-                            <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
-                              {(row.overtimeMinutes / 60).toFixed(1)}
-                            </span>
+                            <div className="text-gray-600">
+                              {hrs(row.regularMinutes)} <span className="text-gray-400">{usd(row.regularCost)}</span>
+                            </div>
+                            <div className={row.overtimeMinutes > 0 ? "text-amber-700" : "text-gray-300"}>
+                              {hrs(row.overtimeMinutes)} <span className={row.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>{usd(row.overtimeCost)}</span>
+                            </div>
                           </td>
                         );
                       })}
