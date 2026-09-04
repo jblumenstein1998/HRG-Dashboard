@@ -67,6 +67,51 @@ ignored: `status=active` → 451, `status=offboarded` → 730,
 `hired_date.gte=2026-01-01` → 227, `termination_date.gte=2026-01-01` → 609, and
 an invented parameter → 1,222.
 
+### How much of it is actually filled in
+
+Measured across all 1,224 employees, because a field that exists and a field
+that is populated are different things:
+
+| field | filled | notes |
+| --- | --- | --- |
+| `uuid`, `first_name`, `last_name`, `hired_date`, `status` | 100% | the spine |
+| `start_date` | 98% | |
+| `onboard_date` | 66% | a timestamp, not a date, unlike its neighbours |
+| `termination_date` | 58% | **see below** |
+| `middle_initial` | 33% | |
+| `applied_date` | 10% | so time-to-hire is not answerable for most people |
+| `preferred_name` | 8% | but decisive when present |
+| `termination_note` | 2% | free text |
+
+Three things in there change how retention has to be written:
+
+**24 people are `offboarded` with no `termination_date`** — 731 offboarded
+against 707 dates. Any turnover count has to decide what to do with them
+explicitly rather than let a date filter drop them silently.
+
+**There are duplicate employee records.** The termination notes say so in as
+many words — "duplicate", "duplicate account", "duplicate profile", "dup",
+"employeed at college duplicate". So headcount from a raw row count is
+overstated by an unknown amount, and the same human can appear twice in the
+review queue.
+
+**`termination_note` is not a reason code.** Of the 30 filled in, some are
+genuinely useful ("left for school", "no call no show", "walked off shift"),
+several are system-generated ("… is rejected by Columbia Zaxby's at hiring
+complete stage"), and several are housekeeping. It cannot separate voluntary
+from involuntary turnover, so it cannot carry a regretted-turnover metric.
+
+### v1 and v2 are different populations
+
+`GET /employees` (v1) returns **248 records with statuses `in_progress` (144),
+`suspended` (91) and `not_started` (13)** — onboarding progress, not employment.
+`GET /v2/employees` returns 1,224 with `active` / `offboarded` / `onboarding` /
+`hired`.
+
+**Zero uuids overlap between them.** They are separate record types with
+separate ids, so the two cannot be joined on anything but a name. Worth knowing
+before anyone reaches for v1 to fill a gap in v2.
+
 ### So the shape of what's possible is
 
 **Answerable:** company-wide headcount, hires and terminations across any date
