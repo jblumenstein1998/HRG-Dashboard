@@ -190,9 +190,13 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
           break windows are PAR&apos;s own. <strong>Elapsed</strong> is time since clocking in and
           includes breaks; <strong>trailing 7d</strong> is PAR&apos;s paid minutes-worked, which
-          excludes them, over the seven business dates before the one shown. Wages sum the hourly rates on the
-          clock; salaried staff carry no rate in PAR and are counted separately rather than
-          added as zero. It is gross pay, not a burdened cost.
+          excludes them, over the seven business dates before the one shown. Wages sum the hourly
+          rates on the clock; salaried staff carry no rate in PAR and are counted separately rather
+          than added as zero. In the weekly table the hours are PAR&apos;s own split of regular and
+          overtime, and the dollars are those hours at the rate recorded on each shift — with
+          overtime at <strong>1.5×</strong>, the one figure on this screen that is assumed rather
+          than read, since PAR records the hours but never what it pays for them. All of it is
+          gross pay, not a burdened cost, and salaried hours cost nothing in it.
         </p>
       </main>
     </div>
