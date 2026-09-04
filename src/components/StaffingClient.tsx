@@ -22,6 +22,86 @@ import type {
   StaffingReport, StoreRoster, HoursReport, StoreHours, OpenCloseReport,
 } from "@/lib/staffing";
 
+/**
+ * Column sorting for the two tables below.
+ *
+ * Null means the order the rows arrived in, which is the estate's own store
+ * order — worth being able to get back to, since it is how everyone reads a
+ * list of these stores. So a third click clears the sort rather than cycling
+ * back to ascending.
+ */
+type SortState = { key: string; dir: "asc" | "desc" } | null;
+
+function useColumnSort(defaultDir: "asc" | "desc" = "desc") {
+  const [sort, setSort] = useState<SortState>(null);
+  const toggle = (key: string) =>
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: defaultDir };
+      if (prev.dir === defaultDir) return { key, dir: defaultDir === "desc" ? "asc" : "desc" };
+      return null;
+    });
+  const arrow = (key: string) => (sort?.key === key ? (sort.dir === "asc" ? "↑" : "↓") : "");
+  function apply<T>(rows: T[], value: (row: T, key: string) => number | string | null): T[] {
+    if (!sort) return rows;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const va = value(a, sort.key);
+      const vb = value(b, sort.key);
+      // A store with nothing in a column sinks to the bottom either way round:
+      // it is not the best or the worst, it simply has no figure.
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === "string" || typeof vb === "string") {
+        return String(va).localeCompare(String(vb)) * dir;
+      }
+      return (va - vb) * dir;
+    });
+  }
+  return { sort, toggle, arrow, apply };
+}
+
+/** A header cell that ranks the table by its column. */
+function SortHeader({
+  label, sortKey, arrow, onClick, align = "right", className = "",
+}: {
+  label: string;
+  sortKey: string;
+  arrow: (key: string) => string;
+  onClick: (key: string) => void;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  const mark = arrow(sortKey);
+  return (
+    <th className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${align === "left" ? "text-left" : "text-right"} ${mark ? "text-gray-600" : "text-gray-400"} ${className}`}>
+      <button
+        type="button"
+        onClick={() => onClick(sortKey)}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition ${align === "right" ? "flex-row-reverse" : ""}`}
+      >
+        {label}
+        <span className="w-2 text-[9px] leading-none">{mark}</span>
+      </button>
+    </th>
+  );
+}
+
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * "Thu 09/03" for a business date.
+ *
+ * Parsed as UTC because a business date is a calendar label rather than an
+ * instant; reading it in the browser's zone shifts it a day for anyone west of
+ * Greenwich, which would put the wrong weekday on every column.
+ */
+function dateHeader(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dow = DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${dow} ${iso.slice(5).replace("-", "/")}`;
+}
+
 /** Hours, #,##0.0 — the one format used everywhere on this screen. */
 function hrs(minutes: number | null | undefined): string {
   if (minutes == null || !Number.isFinite(minutes)) return "—";
@@ -220,6 +300,7 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
  */
 function OpenCloseSection() {
   const [side, setSide] = useState<"open" | "close">("open");
+  const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ loaded: boolean; data: OpenCloseReport | null; error: string | null }>(
     { loaded: false, data: null, error: null },
   );
@@ -273,16 +354,25 @@ function OpenCloseSection() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
-                <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Store</th>
+                <SortHeader label="Store" sortKey="store" align="left" arrow={sorter.arrow} onClick={sorter.toggle} />
                 {data.dates.map((d) => (
-                  <th key={d} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
-                    {d.slice(5).replace("-", "/")}
-                  </th>
+                  <SortHeader
+                    key={d}
+                    label={dateHeader(d)}
+                    sortKey={d}
+                    arrow={sorter.arrow}
+                    onClick={sorter.toggle}
+                  />
                 ))}
               </tr>
             </thead>
             <tbody>
-              {data.stores.map((store) => {
+              {sorter.apply(data.stores, (store, key) => {
+                if (key === "store") return store.storeName;
+                const cells = side === "open" ? store.open : store.close;
+                const cell = cells.find((c) => c.businessDate === key);
+                return cell && cell.people > 0 ? cell.laborMinutes : null;
+              }).map((store) => {
                 const cells = side === "open" ? store.open : store.close;
                 return (
                   <tr key={store.storeId} className="border-b border-gray-50">
@@ -337,6 +427,7 @@ function HoursSection() {
   // "2" / "4" are weeks; "periods" is the last two pay periods.
   const [range, setRange] = useState<"2" | "4" | "periods">("4");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
     { key: "", data: null, error: null },
   );
@@ -386,16 +477,24 @@ regular / overtime · hours then cost · completed spans only
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
-                <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Store</th>
+                <SortHeader label="Store" sortKey="store" align="left" arrow={sorter.arrow} onClick={sorter.toggle} />
                 {data.weeks.map((w) => (
-                  <th key={w.start} className="px-3 py-1.5 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap" title={`${w.start} – ${w.end}`}>
-                    {w.label}
-                  </th>
+                  <SortHeader
+                    key={w.start}
+                    label={w.label.startsWith("P") ? w.label : dateHeader(w.start)}
+                    sortKey={w.start}
+                    arrow={sorter.arrow}
+                    onClick={sorter.toggle}
+                  />
                 ))}
               </tr>
             </thead>
             <tbody>
-              {data.stores.map((store) => (
+              {sorter.apply(data.stores, (store, key) => {
+                if (key === "store") return store.storeName;
+                const week = store.weeks.find((w) => w.weekStart === key);
+                return week ? week.overtimeMinutes : null;
+              }).map((store) => (
                 <StoreHoursRows
                   key={store.storeId}
                   store={store}
