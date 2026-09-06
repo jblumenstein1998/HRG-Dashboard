@@ -33,7 +33,6 @@ import {
   hourlyRate,
   jobTitle,
   listEmployees,
-  overtimeRate,
   type WsEmployee,
 } from "./workstream";
 import {
@@ -247,8 +246,6 @@ export type LinkedPerson = {
   name: string | null;
   title: string | null;
   hourlyRate: number | null;
-  /** What payroll pays for overtime, where Workstream states it. */
-  overtimeRate: number | null;
   hiredDate: string | null;
   terminationDate: string | null;
   linkedBy: "auto" | "confirmed";
@@ -289,7 +286,6 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
       name: employeeName(e),
       title: jobTitle(e),
       hourlyRate: hourlyRate(e),
-      overtimeRate: overtimeRate(e),
       hiredDate: e.hired_date ?? e.start_date ?? null,
       terminationDate: e.termination_date ?? null,
       linkedBy: p.state,

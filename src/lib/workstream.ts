@@ -694,14 +694,15 @@ export function hourlyRate(e: WsEmployee, asOf?: string): number | null {
 }
 
 /**
- * What overtime is paid at, where Workstream states it.
+ * Overtime is deliberately not read.
  *
- * Worth reading rather than deriving: staffing.ts multiplies the base rate by a
- * constant to cost overtime, and this is the number payroll will actually use.
+ * Workstream carries an `overtime` earning rate per assignment, and it is
+ * always 1.5× the hourly one because that is the policy for everybody. Reading
+ * it would add a second source for a number the app already derives from
+ * OVERTIME_MULTIPLIER in lib/staffing.ts, and two sources for one fact is how
+ * they come to disagree. If the policy ever stops being uniform, read the rate
+ * here and delete the constant there — but do one or the other, not both.
  */
-export function overtimeRate(e: WsEmployee, asOf?: string): number | null {
-  return rateOfType(e, "overtime", asOf);
-}
 
 /** Annual salary, for the people `hourlyRate` correctly refuses to answer for. */
 export function annualSalary(e: WsEmployee, asOf?: string): number | null {

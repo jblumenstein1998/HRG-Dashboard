@@ -19,7 +19,7 @@ import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
 import type {
-  StaffingReport, StoreRoster, HoursReport, StoreHours, OpenCloseReport,
+  StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
 } from "@/lib/staffing";
 
 /**
@@ -632,47 +632,69 @@ function StoreHoursRows({
 }
 
 /**
- * Which bucket a job title falls in.
+ * The four tiers, keyed on Workstream's job titles.
  *
- * An explicit list of the titles PAR actually returns, not a pattern match over
- * the names — the last version of this screen inferred front/back of house from
- * the words in a title and was quietly wrong. A title that is not on this list
- * is not guessed at: it appears under "Other" with its real name, so a new or
- * renamed job shows up as something to look at rather than silently joining a
- * group it does not belong to.
+ * These are positions of record, not what someone clocked in as — Workstream is
+ * where a person is hired into a job, and PAR only knows which button they
+ * pressed at the terminal. That is why an earlier version of this map listed
+ * PAR's titles ("SAL Mgr Asst Gen", "Hourly - Assistant Manager") and described
+ * itself as provisional until payroll was integrated. It is integrated; this is
+ * the replacement.
  *
- * Provisional by agreement. Positions get their real definitions when payroll
- * is integrated, and this map goes away.
+ * Cook and Cashier sit in Crew: they are crew-level line positions, and between
+ * them they are about a quarter of everyone active.
+ *
+ * Still an explicit list rather than a pattern match over the words in a title,
+ * for the same reason as before — a title that is not named here appears under
+ * "Other" with its real name, so a new or renamed job is something to look at
+ * rather than something that silently joins the wrong tier. District Manager
+ * and Director of Operations land there on purpose: they are above-store roles
+ * and are not usually on a store's clock.
  */
 const JOB_GROUPS: { key: string; label: string; titles: string[] }[] = [
-  { key: "cooks", label: "Cooks", titles: ["Cook", "Catering Cook"] },
-  { key: "cashiers", label: "Cashiers", titles: ["Cashier"] },
-  {
-    key: "managers",
-    label: "Managers",
-    titles: [
-      "Salary - General Manager",
-      "Salary - Assistant Manager",
-      "Hourly - Assistant Manager",
-      "SAL Mgr Asst Gen",
-      "Shift Leader",
-      "Salary - Catering Manager",
-      "Hourly - Catering Manager",
-      "Above Store",
-    ],
-  },
+  { key: "crew", label: "Crew", titles: ["Crew", "Cook", "Cashier"] },
+  { key: "managers", label: "Managers", titles: ["Crew Trainer", "Shift Lead"] },
+  { key: "directors", label: "Directors", titles: ["Director"] },
+  { key: "leadership", label: "Leadership", titles: ["AGM", "General Manager"] },
 ];
 
 const GROUP_TONE: Record<string, string> = {
-  cooks: "bg-amber-50 border-amber-200",
-  cashiers: "bg-blue-50 border-blue-200",
-  managers: "bg-purple-50 border-purple-200",
+  crew: "bg-blue-50 border-blue-200",
+  managers: "bg-amber-50 border-amber-200",
+  directors: "bg-purple-50 border-purple-200",
+  leadership: "bg-emerald-50 border-emerald-200",
   other: "bg-gray-50 border-gray-200",
 };
 
-function groupOf(job: string | null): string {
-  if (!job) return "other";
-  return JOB_GROUPS.find((g) => g.titles.includes(job))?.key ?? "other";
+/**
+ * The title to group and label by: Workstream's, falling back to PAR's.
+ *
+ * The fallback only fires for someone not yet linked to a Workstream record,
+ * and it will land them in "Other" because PAR's titles are not in the list
+ * above. That is the honest outcome — an unlinked person's position is not
+ * known, and putting them in Crew because PAR said "Cashier" would be a guess
+ * wearing a fact's clothes.
+ */
+function titleOf(p: StaffOnClock): string | null {
+  return p.workstream?.position ?? p.job;
+}
+
+/**
+ * The rate to show: Workstream's rate of record, or PAR's shift rate.
+ *
+ * Null means salaried — Workstream states those annually and PAR records them
+ * as 0, and neither is an hourly number. The card says "salaried" rather than
+ * "$0.00", which is what it used to do and read as free labour.
+ */
+function rateOf(p: StaffOnClock): number | null {
+  const rate = p.workstream?.rateOfRecord ?? p.payRate;
+  return rate === null || rate === 0 ? null : rate;
+}
+
+function groupOf(p: StaffOnClock): string {
+  const title = p.workstream?.position;
+  if (!title) return "other";
+  return JOB_GROUPS.find((g) => g.titles.includes(title))?.key ?? "other";
 }
 
 function StoreCard({ store }: { store: StoreRoster }) {
@@ -680,7 +702,7 @@ function StoreCard({ store }: { store: StoreRoster }) {
 
   const grouped = new Map<string, typeof store.onClock>();
   for (const p of store.onClock) {
-    const key = groupOf(p.job);
+    const key = groupOf(p);
     const list = grouped.get(key) ?? [];
     list.push(p);
     grouped.set(key, list);
@@ -749,32 +771,35 @@ function StoreCard({ store }: { store: StoreRoster }) {
                         {p.onBreak && (
                           <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
                         )}
+                        {/* Workstream's rate of record — what this person is
+                            paid — falling back to the shift's rate when they
+                            are not linked yet. */}
                         <span className="ml-auto text-xs tabular-nums text-gray-600">
-                          {p.payRate === null || p.payRate === 0 ? "salaried" : `$${p.payRate.toFixed(2)}`}
+                          {rateOf(p) === null ? "salaried" : `$${rateOf(p)!.toFixed(2)}`}
                         </span>
                       </div>
-                      {/* The real title, always — the grouping above is provisional and
-                          this is what PAR actually says. */}
-                      <div className="text-[11px] text-gray-500 truncate">{p.job ?? "no position recorded"}</div>
-                      {/* Workstream's half, only where the two records have been
-                          joined. A rate that disagrees with what the shift was
-                          costed at is worth seeing, so it is stated rather than
-                          reconciled. */}
-                      {p.workstream && (
-                        <div className="text-[11px] text-gray-400 truncate">
-                          {p.workstream.position ?? "no position in Workstream"}
-                          {p.workstream.rateOfRecord != null && (
-                            <span className="tabular-nums">
-                              {" · "}${p.workstream.rateOfRecord.toFixed(2)} on file
-                              {p.payRate != null
-                                && p.payRate > 0
-                                && Math.abs(p.payRate - p.workstream.rateOfRecord) > 0.005 && (
-                                  <span className="text-amber-700"> ≠ shift rate</span>
-                                )}
-                            </span>
-                          )}
-                        </div>
+                      <div className="text-[11px] text-gray-500 truncate">
+                        {titleOf(p) ?? "no position recorded"}
+                        {!p.workstream && (
+                          <span className="text-gray-400"> · not linked to Workstream</span>
+                        )}
+                      </div>
+                      {/* The job they clocked in as, when it differs from the job
+                          they hold. A Shift Lead on a Cook shift is a Tuesday,
+                          not an error — but it is worth being able to see. */}
+                      {p.workstream?.position && p.job && p.job !== p.workstream.position && (
+                        <div className="text-[11px] text-gray-400 truncate">clocked in as {p.job}</div>
                       )}
+                      {/* Where the two rates disagree, say so rather than
+                          reconcile them: one of the two records is wrong. */}
+                      {p.workstream?.rateOfRecord != null
+                        && p.payRate != null
+                        && p.payRate > 0
+                        && Math.abs(p.payRate - p.workstream.rateOfRecord) > 0.005 && (
+                          <div className="text-[11px] text-amber-700 tabular-nums truncate">
+                            PAR has ${p.payRate.toFixed(2)} for this shift
+                          </div>
+                        )}
                       <div className="text-[11px] text-gray-500 tabular-nums">
                         {p.startLabel}–{p.endLabel}
                         {p.isOpen && <span className="ml-1 text-green-600">on now</span>}

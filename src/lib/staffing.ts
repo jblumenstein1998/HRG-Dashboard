@@ -110,15 +110,19 @@ export type StoreRoster = {
   localDate: string;
   onClock: StaffOnClock[];
   /**
-   * Sum of the hourly rates on the clock. Salaried people are not in it — PAR
-   * records their rate as 0, and there is no hourly figure to add — so it is
+   * Sum of the hourly rates on the clock, taken from the same source each card
+   * shows: Workstream's rate of record where the person is linked, PAR's shift
+   * rate otherwise.
+   *
+   * Salaried people are not in it — Workstream states their pay annually and
+   * PAR records it as 0, and neither is an hourly figure to add — so it is
    * reported alongside a count of who was left out rather than suppressed. An
    * earlier version blanked the whole store if one salaried manager was on,
    * which hid the real wages of everyone else to avoid implying the manager
    * was free.
    */
   hourlyWageRunRate: number | null;
-  /** People on the clock whose rate PAR reports as 0, i.e. salaried. */
+  /** People on the clock with no hourly rate in either system, i.e. salaried. */
   salariedOnClock: number;
   error: string | null;
 };
@@ -298,7 +302,13 @@ async function rosterForStore(
 
     onClock.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
 
-    const rates = onClock.map((p) => p.payRate).filter((r): r is number => r !== null && r > 0);
+    // Summed from the rate each card actually shows — Workstream's rate of
+    // record where the person is linked, PAR's shift rate otherwise. A run rate
+    // that totalled different numbers than the ones printed above it would be
+    // unarguable-with, which is the opposite of what a figure like this is for.
+    const rates = onClock
+      .map((p) => p.workstream?.rateOfRecord ?? p.payRate)
+      .filter((r): r is number => r !== null && r > 0);
     const hourlyWageRunRate = rates.length
       ? Math.round(rates.reduce((a, b) => a + b, 0) * 100) / 100
       : null;

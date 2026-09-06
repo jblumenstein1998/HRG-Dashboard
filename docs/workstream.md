@@ -341,6 +341,38 @@ If Workstream is unreachable, unconfigured, or the store is unmapped, the lookup
 returns empty and the tab loses two columns rather than failing. The hours were
 never Workstream's to supply.
 
+### The on-clock cards
+
+Position and pay on those cards are **Workstream's**, falling back to PAR only
+for someone not yet linked. The store's hourly run rate sums the same numbers
+the cards print, so the total can be checked against what is on screen.
+
+They group into four tiers by Workstream title:
+
+| tier | titles |
+| --- | --- |
+| Crew | Crew, Cook, Cashier |
+| Managers | Crew Trainer, Shift Lead |
+| Directors | Director |
+| Leadership | AGM, General Manager |
+
+Cook and Cashier are crew-level line positions and about a quarter of everyone
+active, so they sit in Crew. District Manager and Director of Operations are
+deliberately unlisted and fall to "Other" — they are above-store roles and are
+not usually on a store's clock.
+
+Anyone not yet linked also lands in "Other", labelled "not linked to
+Workstream", rather than being placed by PAR's title. PAR says which button
+someone pressed at the terminal; it does not know what job they hold, and
+grouping on it would be a guess wearing a fact's clothes.
+
+**Overtime rates are deliberately not read from Workstream.** Every assignment
+carries one, and it is always 1.5× the hourly rate because that is the policy
+for everyone — so the app keeps deriving it from `OVERTIME_MULTIPLIER` in
+`lib/staffing.ts`. Two sources for one fact is how they come to disagree. If the
+policy ever stops being uniform, read the rate and delete the constant; do one
+or the other, not both.
+
 ## Retention (next, not built)
 
 Workstream is the only system that knows hire and termination dates, so it is
