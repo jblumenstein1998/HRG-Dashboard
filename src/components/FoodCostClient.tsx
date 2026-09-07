@@ -69,15 +69,45 @@ function fmtPct(v: number | null, decimals = 1): string {
  * Rows missing either half are skipped rather than counted as zero, which would
  * quietly drag the blend toward it.
  */
-function weightedPct(entries: { pct: number | null; salesBase: number | null }[]): number | null {
+function weightedPct(entries: { pct: number | null; salesBase: number | null }[]): Blend {
   let weighted = 0;
   let sales = 0;
+  let used = 0;
   for (const e of entries) {
     if (e.pct === null || e.salesBase === null || e.salesBase <= 0) continue;
     weighted += e.pct * e.salesBase;
     sales += e.salesBase;
+    used++;
   }
-  return sales > 0 ? weighted / sales : null;
+  return { pct: sales > 0 ? weighted / sales : null, used, skipped: entries.length - used };
+}
+
+/**
+ * A blended percentage and how much of the table it actually covers.
+ *
+ * The count is carried because a store with no percentage, or none of the
+ * sales behind one, cannot be blended and has to be left out — and a total
+ * that quietly describes eleven of the twelve stores listed above it is worse
+ * than one that admits it. `TotalPct` marks the figure when `skipped` is
+ * non-zero, so the omission is on screen rather than in the arithmetic.
+ */
+type Blend = { pct: number | null; used: number; skipped: number };
+
+/** A blended percentage, marked when it could not cover every row. */
+function TotalPct({ blend, decimals = 1 }: { blend: Blend; decimals?: number }) {
+  return (
+    <>
+      {fmtPct(blend.pct, decimals)}
+      {blend.skipped > 0 && (
+        <span
+          className="ml-0.5 cursor-help text-gray-400"
+          title={`Blended over ${blend.used} of ${blend.used + blend.skipped} locations — the rest have no sales figure to weight by.`}
+        >
+          *
+        </span>
+      )}
+    </>
+  );
 }
 
 function fmtDollars(v: number | null): string {
@@ -306,17 +336,17 @@ function RecentWeeksTable({ allowed, totalLabel }: { allowed: Set<string> | null
             const weekTotals = data.weeks.map((_, j) =>
               weightedPct(shown.map(s => ({ pct: s.values[j], salesBase: s.salesBase?.[j] ?? null }))),
             );
-            const prev = weekTotals[0];
-            const curr = weekTotals[1];
+            const prev = weekTotals[0].pct;
+            const curr = weekTotals[1].pct;
             const wow = prev !== null && curr !== null ? curr - prev : null;
             const absDelta = prev !== null && curr !== null ? Math.abs(curr) - Math.abs(prev) : null;
             return (
               <tr className="border-t-2 border-gray-200 bg-gray-50">
                 <td className="px-3 py-3" />
                 <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
-                {weekTotals.map((v, j) => (
+                {weekTotals.map((b, j) => (
                   <td key={j} className="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">
-                    {fmtPct(v, 2)}
+                    <TotalPct blend={b} decimals={2} />
                   </td>
                 ))}
                 <td
@@ -394,8 +424,10 @@ function YoyMetricTable({
 
   const entry = (r: LocationData | null | undefined) =>
     ({ pct: r?.[pctKey] ?? null, salesBase: r?.salesBase ?? null });
-  const totalCurr = weightedPct(rows.map(entry));
-  const totalPrior = weightedPct(rows.map(r => entry(priorLocMap[r.locationId])));
+  const currBlend = weightedPct(rows.map(entry));
+  const priorBlend = weightedPct(rows.map(r => entry(priorLocMap[r.locationId])));
+  const totalCurr = currBlend.pct;
+  const totalPrior = priorBlend.pct;
   const totalChange = totalCurr !== null && totalPrior !== null ? totalCurr - totalPrior : null;
   const totalAbsDelta =
     totalCurr !== null && totalPrior !== null ? Math.abs(totalCurr) - Math.abs(totalPrior) : null;
@@ -461,10 +493,10 @@ function YoyMetricTable({
               <td className="px-3 py-3" />
               <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
               <td className={`px-4 py-3 text-right tabular-nums font-semibold ${colorFn(totalPrior)}`}>
-                {fmtPct(totalPrior, 2)}
+                <TotalPct blend={priorBlend} decimals={2} />
               </td>
               <td className={`px-4 py-3 text-right tabular-nums font-semibold ${colorFn(totalCurr)}`}>
-                {fmtPct(totalCurr, 2)}
+                <TotalPct blend={currBlend} decimals={2} />
               </td>
               <td
                 className={`px-4 py-3 text-right tabular-nums font-semibold ${
@@ -1004,10 +1036,13 @@ function RankTable({
     if (usable.length === 0) return null;
     const dollars = usable.reduce((sum, r) => sum + (r[dollarsKey] as number), 0);
     const sales = usable.reduce((sum, r) => sum + (salesByName?.[r.locationName] ?? 0), 0);
-    const pct = weightedPct(
-      usable.map(r => ({ pct: r[pctKey] as number | null, salesBase: r.salesBase })),
+    // Blended over every displayed row, not just the ones with dollars: the
+    // sums above cover what they can and the blend reports its own coverage,
+    // rather than the two quietly describing different sets of stores.
+    const blend = weightedPct(
+      rows.map(r => ({ pct: r[pctKey] as number | null, salesBase: r.salesBase })),
     );
-    return { dollars, sales, pct };
+    return { dollars, sales, blend };
   })();
 
   // Null means the order the rows came in with, which is the meaningful default -
@@ -1203,8 +1238,8 @@ function RankTable({
                     <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">
                       {fmtDollars(total.dollars)}
                     </td>
-                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(total.pct)}`}>
-                      {fmtPct(total.pct, pctDecimals)}
+                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(total.blend.pct)}`}>
+                      <TotalPct blend={total.blend} decimals={pctDecimals} />
                     </td>
                   </tr>
                 )}

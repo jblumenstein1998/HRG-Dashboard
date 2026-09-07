@@ -320,13 +320,19 @@ export async function fetchLocationReport(
   // number from the totals instead of returning null: a null base drops the
   // store out of every weighted average downstream, silently and invisibly,
   // which is worse than a figure carrying one rounding step.
+  //
+  // Either pair recovers it, because cost and variance are percentages of the
+  // same sales. Variance is worth trying second rather than not at all: a store
+  // with a variance figure and no cost figure would otherwise be dropped from
+  // the variance blend for want of a denominator it can supply itself.
+  const ratioBase = (dollars: number | null, pct: number | null) =>
+    pct != null && pct !== 0 && dollars != null ? Math.abs(dollars / (pct / 100)) : null;
+
   const rawBase = firstRow?.divisorValue != null ? Number(firstRow.divisorValue) : null;
   const salesBase =
     rawBase != null && rawBase > 0
       ? rawBase
-      : actualCostPct && actualCostDollars != null
-        ? actualCostDollars / (actualCostPct / 100)
-        : null;
+      : ratioBase(actualCostDollars, actualCostPct) ?? ratioBase(varianceDollars, variancePct);
 
   const report: LocationReport = { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
   locationReportCache.set(cKey, { report, fetchedAt: Date.now() });
