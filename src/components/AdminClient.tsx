@@ -491,9 +491,13 @@ function LeaderRow({
     onSave({ id: leader.id, stores });
   }
 
+  // Two columns, not one wrapping row: wrapping let the VA group land at the
+  // container's left edge, starting well to the left of where TN started. The
+  // name is its own fixed column and the two state rows stack in a second one,
+  // so both states begin at the same x.
   return (
-    <div className="px-4 py-3 flex flex-wrap items-start gap-x-5 gap-y-2">
-      <div className="w-56 shrink-0 flex items-center gap-2">
+    <div className="px-4 py-3 flex items-start gap-x-5">
+      <div className="w-72 shrink-0 flex items-center gap-2">
         <input
           value={draft}
           disabled={busy}
@@ -514,28 +518,32 @@ function LeaderRow({
         </button>
       </div>
 
-      {sections.map((section) => (
-        <div key={section} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="text-[11px] uppercase tracking-wide text-gray-400">
-            {section === "Tennessee" ? "TN" : "VA"}
-          </span>
-          {ALL_STORES.filter((s) => s.section === section).map((s) => (
-            <label
-              key={s.label}
-              className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none"
-            >
-              <input
-                type="checkbox"
-                disabled={busy}
-                checked={leader.stores.includes(s.label)}
-                onChange={(e) => toggle(s.label, e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              {s.label}
-            </label>
-          ))}
-        </div>
-      ))}
+      <div className="flex-1 min-w-0 flex flex-col gap-y-2">
+        {sections.map((section) => (
+          <div key={section} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {/* Fixed width so the first checkbox of each state lines up, rather
+                than depending on "TN" and "VA" rendering identically wide. */}
+            <span className="w-6 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">
+              {section === "Tennessee" ? "TN" : "VA"}
+            </span>
+            {ALL_STORES.filter((s) => s.section === section).map((s) => (
+              <label
+                key={s.label}
+                className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none"
+              >
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={leader.stores.includes(s.label)}
+                  onChange={(e) => toggle(s.label, e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                {s.label}
+              </label>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
