@@ -1193,9 +1193,14 @@ function useCategoryMatrix(startDate: string, endDate: string): { data: Category
   return { data, status: !current ? "loading" : data ? "done" : "error" };
 }
 
-function visibleLocations(data: CategoryMatrix, showVA: boolean, showTN: boolean) {
+function visibleLocations(
+  data: CategoryMatrix,
+  showVA: boolean,
+  showTN: boolean,
+  leaderStores: Set<string> | null,
+) {
   const visible = new Set([...(showVA ? VA_STORES : []), ...(showTN ? TN_STORES : [])]);
-  return data.locations.filter(l => visible.has(l.locationName));
+  return data.locations.filter(l => visible.has(l.locationName) && inLeader(leaderStores, l.locationName));
 }
 
 function MetricToggle({ metric, setMetric }: { metric: MatrixMetric; setMetric: (m: MatrixMetric) => void }) {
@@ -1403,11 +1408,13 @@ function CategoryBarChart({
   endDate,
   showVA,
   showTN,
+  leaderStores,
 }: {
   startDate: string;
   endDate: string;
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
 }) {
   const { data, status } = useCategoryMatrix(startDate, endDate);
   const [metric, setMetric] = useState<MatrixMetric>("cogs");
@@ -1450,10 +1457,10 @@ function CategoryBarChart({
     </div>
   );
 
-  const columns = visibleLocations(data, showVA, showTN);
+  const columns = visibleLocations(data, showVA, showTN, leaderStores);
   if (!columns.length) return shell(
     <div className="h-20 flex items-center justify-center">
-      <span className="text-xs text-gray-400">Select VA or TN to show locations</span>
+      <span className="text-xs text-gray-400">No locations match the current filters</span>
     </div>
   );
 
@@ -1790,16 +1797,18 @@ export default function FoodCostClient({
   const vaActual = byActual.filter(l => VA_STORES.includes(l.locationName));
   const tnActual = byActual.filter(l => TN_STORES.includes(l.locationName));
   const cogsRows = byActual.filter(l =>
-    (VA_STORES.includes(l.locationName) && showVA) ||
-    (TN_STORES.includes(l.locationName) && showTN)
+    ((VA_STORES.includes(l.locationName) && showVA) ||
+      (TN_STORES.includes(l.locationName) && showTN)) &&
+    inLeader(leaderStores, l.locationName)
   );
 
   const byVariance = [...allLocations]
     .filter(l => l.variancePct !== null)
     .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
     .filter(l =>
-      (VA_STORES.includes(l.locationName) && showVA) ||
-      (TN_STORES.includes(l.locationName) && showTN)
+      ((VA_STORES.includes(l.locationName) && showVA) ||
+        (TN_STORES.includes(l.locationName) && showTN)) &&
+      inLeader(leaderStores, l.locationName)
     );
 
   const fetchedLabel = reportMeta
@@ -2016,6 +2025,7 @@ export default function FoodCostClient({
               endDate={endDate}
               showVA={showVA}
               showTN={showTN}
+              leaderStores={leaderStores}
             />
           </div>
         )}
