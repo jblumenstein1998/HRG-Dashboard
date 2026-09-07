@@ -8,7 +8,7 @@ import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
-import { groupBranches, getStoreLabel, getStoreSection } from "@/lib/stores";
+import { groupBranches, getStoreLabel, getStoreSection, type StoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { TOTAL_TIME_TIERS, WINDOW_TIME_TIERS, fmtGoalSecs, goalColor, lookupMetric } from "@/lib/salesTierGoals";
 
@@ -423,35 +423,30 @@ export default function DashboardClient({
             )}
 
             {!branchesLoading && visibleBranches.length > 0 && (() => {
-              let gIdx = 0;
+              // The reveal stagger counts across the whole page, not per
+              // section, so each group is told where it starts rather than
+              // sharing a mutable counter through the map.
+              const groups = groupBranches(visibleBranches).filter(g => g.branches.length > 0);
+              let startIndex = 0;
               return (
                 <div className="flex flex-col gap-8">
-                  {groupBranches(visibleBranches).map(({ section, branches: sectionBranches }) =>
-                    sectionBranches.length > 0 ? (
-                      <div key={section}>
-                        <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
-                          {section}
-                        </h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {sectionBranches.map(branch => {
-                            const visible = gIdx++ < revealedCount;
-                            const salesForTier = lookupMetric(branch, getMetrics(branch), salesByStoreId) ?? null;
-                            return (
-                              <LocationCard
-                                key={branch.id}
-                                branch={branch}
-                                metrics={visible ? getMetrics(branch) : null}
-                                loading={!visible}
-                                rangeLabel={rangeLabel}
-                                viewMode={viewMode}
-                                salesForTier={visible ? salesForTier : null}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : null
-                  )}
+                  {groups.map(({ section, branches: sectionBranches }) => {
+                    const from = startIndex;
+                    startIndex += sectionBranches.length;
+                    return (
+                      <SectionGroup
+                        key={section}
+                        section={section}
+                        branches={sectionBranches}
+                        startIndex={from}
+                        revealedCount={revealedCount}
+                        getMetrics={getMetrics}
+                        rangeLabel={rangeLabel}
+                        viewMode={viewMode}
+                        salesByStoreId={salesByStoreId}
+                      />
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -482,6 +477,72 @@ export default function DashboardClient({
 
         <DriveThruTrendCharts branches={visibleBranches} />
       </main>
+    </div>
+  );
+}
+
+/**
+ * One state's worth of cards, under a header that copies them.
+ *
+ * Its own component purely so it can hold a ref: the grid used to be built
+ * inline in a `.map`, and a hook can't be called per iteration. The ref is what
+ * lets the header hand CopyableTitle *this* section's grid rather than the
+ * whole page — clicking "Virginia" copies the Virginia cards and nothing else.
+ *
+ * `startIndex` rather than a shared counter, for the same reason: the reveal
+ * stagger is numbered across the page, so each section has to be told where its
+ * own cards fall in that sequence.
+ */
+function SectionGroup({
+  section,
+  branches,
+  startIndex,
+  revealedCount,
+  getMetrics,
+  rangeLabel,
+  viewMode,
+  salesByStoreId,
+}: {
+  section: StoreSection;
+  branches: BranchStore[];
+  startIndex: number;
+  revealedCount: number;
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+  rangeLabel: string;
+  viewMode: "summary" | "daypart";
+  salesByStoreId: Record<string, number>;
+}) {
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div>
+      {/* Spacing lives on this wrapper, not on the grid: a margin on the copy
+          target itself gets picked up by the raw capture. */}
+      <div className="mb-3">
+        <CopyableTitle
+          title={section}
+          targetRef={gridRef}
+          className="text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-600"
+          heightBufferPx={40}
+        />
+      </div>
+      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {branches.map((branch, i) => {
+          const visible = startIndex + i < revealedCount;
+          const salesForTier = lookupMetric(branch, getMetrics(branch), salesByStoreId) ?? null;
+          return (
+            <LocationCard
+              key={branch.id}
+              branch={branch}
+              metrics={visible ? getMetrics(branch) : null}
+              loading={!visible}
+              rangeLabel={rangeLabel}
+              viewMode={viewMode}
+              salesForTier={visible ? salesForTier : null}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
