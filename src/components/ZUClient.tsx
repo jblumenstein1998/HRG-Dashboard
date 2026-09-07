@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
-import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 
 /**
@@ -383,9 +383,7 @@ export default function ZUClient({
   const [report, setReport] = useState<ZuReport | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [error, setError] = useState<string>("");
-  const [showTN, setShowTN] = useState(true);
-  const [showVA, setShowVA] = useState(true);
-  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
+  const storeFilter = useStoreFilter(leaders);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<Record<string, MemberState>>({});
@@ -517,12 +515,7 @@ export default function ZUClient({
   }, []);
   const allStores = report ? sortStores(report.stores) : [];
   const visible = sortStoresWithinMarkets(
-    allStores.filter((s) => {
-      const market = marketOf(s.label);
-      if (market === "TN" && !showTN) return false;
-      if (market === "VA" && !showVA) return false;
-      return inLeader(leaderStores, s.label);
-    }),
+    allStores.filter((s) => inFilter(storeFilter.allowed, s.label)),
     storeSort,
     storeValue,
   );
@@ -535,25 +528,16 @@ export default function ZUClient({
       ? report.total
       : subtotal(visible)
     : null;
-  const totalsLabel = showingEverything
-    ? "All Stores"
-    : showTN && !showVA
-      ? "Tennessee"
-      : showVA && !showTN
-        ? "Virginia"
-        : "Selected";
+  // Names whatever the one filter selected — "TN", "VA", a leader — so the
+  // subtotal row says what it is adding up.
+  const totalsLabel = showingEverything ? "All Stores" : (storeFilter.label ?? "Selected");
 
   /**
    * The grid answers to the same controls as the table above it, so the two
    * always describe the same set of stores.
    */
   const visibleTestStores = sortStoresWithinMarkets(
-    (tests?.stores ?? []).filter((s) => {
-      const market = marketOf(s.label);
-      if (market === "TN" && !showTN) return false;
-      if (market === "VA" && !showVA) return false;
-      return inLeader(leaderStores, s.label);
-    }),
+    (tests?.stores ?? []).filter((s) => inFilter(storeFilter.allowed, s.label)),
     testSort,
     testStoreValue,
   );
@@ -594,26 +578,7 @@ export default function ZUClient({
 
           <div className="flex flex-wrap items-center justify-end gap-3 flex-1 min-w-0">
 
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showVA}
-                onChange={(e) => setShowVA(e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              VA
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showTN}
-                onChange={(e) => setShowTN(e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              TN
-            </label>
-
-            <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
+            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
 
             <button
               onClick={() => void load(true)}

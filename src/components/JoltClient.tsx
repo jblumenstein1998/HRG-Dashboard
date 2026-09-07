@@ -6,7 +6,7 @@ import TabOptions from "@/components/TabOptions";
 import { useCopyImage } from "@/components/CopyImageButton";
 import { PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import type { Tab } from "@/lib/users/tabs";
-import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 
 // Store order matches lib/stores.ts, so this tab reads in the same sequence as
 // the rest of the dashboard. Jolt runs at seven of the twelve stores; the other
@@ -813,9 +813,7 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
   const [range, setRange] = useState(initial);
   const [quick, setQuick] = useState<string | null>("24h");
 
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
-  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
+  const storeFilter = useStoreFilter(leaders);
 
   const [report, setReport] = useState<StoreListsReport | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -902,21 +900,15 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
   const byStore = useMemo(() => new Map((report?.stores ?? []).map(s => [s.store, s])), [report]);
 
   const visible = useMemo(() => {
-    const names = [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])]
-      .filter(name => inLeader(leaderStores, name));
+    const names = [...TN_STORES, ...VA_STORES].filter(name => inFilter(storeFilter.allowed, name));
     return names.map(store => ({ store, data: byStore.get(store) ?? null }));
-  }, [byStore, showTN, showVA, leaderStores]);
+  }, [byStore, storeFilter.allowed]);
 
   // The To Do band has its own rows, so it filters by name rather than by the
   // report's per-store entries.
   const visibleStores = useMemo(
-    () =>
-      new Set(
-        [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])].filter(name =>
-          inLeader(leaderStores, name),
-        ),
-      ),
-    [showTN, showVA, leaderStores],
+    () => new Set([...TN_STORES, ...VA_STORES].filter(name => inFilter(storeFilter.allowed, name))),
+    [storeFilter.allowed],
   );
 
   // Which store's table is on screen. Held loosely rather than corrected in an
@@ -1079,25 +1071,7 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
               <span className="text-red-600 font-medium">&lt;{COMPLETE_THRESHOLD}%</span>
             </span>
             <div className="ml-auto flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showVA}
-                  onChange={e => setShowVA(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                VA
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showTN}
-                  onChange={e => setShowTN(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                TN
-              </label>
-              <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
+              <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
             </div>
           </div>
         </div>

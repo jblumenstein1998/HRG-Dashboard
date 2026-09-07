@@ -10,7 +10,7 @@ import type { Tab } from "@/lib/users/tabs";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel, getStoreSection, type StoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
-import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import { TOTAL_TIME_TIERS, WINDOW_TIME_TIERS, fmtGoalSecs, goalColor, lookupMetric } from "@/lib/salesTierGoals";
 
 const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
@@ -55,9 +55,7 @@ export default function DashboardClient({
   const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
   const [driveThruLabel, setDriveThruLabel] = useState("");
   const [salesLabel, setSalesLabel] = useState("");
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
-  const { leaderId, setLeaderId, leaderStores, leaderName } = useLeaderFilter(leaders);
+  const storeFilter = useStoreFilter(leaders);
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -130,15 +128,12 @@ export default function DashboardClient({
       .catch(err => console.error("[DriveThru] sales-tier fetch failed", err));
   }, [rangeKey]);
 
-  // The three filters stack rather than override: picking a leader narrows
-  // whatever VA/TN is already showing, the same way ticking a state narrows
-  // whatever the leader left. Both unticked shows nothing, and so does a
-  // TN-only leader with VA alone ticked — in each case the empty state below
-  // names the filters that emptied it.
+  // One filter, so a branch is either in the chosen slice or not. Branches with
+  // no section are still dropped — that predates the filter and means a store
+  // BerryAI returned that lib/stores.ts doesn't know about.
   const visibleBranches = branches.filter(b => {
     const section = getStoreSection(b);
-    const inState = (section === "Virginia" && showVA) || (section === "Tennessee" && showTN);
-    return inState && inLeader(leaderStores, getStoreLabel(b));
+    return section !== null && inFilter(storeFilter.allowed, getStoreLabel(b));
   });
 
   // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
@@ -324,17 +319,7 @@ export default function DashboardClient({
               {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showVA} onChange={e => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-                  VA
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-                  TN
-                </label>
-              </div>
-              <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
+              <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
               <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
                 {(["summary", "daypart"] as const).map((mode) => (
                   <button
@@ -424,16 +409,11 @@ export default function DashboardClient({
             {!branchesLoading && visibleBranches.length === 0 && !error && (
               <div className="text-center py-20 text-gray-400">
                 <p className="text-lg font-medium">No locations found</p>
-                {/* The filters stack, so a leader who covers only TN stores and
-                    a VA-only tick leave nothing on screen. Naming both is the
-                    difference between "nothing to show" and "no data". */}
-                {(leaderStores || !showVA || !showTN) && (
+                {/* Naming the filter is the difference between "nothing to
+                    show for this slice" and "the data failed to load". */}
+                {storeFilter.label && (
                   <p className="text-sm mt-1">
-                    Nothing matches{" "}
-                    {leaderName && <span className="font-medium">{leaderName}</span>}
-                    {leaderStores && (!showVA || !showTN) && " with "}
-                    {(!showVA || !showTN) && (showVA ? "VA only" : showTN ? "TN only" : "no state ticked")}
-                    .
+                    Nothing matches <span className="font-medium">{storeFilter.label}</span>.
                   </p>
                 )}
               </div>

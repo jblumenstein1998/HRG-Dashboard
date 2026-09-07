@@ -7,7 +7,7 @@ import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
-import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
+import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader } from "@/components/StoreFilter";
 import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
@@ -205,9 +205,7 @@ export default function SurveyDataClient({
   const router = useRouter();
 
   const [periodSel, setPeriodSel] = useState<string>("");
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
-  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
+  const storeFilter = useStoreFilter(leaders);
   // Opens on biggest-selling first, the order the table used to build in.
   const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
@@ -365,12 +363,12 @@ export default function SurveyDataClient({
   // else. A rollup that averaged the whole market while the table below listed
   // one leader's stores would be quietly comparing two different things.
   const tn = useMemo(
-    () => rows.filter((u) => marketOf(u.key, u.name) === "TN" && inLeader(leaderStores, u.label)),
-    [rows, leaderStores],
+    () => rows.filter((u) => marketOf(u.key, u.name) === "TN" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
   );
   const va = useMemo(
-    () => rows.filter((u) => marketOf(u.key, u.name) === "VA" && inLeader(leaderStores, u.label)),
-    [rows, leaderStores],
+    () => rows.filter((u) => marketOf(u.key, u.name) === "VA" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
   );
 
   /** SMG's region-manager rows for whichever window is selected. */
@@ -417,13 +415,8 @@ export default function SurveyDataClient({
    */
   const listed = useMemo(
     () =>
-      rows.filter((u) => {
-        const m = marketOf(u.key, u.name);
-        if (m === "TN" && !showTN) return false;
-        if (m === "VA" && !showVA) return false;
-        return inLeader(leaderStores, u.label);
-      }),
-    [rows, showTN, showVA, leaderStores],
+      rows.filter((u) => inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
   );
 
   /**
@@ -435,14 +428,9 @@ export default function SurveyDataClient({
    * table happens to list would hide them.
    */
   const zcaseStores = useMemo(() => {
-    if (showTN && showVA && !leaderStores) return null;
-    return Object.keys(STORE_LABELS).filter((key) => {
-      const m = marketOf(key, "");
-      if (m === "TN" && !showTN) return false;
-      if (m === "VA" && !showVA) return false;
-      return inLeader(leaderStores, STORE_LABELS[key]);
-    });
-  }, [showTN, showVA, leaderStores]);
+    if (!storeFilter.allowed) return null;
+    return Object.keys(STORE_LABELS).filter((key) => inFilter(storeFilter.allowed, STORE_LABELS[key]));
+  }, [storeFilter.allowed]);
 
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
@@ -469,11 +457,13 @@ export default function SurveyDataClient({
 
   const summaryRows = useMemo(() => {
     const out: { label: string; row: UnitRow }[] = [];
-    if (showTN && tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
-    if (showVA && vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
-    if (hrgSummary && showTN && showVA) out.push({ label: "HRG", row: hrgSummary });
+    if (tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
+    if (vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
+    // Only when both markets are on screen: with one market showing, the HRG
+    // row would just restate the single market row above it.
+    if (hrgSummary && tn.length > 0 && va.length > 0) out.push({ label: "HRG", row: hrgSummary });
     return out;
-  }, [showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
+  }, [tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
 
   const colCount = metrics.length + 3;
 
@@ -600,19 +590,9 @@ export default function SurveyDataClient({
               ))}
             </select>
 
-            {/* The cuts the tab offers. The scores table, its TN/VA/HRG
-                summary rows and the ZCases section all follow these. */}
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={showVA} onChange={(e) => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-                VA
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={showTN} onChange={(e) => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-                TN
-              </label>
-              <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
-            </div>
+            {/* The cut the tab offers. The scores table, its TN/VA/HRG summary
+                rows and the ZCases section all follow it. */}
+            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
 
             {selectedWindow && (
               <span className="text-xs text-gray-500">
@@ -733,7 +713,11 @@ export default function SurveyDataClient({
         {/* Always store-level with its own grain and range, so it can span a
             longer history than whichever single period the table is showing. */}
         <div className="mt-5">
-          <SurveyTrendChart dateBasis={DATE_BASIS} showTN={showTN} showVA={showVA} />
+          <SurveyTrendChart
+            dateBasis={DATE_BASIS}
+            showTN={marketShown(storeFilter.allowed, "TN")}
+            showVA={marketShown(storeFilter.allowed, "VA")}
+          />
         </div>
 
         {/* Shares the page's period picker. ZCases window on the guest's visit
