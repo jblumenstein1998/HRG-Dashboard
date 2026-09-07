@@ -28,7 +28,23 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   ...PERIODS.map((p) => ({ key: `p${p.period}` as RangeKey, label: `P${p.period} (Full)` })),
 ];
 
-export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+/**
+ * An above-store leader and the stores they cover, by display label.
+ *
+ * Spelled out here rather than imported from lib/users/leaders, which pulls in
+ * `sql` and would blow up in the browser.
+ */
+type Leader = { id: string; name: string; stores: string[] };
+
+export default function DashboardClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
   const latestFetchId = useRef(0);
   const branchesLoaded = useRef(false);
@@ -48,6 +64,8 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
   const [salesLabel, setSalesLabel] = useState("");
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
+  /** Empty means every leader — i.e. no leader filter at all. */
+  const [leaderId, setLeaderId] = useState("");
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -120,9 +138,23 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
       .catch(err => console.error("[DriveThru] sales-tier fetch failed", err));
   }, [rangeKey]);
 
+  // The leader's stores as a set, or null when no leader is chosen. Resolved
+  // from the id rather than held in state so a leader edited on the admin
+  // screen can't leave a stale store list pinned here.
+  const leaderStores = leaderId
+    ? new Set(leaders.find(l => l.id === leaderId)?.stores ?? [])
+    : null;
+
+  // The three filters stack rather than override: picking a leader narrows
+  // whatever VA/TN is already showing, the same way ticking a state narrows
+  // whatever the leader left. Both unticked shows nothing, and so does a
+  // TN-only leader with VA alone ticked — in each case the empty state below
+  // names the filters that emptied it.
   const visibleBranches = branches.filter(b => {
     const section = getStoreSection(b);
-    return (section === "Virginia" && showVA) || (section === "Tennessee" && showTN);
+    const inState = (section === "Virginia" && showVA) || (section === "Tennessee" && showTN);
+    if (!inState) return false;
+    return leaderStores ? leaderStores.has(getStoreLabel(b)) : true;
   });
 
   // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
@@ -318,6 +350,21 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
                   TN
                 </label>
               </div>
+              {/* Hidden entirely when nobody has been set up on the admin
+                  screen — an empty dropdown reads like something is broken. */}
+              {leaders.length > 0 && (
+                <select
+                  value={leaderId}
+                  onChange={e => setLeaderId(e.target.value)}
+                  aria-label="Filter by above-store leader"
+                  className="text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 cursor-pointer"
+                >
+                  <option value="">All leaders</option>
+                  {leaders.map(l => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+              )}
               <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
                 {(["summary", "daypart"] as const).map((mode) => (
                   <button
@@ -412,6 +459,22 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
             {!branchesLoading && visibleBranches.length === 0 && !error && (
               <div className="text-center py-20 text-gray-400">
                 <p className="text-lg font-medium">No locations found</p>
+                {/* The filters stack, so a leader who covers only TN stores and
+                    a VA-only tick leave nothing on screen. Naming both is the
+                    difference between "nothing to show" and "no data". */}
+                {(leaderStores || !showVA || !showTN) && (
+                  <p className="text-sm mt-1">
+                    Nothing matches{" "}
+                    {leaderStores && (
+                      <span className="font-medium">
+                        {leaders.find(l => l.id === leaderId)?.name}
+                      </span>
+                    )}
+                    {leaderStores && (!showVA || !showTN) && " with "}
+                    {(!showVA || !showTN) && (showVA ? "VA only" : showTN ? "TN only" : "no state ticked")}
+                    .
+                  </p>
+                )}
               </div>
             )}
           </div>

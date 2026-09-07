@@ -3,6 +3,7 @@
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
 import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
+import { ALL_STORES } from "@/lib/stores";
 import { formatSyncStamp } from "@/lib/surveyMeta";
 
 type User = {
@@ -19,6 +20,15 @@ type User = {
 type Position = { id: string; label: string; tabs: Tab[]; isAdmin: boolean };
 
 /**
+ * An above-store leader and the stores they cover, by display label.
+ *
+ * Declared here rather than imported from lib/users/leaders, which pulls in
+ * `sql` and would blow up in the browser — the same reason User and Position
+ * are spelled out above instead of imported from lib/users/store.
+ */
+type Leader = { id: string; name: string; stores: string[] };
+
+/**
  * Users and access.
  *
  * Adding someone grants an address permission to sign in with Google. No
@@ -27,27 +37,37 @@ type Position = { id: string; label: string; tabs: Tab[]; isAdmin: boolean };
 export default function AdminClient({
   initialUsers,
   initialPositions,
+  initialLeaders,
   allTabs,
   viewerId,
   viewerTabs,
 }: {
   initialUsers: User[];
   initialPositions: Position[];
+  initialLeaders: Leader[];
   allTabs: Tab[];
   viewerId: string;
   viewerTabs: Tab[];
 }) {
   const [users, setUsers] = useState(initialUsers);
   const [positions, setPositions] = useState(initialPositions);
+  const [leaders, setLeaders] = useState(initialLeaders);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function refresh() {
-    const res = await fetch("/api/admin/users");
-    if (res.ok) {
-      const j = await res.json();
+    const [usersRes, leadersRes] = await Promise.all([
+      fetch("/api/admin/users"),
+      fetch("/api/admin/leaders"),
+    ]);
+    if (usersRes.ok) {
+      const j = await usersRes.json();
       setUsers(j.users);
       setPositions(j.positions);
+    }
+    if (leadersRes.ok) {
+      const j = await leadersRes.json();
+      setLeaders(j.leaders);
     }
   }
 
@@ -218,6 +238,28 @@ export default function AdminClient({
             })
           }
         />
+
+        <Leaders
+          leaders={leaders}
+          busy={busy}
+          onAdd={(name) =>
+            send("/api/admin/leaders", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name }),
+            })
+          }
+          onSave={(patch) =>
+            send("/api/admin/leaders", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(patch),
+            })
+          }
+          onRemove={(id) =>
+            send(`/api/admin/leaders?id=${encodeURIComponent(id)}`, { method: "DELETE" })
+          }
+        />
       </main>
     </div>
   );
@@ -337,5 +379,163 @@ function Positions({
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * Above-store leaders, and which stores each of them covers.
+ *
+ * Not a position and not a user: a leader is a way of slicing the estate, and
+ * the people in this list may well have no dashboard login at all. Keeping it
+ * separate from the account table means adding one doesn't grant anything and
+ * removing one doesn't revoke anything — it only changes what the Drive-Thru
+ * filter offers.
+ */
+function Leaders({
+  leaders,
+  busy,
+  onAdd,
+  onSave,
+  onRemove,
+}: {
+  leaders: Leader[];
+  busy: boolean;
+  onAdd: (name: string) => void;
+  onSave: (patch: { id: string; name?: string; stores?: string[] }) => void;
+  onRemove: (id: string) => void;
+}) {
+  const [name, setName] = useState("");
+
+  const sections = ["Tennessee", "Virginia"] as const;
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 pt-3 pb-2">
+        <div className="text-sm font-semibold text-gray-800">Above-store leaders</div>
+        <div className="text-xs text-gray-400">
+          Which stores each leader covers. They become a filter on the Drive-Thru
+          tab, alongside the VA and TN boxes. Takes effect on its next page load.
+        </div>
+      </div>
+
+      <div className="px-4 pb-3 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-gray-500">Name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim() && !busy) {
+                onAdd(name.trim());
+                setName("");
+              }
+            }}
+            className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 w-56"
+          />
+        </label>
+        <button
+          disabled={busy || !name.trim()}
+          onClick={() => {
+            onAdd(name.trim());
+            setName("");
+          }}
+          className="text-sm px-3 py-1.5 rounded-lg bg-red-700 hover:bg-red-800 text-white transition disabled:opacity-50 cursor-pointer"
+        >
+          Add
+        </button>
+      </div>
+
+      {leaders.length === 0 ? (
+        <div className="px-4 pb-4 text-xs text-gray-400">
+          No leaders yet. Add one above, then tick their stores.
+        </div>
+      ) : (
+        <div className="border-t border-gray-100 divide-y divide-gray-100">
+          {leaders.map((l) => (
+            <LeaderRow
+              key={l.id}
+              leader={l}
+              sections={sections}
+              busy={busy}
+              onSave={onSave}
+              onRemove={onRemove}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LeaderRow({
+  leader,
+  sections,
+  busy,
+  onSave,
+  onRemove,
+}: {
+  leader: Leader;
+  sections: readonly ("Tennessee" | "Virginia")[];
+  busy: boolean;
+  onSave: (patch: { id: string; name?: string; stores?: string[] }) => void;
+  onRemove: (id: string) => void;
+}) {
+  // Local while typing, saved on blur. Saving per keystroke would round-trip
+  // and re-sort the whole list under the cursor on every letter.
+  const [draft, setDraft] = useState(leader.name);
+
+  function toggle(label: string, on: boolean) {
+    const stores = on
+      ? [...leader.stores, label]
+      : leader.stores.filter((s) => s !== label);
+    onSave({ id: leader.id, stores });
+  }
+
+  return (
+    <div className="px-4 py-3 flex flex-wrap items-start gap-x-5 gap-y-2">
+      <div className="w-56 shrink-0 flex items-center gap-2">
+        <input
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            const next = draft.trim();
+            if (!next) { setDraft(leader.name); return; }
+            if (next !== leader.name) onSave({ id: leader.id, name: next });
+          }}
+          className="text-sm font-medium text-gray-900 border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-lg px-2 py-1 w-40 focus:outline-none"
+        />
+        <button
+          disabled={busy}
+          onClick={() => onRemove(leader.id)}
+          className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-500 cursor-pointer disabled:opacity-50"
+        >
+          Remove
+        </button>
+      </div>
+
+      {sections.map((section) => (
+        <div key={section} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="text-[11px] uppercase tracking-wide text-gray-400">
+            {section === "Tennessee" ? "TN" : "VA"}
+          </span>
+          {ALL_STORES.filter((s) => s.section === section).map((s) => (
+            <label
+              key={s.label}
+              className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none"
+            >
+              <input
+                type="checkbox"
+                disabled={busy}
+                checked={leader.stores.includes(s.label)}
+                onChange={(e) => toggle(s.label, e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              {s.label}
+            </label>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
