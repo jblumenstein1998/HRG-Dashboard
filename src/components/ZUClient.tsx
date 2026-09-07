@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
+import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
 import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 
 /**
@@ -368,7 +369,15 @@ function subtotal(stores: ZuStore[]): ZuStats {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function ZUClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
 
   const [report, setReport] = useState<ZuReport | null>(null);
@@ -376,6 +385,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
   const [error, setError] = useState<string>("");
   const [showTN, setShowTN] = useState(true);
   const [showVA, setShowVA] = useState(true);
+  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<Record<string, MemberState>>({});
@@ -511,7 +521,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
       const market = marketOf(s.label);
       if (market === "TN" && !showTN) return false;
       if (market === "VA" && !showVA) return false;
-      return true;
+      return inLeader(leaderStores, s.label);
     }),
     storeSort,
     storeValue,
@@ -542,7 +552,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
       const market = marketOf(s.label);
       if (market === "TN" && !showTN) return false;
       if (market === "VA" && !showVA) return false;
-      return true;
+      return inLeader(leaderStores, s.label);
     }),
     testSort,
     testStoreValue,
@@ -602,6 +612,8 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
               />
               TN
             </label>
+
+            <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
 
             <button
               onClick={() => void load(true)}

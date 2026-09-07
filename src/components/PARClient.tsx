@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { PARLocation } from "@/lib/par";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
+import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
@@ -184,11 +185,12 @@ function usePosData(locations: PARLocation[], mode: Mode) {
 }
 
 function PosTierTable({
-  locations, showVA, showTN, mode, metric, dataMap, loadingIds, weeks, periods,
+  locations, showVA, showTN, leaderStores, mode, metric, dataMap, loadingIds, weeks, periods,
 }: {
   locations: PARLocation[];
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
   mode: Mode;
   metric: Metric;
   dataMap: Record<string, StoreData>;
@@ -202,7 +204,8 @@ function PosTierTable({
   const loading = loadingIds.size > 0;
 
   const visibleLocs = locations.filter(l =>
-    (l.state === "VA" && showVA) || (l.state === "TN" && showTN)
+    ((l.state === "VA" && showVA) || (l.state === "TN" && showTN)) &&
+    inLeader(leaderStores, l.name)
   );
 
   const tiered = TIERS.map(tier => ({
@@ -462,22 +465,28 @@ function MetricFigureCell({ figure, fmt }: { figure: MetricFigure; fmt: (v: numb
 }
 
 function MetricCompTable({
-  title, stores, loading, showVA, showTN, fmt,
+  title, stores, loading, showVA, showTN, leaderStores, fmt,
 }: {
   title: string;
   stores: StoreMetricComp[];
   loading: boolean;
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
   fmt: (v: number) => string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const tnStores = stores.filter(s => s.state === "TN");
-  const vaStores = stores.filter(s => s.state === "VA");
+  // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
+  // filtered table can't show one leader's stores under a market-wide average.
+  const tnStores = stores.filter(s => s.state === "TN" && inLeader(leaderStores, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inLeader(leaderStores, s.name));
+  // A group with no stores is dropped rather than totalled. The state boxes
+  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
+  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
   const groups = [
-    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+    ...(showTN && tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA && vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
   ];
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
@@ -575,20 +584,26 @@ function useAvgCheckComp() {
 }
 
 function AvgCheckCompTable({
-  stores, loading, showVA, showTN,
+  stores, loading, showVA, showTN, leaderStores,
 }: {
   stores: StoreAvgCheckRaw[];
   loading: boolean;
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const tnStores = stores.filter(s => s.state === "TN");
-  const vaStores = stores.filter(s => s.state === "VA");
+  // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
+  // filtered table can't show one leader's stores under a market-wide average.
+  const tnStores = stores.filter(s => s.state === "TN" && inLeader(leaderStores, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inLeader(leaderStores, s.name));
+  // A group with no stores is dropped rather than totalled. The state boxes
+  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
+  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
   const groups = [
-    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+    ...(showTN && tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA && vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
   ];
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
@@ -776,23 +791,29 @@ function useSalesSnapshot(range: SnapshotRange) {
 }
 
 function SnapshotVsLastYearTable({
-  stores, meta, loading, showVA, showTN, range, onRangeChange,
+  stores, meta, loading, showVA, showTN, leaderStores, range, onRangeChange,
 }: {
   stores: SnapshotRaw[];
   meta: SnapshotMeta;
   loading: boolean;
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
   range: SnapshotRange;
   onRangeChange: (range: SnapshotRange) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const tnStores = stores.filter(s => s.state === "TN");
-  const vaStores = stores.filter(s => s.state === "VA");
+  // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
+  // filtered table can't show one leader's stores under a market-wide average.
+  const tnStores = stores.filter(s => s.state === "TN" && inLeader(leaderStores, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inLeader(leaderStores, s.name));
+  // A group with no stores is dropped rather than totalled. The state boxes
+  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
+  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
   const groups = [
-    ...(showTN ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(showVA ? [{ label: "VA Total", stores: vaStores }] : []),
+    ...(showTN && tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
+    ...(showVA && vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
   ];
   const hrgStores = [...(showTN ? tnStores : []), ...(showVA ? vaStores : [])];
 
@@ -803,8 +824,8 @@ function SnapshotVsLastYearTable({
   // single blanket time for every store) — only show the labels for whichever
   // group(s) are actually visible. Settled ranges have no cutoff at all.
   const asOfParts = [
-    ...(showTN ? [meta.asOfLabelCT] : []),
-    ...(showVA ? [meta.asOfLabelET] : []),
+    ...(showTN && tnStores.length > 0 ? [meta.asOfLabelCT] : []),
+    ...(showVA && vaStores.length > 0 ? [meta.asOfLabelET] : []),
   ].filter(Boolean);
 
   // Single-day ranges show the full ISO date (a bare "7/26" reads ambiguously
@@ -921,11 +942,22 @@ function SnapshotVsLastYearTable({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function PARClient({ locations, tabs, isAdmin }: { locations: PARLocation[]; tabs: Tab[]; isAdmin: boolean }) {
+export default function PARClient({
+  locations,
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  locations: PARLocation[];
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
 
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
+  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
   const [mode, setMode] = useState<Mode>("weeks");
   const [snapshotRange, setSnapshotRange] = useState<SnapshotRange>("today");
   const posData = usePosData(locations, mode);
@@ -1009,6 +1041,7 @@ export default function PARClient({ locations, tabs, isAdmin }: { locations: PAR
               <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
               TN
             </label>
+            <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -1029,23 +1062,24 @@ export default function PARClient({ locations, tabs, isAdmin }: { locations: PAR
           loading={salesSnapshot.loading}
           showVA={showVA}
           showTN={showTN}
+          leaderStores={leaderStores}
           range={snapshotRange}
           onRangeChange={setSnapshotRange}
         />
         <div className="mt-6">
-          <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} showVA={showVA} showTN={showTN} fmt={fmtDollars} />
+          <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} showVA={showVA} showTN={showTN} leaderStores={leaderStores} fmt={fmtDollars} />
         </div>
         <div className="mt-6">
-          <MetricCompTable title="Transactions" stores={transactionsComp.stores} loading={transactionsComp.loading} showVA={showVA} showTN={showTN} fmt={v => Math.round(v).toLocaleString()} />
+          <MetricCompTable title="Transactions" stores={transactionsComp.stores} loading={transactionsComp.loading} showVA={showVA} showTN={showTN} leaderStores={leaderStores} fmt={v => Math.round(v).toLocaleString()} />
         </div>
         <div className="mt-6">
-          <AvgCheckCompTable stores={avgCheckComp.stores} loading={avgCheckComp.loading} showVA={showVA} showTN={showTN} />
+          <AvgCheckCompTable stores={avgCheckComp.stores} loading={avgCheckComp.loading} showVA={showVA} showTN={showTN} leaderStores={leaderStores} />
         </div>
         <div className="mt-6">
-          <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="dollars" {...posData} />
+          <PosTierTable locations={locations} showVA={showVA} showTN={showTN} leaderStores={leaderStores} mode={mode} metric="dollars" {...posData} />
         </div>
         <div className="mt-6">
-          <PosTierTable locations={locations} showVA={showVA} showTN={showTN} mode={mode} metric="count" {...posData} />
+          <PosTierTable locations={locations} showVA={showVA} showTN={showTN} leaderStores={leaderStores} mode={mode} metric="count" {...posData} />
         </div>
       </main>
     </div>

@@ -8,6 +8,7 @@ import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
 
 const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
@@ -136,7 +137,15 @@ type RecentWeeksData = {
 
 type WeekItemPair = { prev: ItemData[] | "loading" | "error"; curr: ItemData[] | "loading" | "error" };
 
-function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean }) {
+function RecentWeeksTable({
+  showVA,
+  showTN,
+  leaderStores,
+}: {
+  showVA: boolean;
+  showTN: boolean;
+  leaderStores: Set<string> | null;
+}) {
   const [data, setData] = useState<RecentWeeksData | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -217,8 +226,9 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
         </thead>
         <tbody>
           {data.stores.filter(s =>
-            (VA_STORES.includes(s.name) && showVA) ||
-            (TN_STORES.includes(s.name) && showTN)
+            ((VA_STORES.includes(s.name) && showVA) ||
+              (TN_STORES.includes(s.name) && showTN)) &&
+            inLeader(leaderStores, s.name)
           ).map((store, i) => {
             const prev = store.values[0];
             const curr = store.values[1];
@@ -393,11 +403,13 @@ function VarianceYoyTable({
   reportMeta,
   showVA,
   showTN,
+  leaderStores,
 }: {
   dateOptions: DateOption[];
   reportMeta: { startDate: string; endDate: string } | null;
   showVA: boolean;
   showTN: boolean;
+  leaderStores: Set<string> | null;
 }) {
   const [currEnd,   setCurrEnd]   = useState("");
   const [priorEnd,  setPriorEnd]  = useState("");
@@ -463,8 +475,9 @@ function VarianceYoyTable({
     const pctKey = metric === "cogs" ? "actualCostPct" : "variancePct";
     return Object.values(currLocMap)
       .filter(l =>
-        (VA_STORES.includes(l.locationName) && showVA) ||
-        (TN_STORES.includes(l.locationName) && showTN)
+        ((VA_STORES.includes(l.locationName) && showVA) ||
+          (TN_STORES.includes(l.locationName) && showTN)) &&
+        inLeader(leaderStores, l.locationName)
       )
       .sort((a, b) => {
         const aCurr  = a[pctKey];
@@ -1601,7 +1614,15 @@ function CategoryBarChart({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function FoodCostClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
   const [dateOptions, setDateOptions] = useState<DateOption[]>([]);
   const [datesLoading, setDatesLoading] = useState(true);
@@ -1623,6 +1644,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
+  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
 
   const fetchData = useCallback(async (start: string, end: string, bust = false) => {
     if (!start || !end) return;
@@ -1917,6 +1939,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
               TN
             </label>
+            <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
           </div>
         </div>
       </div>
@@ -2004,12 +2027,13 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               reportMeta={reportMeta}
               showVA={showVA}
               showTN={showTN}
+              leaderStores={leaderStores}
             />
           </div>
         )}
 
         <div className="mt-6">
-          <RecentWeeksTable showVA={showVA} showTN={showTN} />
+          <RecentWeeksTable showVA={showVA} showTN={showTN} leaderStores={leaderStores} />
         </div>
 
         <HistoryChart />

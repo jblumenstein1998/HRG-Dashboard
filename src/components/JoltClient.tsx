@@ -6,6 +6,7 @@ import TabOptions from "@/components/TabOptions";
 import { useCopyImage } from "@/components/CopyImageButton";
 import { PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import type { Tab } from "@/lib/users/tabs";
+import { LeaderPicker, useLeaderFilter, inLeader, type Leader } from "@/components/LeaderFilter";
 
 // Store order matches lib/stores.ts, so this tab reads in the same sequence as
 // the rest of the dashboard. Jolt runs at seven of the twelve stores; the other
@@ -800,7 +801,7 @@ function StorePanel({
 
 type Status = "loading" | "done" | "error";
 
-export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[] }) {
   const router = useRouter();
   // Opens on the last 24 hours: the shift that just happened, and the lightest
   // window to load (~120 rows against ~850 for a week). The range buttons widen
@@ -814,6 +815,7 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
 
   const [showVA, setShowVA] = useState(true);
   const [showTN, setShowTN] = useState(true);
+  const { leaderId, setLeaderId, leaderStores } = useLeaderFilter(leaders);
 
   const [report, setReport] = useState<StoreListsReport | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -900,15 +902,21 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
   const byStore = useMemo(() => new Map((report?.stores ?? []).map(s => [s.store, s])), [report]);
 
   const visible = useMemo(() => {
-    const names = [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])];
+    const names = [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])]
+      .filter(name => inLeader(leaderStores, name));
     return names.map(store => ({ store, data: byStore.get(store) ?? null }));
-  }, [byStore, showTN, showVA]);
+  }, [byStore, showTN, showVA, leaderStores]);
 
   // The To Do band has its own rows, so it filters by name rather than by the
   // report's per-store entries.
   const visibleStores = useMemo(
-    () => new Set([...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])]),
-    [showTN, showVA],
+    () =>
+      new Set(
+        [...(showTN ? TN_STORES : []), ...(showVA ? VA_STORES : [])].filter(name =>
+          inLeader(leaderStores, name),
+        ),
+      ),
+    [showTN, showVA, leaderStores],
   );
 
   // Which store's table is on screen. Held loosely rather than corrected in an
@@ -1089,6 +1097,7 @@ export default function JoltClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bo
                 />
                 TN
               </label>
+              <LeaderPicker leaders={leaders} value={leaderId} onChange={setLeaderId} />
             </div>
           </div>
         </div>
