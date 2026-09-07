@@ -273,6 +273,11 @@ export async function fetchLocationReport(
     pagingInfo: { page: 1, start: 0, limit: 1000000 },
   }) as Record<string, unknown>;
 
+  // Tracks whichever payload `totals` came from. The retry below replaces the
+  // totals but the rows have to move with them — salesBase is read off the row
+  // array, and pairing a retried total with the first attempt's rows would
+  // weight one window's cost by another window's sales.
+  let payload = data;
   let totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
   const isBlank = (t: Record<string, unknown> | undefined): t is undefined =>
     !t || (Number(t.actualCost) === 0 && Number(t.actualCostPercent) === 0);
@@ -284,6 +289,7 @@ export async function fetchLocationReport(
       extraCriteriaMap: { startDate: toMMDDYYYY(startDate), endDate: toMMDDYYYY(endDate), locationIdFilter: locationId, isConsolidated: false },
       pagingInfo: { page: 1, start: 0, limit: 1000000 },
     }) as Record<string, unknown>;
+    payload = retry;
     totals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
     if (isBlank(totals)) {
       console.log("[NC] blank/missing totalSummaries for location", locationId, "after retry — giving up");
@@ -296,12 +302,12 @@ export async function fetchLocationReport(
   // the old 425/689-only dump could not show whether the response belonged to the
   // range requested. salesBase is the row-level divisorValue, the denominator
   // behind actualCostPercent, and is the field that gives the window away.
-  const firstRow = (data.rows as Record<string, unknown>[] | undefined)?.[0];
+  const firstRow = (payload.rows as Record<string, unknown>[] | undefined)?.[0];
   console.log(
     `[NC] loc ${locationId} ${startDate}..${endDate}` +
       ` actualCost=${totals.actualCost} pct=${totals.actualCostPercent}` +
       ` salesBase=${firstRow?.divisorValue ?? "n/a"}` +
-      ` summaries=${(data.totalSummaries as unknown[])?.length ?? 0}`,
+      ` summaries=${(payload.totalSummaries as unknown[])?.length ?? 0}`,
   );
 
   const actualCostPct     = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : null;
@@ -309,7 +315,18 @@ export async function fetchLocationReport(
   const variancePct       = totals.valueVariancePercent != null ? Number(totals.valueVariancePercent) : null;
   const varianceDollars   = totals.valueVariance        != null ? Number(totals.valueVariance)        : null;
 
-  const salesBase = firstRow?.divisorValue != null ? Number(firstRow.divisorValue) : null;
+  // divisorValue is the denominator NetChef itself divided by, so prefer it.
+  // When the rows come back empty but the totals do not, recover the same
+  // number from the totals instead of returning null: a null base drops the
+  // store out of every weighted average downstream, silently and invisibly,
+  // which is worse than a figure carrying one rounding step.
+  const rawBase = firstRow?.divisorValue != null ? Number(firstRow.divisorValue) : null;
+  const salesBase =
+    rawBase != null && rawBase > 0
+      ? rawBase
+      : actualCostPct && actualCostDollars != null
+        ? actualCostDollars / (actualCostPct / 100)
+        : null;
 
   const report: LocationReport = { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
   locationReportCache.set(cKey, { report, fetchedAt: Date.now() });
