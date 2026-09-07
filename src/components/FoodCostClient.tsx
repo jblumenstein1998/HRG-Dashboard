@@ -24,6 +24,9 @@ type LocationData = {
   actualCostDollars: number | null;
   variancePct: number | null;
   varianceDollars: number | null;
+  /** NetChef's own sales denominator behind the percentages above — what the
+   *  total row blends on. Not the PAR sales shown in the Sales column. */
+  salesBase: number | null;
 };
 
 type ItemData = {
@@ -57,26 +60,24 @@ function fmtPct(v: number | null, decimals = 1): string {
  * doing $28k, so a plain mean of the percentages is not a total — it is the
  * average of twelve unrelated ratios.
  *
- * Each store's sales base is recovered from its own figures (dollars ÷ pct)
- * rather than taken from the sales endpoint. That is what lets this serve the
- * prior-year column and the per-week columns, where the matching sales are
- * never fetched: a percentage carries its own denominator. It also keeps the
- * blend internally consistent with the NetChef percentages it is blending.
+ * The weight is NetChef's own sales base — the denominator behind the very
+ * percentages being blended — not the PAR net sales in the Sales column. Those
+ * two disagree slightly about a week, and weighting NetChef ratios by PAR sales
+ * lands the total a hair off the store rows above it. The Sales column stays on
+ * screen as a size reference; it is not what the maths runs on.
  *
- * Signs cancel — a negative variance over a negative percentage still recovers
- * positive sales — so variance blends the same way costs do. Rows missing
- * either half are skipped rather than counted as zero, and a percentage of
- * exactly zero is skipped too, since it implies no denominator at all.
+ * Rows missing either half are skipped rather than counted as zero, which would
+ * quietly drag the blend toward it.
  */
-function weightedPct(entries: { pct: number | null; dollars: number | null }[]): number | null {
-  let dollars = 0;
+function weightedPct(entries: { pct: number | null; salesBase: number | null }[]): number | null {
+  let weighted = 0;
   let sales = 0;
   for (const e of entries) {
-    if (e.pct === null || e.dollars === null || e.pct === 0) continue;
-    dollars += e.dollars;
-    sales += e.dollars / (e.pct / 100);
+    if (e.pct === null || e.salesBase === null || e.salesBase <= 0) continue;
+    weighted += e.pct * e.salesBase;
+    sales += e.salesBase;
   }
-  return sales > 0 ? (dollars / sales) * 100 : null;
+  return sales > 0 ? weighted / sales : null;
 }
 
 function fmtDollars(v: number | null): string {
@@ -161,7 +162,7 @@ function rangeToHistoryParams(key: RangeKey): { start: string; end?: string } {
 type RecentWeeksData = {
   weeks: string[];
   weekRanges: { start: string; end: string }[];
-  stores: { locationId: number; name: string; values: (number | null)[]; dollars: (number | null)[] }[];
+  stores: { locationId: number; name: string; values: (number | null)[]; salesBase: (number | null)[] }[];
 };
 
 type WeekItemPair = { prev: ItemData[] | "loading" | "error"; curr: ItemData[] | "loading" | "error" };
@@ -303,7 +304,7 @@ function RecentWeeksTable({ allowed, totalLabel }: { allowed: Set<string> | null
             // than averaged from the stores' own changes, so the total's W/W
             // agrees with its own two week figures.
             const weekTotals = data.weeks.map((_, j) =>
-              weightedPct(shown.map(s => ({ pct: s.values[j], dollars: s.dollars?.[j] ?? null }))),
+              weightedPct(shown.map(s => ({ pct: s.values[j], salesBase: s.salesBase?.[j] ?? null }))),
             );
             const prev = weekTotals[0];
             const curr = weekTotals[1];
@@ -392,7 +393,7 @@ function YoyMetricTable({
   const colorFn = metric === "cogs" ? actualColor : varianceColor;
 
   const entry = (r: LocationData | null | undefined) =>
-    ({ pct: r?.[pctKey] ?? null, dollars: r?.[dollarsKey] ?? null });
+    ({ pct: r?.[pctKey] ?? null, salesBase: r?.salesBase ?? null });
   const totalCurr = weightedPct(rows.map(entry));
   const totalPrior = weightedPct(rows.map(r => entry(priorLocMap[r.locationId])));
   const totalChange = totalCurr !== null && totalPrior !== null ? totalCurr - totalPrior : null;
@@ -986,26 +987,27 @@ function RankTable({
   const colCount = salesByName ? 5 : 4;
 
   /**
-   * The total row, weighted by sales rather than a mean of the store
-   * percentages — a store doing $84k of business has to move the blended rate
-   * further than one doing $28k.
+   * The total row.
    *
-   * Weighted against the Sales column this table is showing, so the percentage
-   * can be checked against the rows above it with a calculator. Worth knowing
-   * that those sales come from PAR while the cost and its percentage come from
-   * NetChef, so a store's own % can sit a tenth off dollars ÷ sales; the total
-   * follows the visible column because a total nobody can reconcile with what
-   * is on screen reads as a bug.
+   * Dollars and the Sales column are plain sums of what is displayed. The
+   * percentage is not — it is blended by `weightedPct`, on NetChef's own sales
+   * base, so it agrees with the store percentages stacked above it rather than
+   * with the PAR figures in the Sales column beside it. Dividing the two summed
+   * columns would give a slightly different number; the percentages are
+   * NetChef's, so their blend has to be too.
    *
-   * Rows with no cost figure are excluded outright rather than counted as zero,
-   * which would quietly drag the rate down.
+   * Rows with no cost figure are excluded rather than counted as zero, which
+   * would quietly drag the total down.
    */
   const total = (() => {
     const usable = rows.filter(r => r[dollarsKey] !== null);
     if (usable.length === 0) return null;
     const dollars = usable.reduce((sum, r) => sum + (r[dollarsKey] as number), 0);
     const sales = usable.reduce((sum, r) => sum + (salesByName?.[r.locationName] ?? 0), 0);
-    return { dollars, sales, pct: sales > 0 ? (dollars / sales) * 100 : null };
+    const pct = weightedPct(
+      usable.map(r => ({ pct: r[pctKey] as number | null, salesBase: r.salesBase })),
+    );
+    return { dollars, sales, pct };
   })();
 
   // Null means the order the rows came in with, which is the meaningful default -
