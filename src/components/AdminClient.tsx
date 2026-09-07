@@ -186,10 +186,14 @@ export default function AdminClient({
                       </select>
                     </td>
                     {/* The date is the status: it says both that they've been
-                        in and when. "Disabled" still leads where it applies,
-                        with the last sign-in kept underneath rather than
-                        thrown away — it's the useful part when deciding
-                        whether an account was ever really used. */}
+                        in and when.
+
+                        "Disabled" is legacy — nothing sets it any more, since
+                        Delete replaced it. It still renders, because a row
+                        disabled before that change is still refused at login,
+                        and showing it as a normal account would misreport who
+                        can actually sign in. Delete is the only way to clear
+                        one. */}
                     <td className="px-4 py-3 text-xs">
                       {u.disabledAt && <div className="text-red-600">Disabled</div>}
                       {u.lastLoginAt ? (
@@ -201,20 +205,12 @@ export default function AdminClient({
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {/* You can't disable or delete yourself — that's a
-                          one-way trip out of the admin screen with no way
-                          back in. The server refuses it too. */}
+                      {/* You can't delete yourself — that's a one-way trip out
+                          of the admin screen with no way back in. The server
+                          refuses it too. */}
                       {u.id !== viewerId && (
                         <UserActions
-                          disabled={!!u.disabledAt}
                           busy={busy}
-                          onToggle={() =>
-                            send("/api/admin/users", {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ id: u.id, disabled: !u.disabledAt }),
-                            })
-                          }
                           onDelete={() =>
                             send(`/api/admin/users?id=${encodeURIComponent(u.id)}`, {
                               method: "DELETE",
@@ -270,25 +266,22 @@ export default function AdminClient({
 }
 
 /**
- * Enable/Disable, plus a delete that asks first.
+ * Delete, which asks first.
+ *
+ * Removing someone is one action now: disabling is gone, because holding an
+ * account open-but-refused was a state nobody wanted — if they shouldn't be
+ * able to sign in, take the row out.
  *
  * The confirm step is inline rather than a window.confirm: the rest of this
  * screen acts immediately on click, so the one irreversible button here needs a
- * beat, and a two-state button gives it one without a modal.
- *
- * Deleting is genuinely gone — no undo, and the person is only re-addable by
- * typing their address in again. Disabling remains the right move for someone
- * who has left; this is for rows that shouldn't exist at all.
+ * beat, and a two-state button gives it one without a modal. There is no undo —
+ * getting someone back means typing their address in again.
  */
 function UserActions({
-  disabled,
   busy,
-  onToggle,
   onDelete,
 }: {
-  disabled: boolean;
   busy: boolean;
-  onToggle: () => void;
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -319,22 +312,13 @@ function UserActions({
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <button
-        disabled={busy}
-        onClick={onToggle}
-        className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer disabled:opacity-50"
-      >
-        {disabled ? "Enable" : "Disable"}
-      </button>
-      <button
-        disabled={busy}
-        onClick={() => setConfirming(true)}
-        className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-red-50 hover:border-red-200 hover:text-red-700 text-gray-500 cursor-pointer disabled:opacity-50"
-      >
-        Delete
-      </button>
-    </span>
+    <button
+      disabled={busy}
+      onClick={() => setConfirming(true)}
+      className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-red-50 hover:border-red-200 hover:text-red-700 text-gray-500 cursor-pointer disabled:opacity-50"
+    >
+      Delete
+    </button>
   );
 }
 

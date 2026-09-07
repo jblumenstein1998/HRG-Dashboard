@@ -8,7 +8,6 @@ import {
   findByEmail,
   listPositions,
   listUsers,
-  setDisabled,
   updateUser,
 } from "@/lib/users/store";
 
@@ -80,7 +79,6 @@ export async function PATCH(request: NextRequest) {
     name?: string;
     email?: string;
     positionId?: string;
-    disabled?: boolean;
   };
 
   if (!body.id) return Response.json({ error: "Missing user id" }, { status: 400 });
@@ -95,10 +93,6 @@ export async function PATCH(request: NextRequest) {
       email: body.email,
       positionId: body.positionId,
     });
-  }
-
-  if (typeof body.disabled === "boolean") {
-    await setDisabled(body.id, body.disabled);
   }
 
   return Response.json({ ok: true });
