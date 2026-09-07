@@ -201,22 +201,26 @@ export default function AdminClient({
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {/* You can't disable yourself — that's a one-way trip out
-                          of the admin screen with no way back in. */}
+                      {/* You can't disable or delete yourself — that's a
+                          one-way trip out of the admin screen with no way
+                          back in. The server refuses it too. */}
                       {u.id !== viewerId && (
-                        <button
-                          disabled={busy}
-                          onClick={() =>
+                        <UserActions
+                          disabled={!!u.disabledAt}
+                          busy={busy}
+                          onToggle={() =>
                             send("/api/admin/users", {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ id: u.id, disabled: !u.disabledAt }),
                             })
                           }
-                          className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer disabled:opacity-50"
-                        >
-                          {u.disabledAt ? "Enable" : "Disable"}
-                        </button>
+                          onDelete={() =>
+                            send(`/api/admin/users?id=${encodeURIComponent(u.id)}`, {
+                              method: "DELETE",
+                            })
+                          }
+                        />
                       )}
                     </td>
                   </tr>
@@ -262,6 +266,75 @@ export default function AdminClient({
         />
       </main>
     </div>
+  );
+}
+
+/**
+ * Enable/Disable, plus a delete that asks first.
+ *
+ * The confirm step is inline rather than a window.confirm: the rest of this
+ * screen acts immediately on click, so the one irreversible button here needs a
+ * beat, and a two-state button gives it one without a modal.
+ *
+ * Deleting is genuinely gone — no undo, and the person is only re-addable by
+ * typing their address in again. Disabling remains the right move for someone
+ * who has left; this is for rows that shouldn't exist at all.
+ */
+function UserActions({
+  disabled,
+  busy,
+  onToggle,
+  onDelete,
+}: {
+  disabled: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="text-[11px] text-gray-500">Delete for good?</span>
+        <button
+          disabled={busy}
+          onClick={() => {
+            setConfirming(false);
+            onDelete();
+          }}
+          className="text-xs px-2.5 py-1 rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 cursor-pointer disabled:opacity-50"
+        >
+          Delete
+        </button>
+        <button
+          disabled={busy}
+          onClick={() => setConfirming(false)}
+          className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        disabled={busy}
+        onClick={onToggle}
+        className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-gray-50 text-gray-600 cursor-pointer disabled:opacity-50"
+      >
+        {disabled ? "Enable" : "Disable"}
+      </button>
+      <button
+        disabled={busy}
+        onClick={() => setConfirming(true)}
+        className="text-xs px-2.5 py-1 rounded-md border border-gray-200 hover:bg-red-50 hover:border-red-200 hover:text-red-700 text-gray-500 cursor-pointer disabled:opacity-50"
+      >
+        Delete
+      </button>
+    </span>
   );
 }
 
