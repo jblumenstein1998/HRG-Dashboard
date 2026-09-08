@@ -393,20 +393,26 @@ export default function SurveyDataClient({
     return source.filter((r) => r.unitKey === COMBINED_KEY);
   }, [selected, scores, snapshots]);
 
-  const tnSummary = useMemo(() => summarise(tn, metrics, matchPublished(publishedRows, tn, metrics)), [tn, metrics, publishedRows]);
-  const vaSummary = useMemo(() => summarise(va, metrics, matchPublished(publishedRows, va, metrics)), [va, metrics, publishedRows]);
-
   /**
-   * The estate line. SMG publishes Combined at period grain but not for the
-   * rolling snapshot windows, so this falls back to pooling more often than
-   * the market lines do.
+   * The one rollup line, over whatever the filter left.
+   *
+   * Both of SMG's own rollups are offered as candidates — the Combined row and
+   * the per-market rows — because `publishedMarketCells` matches them by
+   * response coverage and returns one only when exactly one qualifies. So the
+   * line stays identical to the SMG portal in the two cases where SMG has
+   * published the same set: the whole estate, and a single market. Filter to a
+   * leader and nothing covers that set, so it pools, which is what the fallback
+   * is for.
+   *
+   * SMG publishes Combined at period grain but not for the rolling snapshot
+   * windows, so the estate line pools more often than a market line does.
    */
   const hrgSummary = useMemo(() => {
     // Always store level now that the level picker is gone, so the estate is
     // simply both markets.
     const units = [...tn, ...va];
-    return summarise(units, metrics, matchPublished(combinedRows, units, metrics));
-  }, [tn, va, metrics, combinedRows]);
+    return summarise(units, metrics, matchPublished([...publishedRows, ...combinedRows], units, metrics));
+  }, [tn, va, metrics, publishedRows, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
@@ -455,15 +461,20 @@ export default function SurveyDataClient({
     });
   }, [listed, sort]);
 
-  const summaryRows = useMemo(() => {
-    const out: { label: string; row: UnitRow }[] = [];
-    if (tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
-    if (vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
-    // Only when both markets are on screen: with one market showing, the HRG
-    // row would just restate the single market row above it.
-    if (hrgSummary && tn.length > 0 && va.length > 0) out.push({ label: "HRG", row: hrgSummary });
-    return out;
-  }, [tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
+  /**
+   * One rollup, named after whatever is selected.
+   *
+   * The market split used to be pinned here as separate TN and VA lines, from
+   * when TN/VA was the only cut the tab offered. Now that the filter can name
+   * any slice, the rollup follows it: pick VA and the line is VA, pick a leader
+   * and it is theirs. Unfiltered it covers the estate and says so.
+   */
+  const summaryLabel = `Total - ${storeFilter.label ?? "HRG"}`;
+
+  const summaryRows = useMemo(
+    () => (hrgSummary ? [{ label: summaryLabel, row: hrgSummary }] : []),
+    [hrgSummary, summaryLabel],
+  );
 
   const colCount = metrics.length + 3;
 
@@ -693,9 +704,9 @@ export default function SurveyDataClient({
 
                 {!loading && sorted.map((u) => <DataRow key={u.key} row={u} metrics={metrics} />)}
 
-                {/* Market and company rollups, pinned below the stores rather
-                    than splitting the list into sections. Whichever lands first
-                    carries the rule that divides them from the store rows. */}
+                {/* The rollup, pinned below the stores rather than splitting
+                    the list into sections, and named after whatever the filter
+                    selected. */}
                 {!loading &&
                   summaryRows.map((s, i) => (
                     <SummaryRow key={s.label} label={s.label} row={s.row} metrics={metrics} first={i === 0} />
@@ -707,7 +718,7 @@ export default function SurveyDataClient({
 
         <p className="text-xs text-gray-500 mt-3">
           Visit date — a guest&apos;s response counts on the day they visited, not the day they
-          answered. Market and HRG lines are pooled across stores, weighted by survey count.
+          answered. The total line is pooled across stores, weighted by survey count.
         </p>
 
         {/* Always store-level with its own grain and range, so it can span a
@@ -731,6 +742,7 @@ export default function SurveyDataClient({
           refreshKey={refreshKey}
           fetchKey={zcaseFetchKey}
           stores={zcaseStores}
+          totalLabel={summaryLabel}
         />
       </main>
     </div>
