@@ -7,6 +7,7 @@ import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
+import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader } from "@/components/StoreFilter";
 import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
@@ -192,12 +193,19 @@ function summarise(
   return { key: "", name: "", label: "", surveys: surveys || null, sales: sales || null, cells };
 }
 
-export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function SurveyDataClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
 
   const [periodSel, setPeriodSel] = useState<string>("");
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
+  const storeFilter = useStoreFilter(leaders);
   // Opens on biggest-selling first, the order the table used to build in.
   const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
@@ -351,8 +359,17 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
     return [...withSales, ...missing];
   }, [unitRows, salesByStore]);
 
-  const tn = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "TN"), [rows]);
-  const va = useMemo(() => rows.filter((u) => marketOf(u.key, u.name) === "VA"), [rows]);
+  // Leader-filtered, because these feed the TN/VA/HRG summary rows and nothing
+  // else. A rollup that averaged the whole market while the table below listed
+  // one leader's stores would be quietly comparing two different things.
+  const tn = useMemo(
+    () => rows.filter((u) => marketOf(u.key, u.name) === "TN" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
+  );
+  const va = useMemo(
+    () => rows.filter((u) => marketOf(u.key, u.name) === "VA" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
+  );
 
   /** SMG's region-manager rows for whichever window is selected. */
   const publishedRows = useMemo(() => {
@@ -376,20 +393,26 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
     return source.filter((r) => r.unitKey === COMBINED_KEY);
   }, [selected, scores, snapshots]);
 
-  const tnSummary = useMemo(() => summarise(tn, metrics, matchPublished(publishedRows, tn, metrics)), [tn, metrics, publishedRows]);
-  const vaSummary = useMemo(() => summarise(va, metrics, matchPublished(publishedRows, va, metrics)), [va, metrics, publishedRows]);
-
   /**
-   * The estate line. SMG publishes Combined at period grain but not for the
-   * rolling snapshot windows, so this falls back to pooling more often than
-   * the market lines do.
+   * The one rollup line, over whatever the filter left.
+   *
+   * Both of SMG's own rollups are offered as candidates — the Combined row and
+   * the per-market rows — because `publishedMarketCells` matches them by
+   * response coverage and returns one only when exactly one qualifies. So the
+   * line stays identical to the SMG portal in the two cases where SMG has
+   * published the same set: the whole estate, and a single market. Filter to a
+   * leader and nothing covers that set, so it pools, which is what the fallback
+   * is for.
+   *
+   * SMG publishes Combined at period grain but not for the rolling snapshot
+   * windows, so the estate line pools more often than a market line does.
    */
   const hrgSummary = useMemo(() => {
     // Always store level now that the level picker is gone, so the estate is
     // simply both markets.
     const units = [...tn, ...va];
-    return summarise(units, metrics, matchPublished(combinedRows, units, metrics));
-  }, [tn, va, metrics, combinedRows]);
+    return summarise(units, metrics, matchPublished([...publishedRows, ...combinedRows], units, metrics));
+  }, [tn, va, metrics, publishedRows, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
@@ -398,13 +421,8 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
    */
   const listed = useMemo(
     () =>
-      rows.filter((u) => {
-        const m = marketOf(u.key, u.name);
-        if (m === "TN") return showTN;
-        if (m === "VA") return showVA;
-        return true;
-      }),
-    [rows, showTN, showVA],
+      rows.filter((u) => inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
   );
 
   /**
@@ -416,14 +434,9 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
    * table happens to list would hide them.
    */
   const zcaseStores = useMemo(() => {
-    if (showTN && showVA) return null;
-    return Object.keys(STORE_LABELS).filter((key) => {
-      const m = marketOf(key, "");
-      if (m === "TN") return showTN;
-      if (m === "VA") return showVA;
-      return true;
-    });
-  }, [showTN, showVA]);
+    if (!storeFilter.allowed) return null;
+    return Object.keys(STORE_LABELS).filter((key) => inFilter(storeFilter.allowed, STORE_LABELS[key]));
+  }, [storeFilter.allowed]);
 
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
@@ -448,13 +461,20 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
     });
   }, [listed, sort]);
 
-  const summaryRows = useMemo(() => {
-    const out: { label: string; row: UnitRow }[] = [];
-    if (showTN && tnSummary && tn.length > 0) out.push({ label: "TN", row: tnSummary });
-    if (showVA && vaSummary && va.length > 0) out.push({ label: "VA", row: vaSummary });
-    if (hrgSummary && showTN && showVA) out.push({ label: "HRG", row: hrgSummary });
-    return out;
-  }, [showTN, showVA, tnSummary, vaSummary, hrgSummary, tn.length, va.length]);
+  /**
+   * One rollup, named after whatever is selected.
+   *
+   * The market split used to be pinned here as separate TN and VA lines, from
+   * when TN/VA was the only cut the tab offered. Now that the filter can name
+   * any slice, the rollup follows it: pick VA and the line is VA, pick a leader
+   * and it is theirs. Unfiltered it covers the estate and says so.
+   */
+  const summaryLabel = `Total - ${storeFilter.label ?? "HRG"}`;
+
+  const summaryRows = useMemo(
+    () => (hrgSummary ? [{ label: summaryLabel, row: hrgSummary }] : []),
+    [hrgSummary, summaryLabel],
+  );
 
   const colCount = metrics.length + 3;
 
@@ -581,18 +601,9 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
               ))}
             </select>
 
-            {/* The only cut the tab offers. Both the scores table and the
-                ZCases section follow these. */}
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={showVA} onChange={(e) => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-                VA
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={showTN} onChange={(e) => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-                TN
-              </label>
-            </div>
+            {/* The cut the tab offers. The scores table, its TN/VA/HRG summary
+                rows and the ZCases section all follow it. */}
+            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
 
             {selectedWindow && (
               <span className="text-xs text-gray-500">
@@ -693,9 +704,9 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
 
                 {!loading && sorted.map((u) => <DataRow key={u.key} row={u} metrics={metrics} />)}
 
-                {/* Market and company rollups, pinned below the stores rather
-                    than splitting the list into sections. Whichever lands first
-                    carries the rule that divides them from the store rows. */}
+                {/* The rollup, pinned below the stores rather than splitting
+                    the list into sections, and named after whatever the filter
+                    selected. */}
                 {!loading &&
                   summaryRows.map((s, i) => (
                     <SummaryRow key={s.label} label={s.label} row={s.row} metrics={metrics} first={i === 0} />
@@ -707,13 +718,17 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
 
         <p className="text-xs text-gray-500 mt-3">
           Visit date — a guest&apos;s response counts on the day they visited, not the day they
-          answered. Market and HRG lines are pooled across stores, weighted by survey count.
+          answered.
         </p>
 
         {/* Always store-level with its own grain and range, so it can span a
             longer history than whichever single period the table is showing. */}
         <div className="mt-5">
-          <SurveyTrendChart dateBasis={DATE_BASIS} showTN={showTN} showVA={showVA} />
+          <SurveyTrendChart
+            dateBasis={DATE_BASIS}
+            showTN={marketShown(storeFilter.allowed, "TN")}
+            showVA={marketShown(storeFilter.allowed, "VA")}
+          />
         </div>
 
         {/* Shares the page's period picker. ZCases window on the guest's visit
@@ -727,6 +742,7 @@ export default function SurveyDataClient({ tabs, isAdmin }: { tabs: Tab[]; isAdm
           refreshKey={refreshKey}
           fetchKey={zcaseFetchKey}
           stores={zcaseStores}
+          totalLabel={summaryLabel}
         />
       </main>
     </div>

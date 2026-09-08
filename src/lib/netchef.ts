@@ -10,6 +10,8 @@ export type LocationData = {
   actualCostDollars: number | null;
   variancePct: number | null;
   varianceDollars: number | null;
+  /** NetChef own sales denominator behind the percentages above. See LocationReport. */
+  salesBase: number | null;
 };
 
 export type NcReport = {
@@ -235,7 +237,14 @@ export const LOCATION_NAMES: Record<number, string> = {
 
 // ── Report fetch ──────────────────────────────────────────────────────────────
 
-type LocationReport = { actualCostPct: number | null; actualCostDollars: number | null; variancePct: number | null; varianceDollars: number | null };
+/**
+ * salesBase is NetChef's own denominator — the divisorValue behind
+ * actualCostPercent — not the PAR net sales the Food Cost tables display. It is
+ * what blended percentages have to be weighted by: weighting NetChef ratios with
+ * PAR sales mixes two systems' idea of a week and lands a hair off the store
+ * percentages sitting above the total.
+ */
+type LocationReport = { actualCostPct: number | null; actualCostDollars: number | null; variancePct: number | null; varianceDollars: number | null; salesBase: number | null };
 const locationReportCache = new Map<string, { report: LocationReport; fetchedAt: number }>();
 
 export async function fetchLocationReport(
@@ -264,6 +273,11 @@ export async function fetchLocationReport(
     pagingInfo: { page: 1, start: 0, limit: 1000000 },
   }) as Record<string, unknown>;
 
+  // Tracks whichever payload `totals` came from. The retry below replaces the
+  // totals but the rows have to move with them — salesBase is read off the row
+  // array, and pairing a retried total with the first attempt's rows would
+  // weight one window's cost by another window's sales.
+  let payload = data;
   let totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
   const isBlank = (t: Record<string, unknown> | undefined): t is undefined =>
     !t || (Number(t.actualCost) === 0 && Number(t.actualCostPercent) === 0);
@@ -275,10 +289,11 @@ export async function fetchLocationReport(
       extraCriteriaMap: { startDate: toMMDDYYYY(startDate), endDate: toMMDDYYYY(endDate), locationIdFilter: locationId, isConsolidated: false },
       pagingInfo: { page: 1, start: 0, limit: 1000000 },
     }) as Record<string, unknown>;
+    payload = retry;
     totals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
     if (isBlank(totals)) {
       console.log("[NC] blank/missing totalSummaries for location", locationId, "after retry — giving up");
-      return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null };
+      return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null, salesBase: null };
     }
   }
 
@@ -287,12 +302,12 @@ export async function fetchLocationReport(
   // the old 425/689-only dump could not show whether the response belonged to the
   // range requested. salesBase is the row-level divisorValue, the denominator
   // behind actualCostPercent, and is the field that gives the window away.
-  const firstRow = (data.rows as Record<string, unknown>[] | undefined)?.[0];
+  const firstRow = (payload.rows as Record<string, unknown>[] | undefined)?.[0];
   console.log(
     `[NC] loc ${locationId} ${startDate}..${endDate}` +
       ` actualCost=${totals.actualCost} pct=${totals.actualCostPercent}` +
       ` salesBase=${firstRow?.divisorValue ?? "n/a"}` +
-      ` summaries=${(data.totalSummaries as unknown[])?.length ?? 0}`,
+      ` summaries=${(payload.totalSummaries as unknown[])?.length ?? 0}`,
   );
 
   const actualCostPct     = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : null;
@@ -300,7 +315,26 @@ export async function fetchLocationReport(
   const variancePct       = totals.valueVariancePercent != null ? Number(totals.valueVariancePercent) : null;
   const varianceDollars   = totals.valueVariance        != null ? Number(totals.valueVariance)        : null;
 
-  const report: LocationReport = { actualCostPct, actualCostDollars, variancePct, varianceDollars };
+  // divisorValue is the denominator NetChef itself divided by, so prefer it.
+  // When the rows come back empty but the totals do not, recover the same
+  // number from the totals instead of returning null: a null base drops the
+  // store out of every weighted average downstream, silently and invisibly,
+  // which is worse than a figure carrying one rounding step.
+  //
+  // Either pair recovers it, because cost and variance are percentages of the
+  // same sales. Variance is worth trying second rather than not at all: a store
+  // with a variance figure and no cost figure would otherwise be dropped from
+  // the variance blend for want of a denominator it can supply itself.
+  const ratioBase = (dollars: number | null, pct: number | null) =>
+    pct != null && pct !== 0 && dollars != null ? Math.abs(dollars / (pct / 100)) : null;
+
+  const rawBase = firstRow?.divisorValue != null ? Number(firstRow.divisorValue) : null;
+  const salesBase =
+    rawBase != null && rawBase > 0
+      ? rawBase
+      : ratioBase(actualCostDollars, actualCostPct) ?? ratioBase(varianceDollars, variancePct);
+
+  const report: LocationReport = { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
   locationReportCache.set(cKey, { report, fetchedAt: Date.now() });
   return report;
 }
@@ -320,11 +354,11 @@ export async function fetchNcReport(startDate: string, endDate: string): Promise
   const locations: LocationData[] = await Promise.all(
     locs.map(async loc => {
       try {
-        const { actualCostPct, actualCostDollars, variancePct, varianceDollars } = await fetchLocationReport(loc.id, startDate, endDate);
-        return { locationName: loc.name, locationId: loc.id, actualCostPct, actualCostDollars, variancePct, varianceDollars };
+        const { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase } = await fetchLocationReport(loc.id, startDate, endDate);
+        return { locationName: loc.name, locationId: loc.id, actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
       } catch (err) {
         console.error("[NC] error for location", loc.name, ":", err);
-        return { locationName: loc.name, locationId: loc.id, actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null };
+        return { locationName: loc.name, locationId: loc.id, actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null, salesBase: null };
       }
     })
   );

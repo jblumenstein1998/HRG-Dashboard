@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 
 /**
@@ -368,14 +369,21 @@ function subtotal(stores: ZuStore[]): ZuStats {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function ZUClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
 
   const [report, setReport] = useState<ZuReport | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [error, setError] = useState<string>("");
-  const [showTN, setShowTN] = useState(true);
-  const [showVA, setShowVA] = useState(true);
+  const storeFilter = useStoreFilter(leaders);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [members, setMembers] = useState<Record<string, MemberState>>({});
@@ -507,12 +515,7 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
   }, []);
   const allStores = report ? sortStores(report.stores) : [];
   const visible = sortStoresWithinMarkets(
-    allStores.filter((s) => {
-      const market = marketOf(s.label);
-      if (market === "TN" && !showTN) return false;
-      if (market === "VA" && !showVA) return false;
-      return true;
-    }),
+    allStores.filter((s) => inFilter(storeFilter.allowed, s.label)),
     storeSort,
     storeValue,
   );
@@ -525,25 +528,17 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
       ? report.total
       : subtotal(visible)
     : null;
-  const totalsLabel = showingEverything
-    ? "All Stores"
-    : showTN && !showVA
-      ? "Tennessee"
-      : showVA && !showTN
-        ? "Virginia"
-        : "Selected";
+  // Names whatever the filter selected — "Total - VA", "Total - Tommy
+  // Demorest" — so the row says what it is adding up, and reads the same as
+  // the POS and SMG totals. Unfiltered it is the estate, which HRG calls HRG.
+  const totalsLabel = `Total - ${storeFilter.label ?? "HRG"}`;
 
   /**
    * The grid answers to the same controls as the table above it, so the two
    * always describe the same set of stores.
    */
   const visibleTestStores = sortStoresWithinMarkets(
-    (tests?.stores ?? []).filter((s) => {
-      const market = marketOf(s.label);
-      if (market === "TN" && !showTN) return false;
-      if (market === "VA" && !showVA) return false;
-      return true;
-    }),
+    (tests?.stores ?? []).filter((s) => inFilter(storeFilter.allowed, s.label)),
     testSort,
     testStoreValue,
   );
@@ -552,7 +547,12 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      {/* Header and legend pinned together, the way every other tab does it.
+          Sticking the header alone left the compliance goals — and now the
+          store filter beside them — scrolling away from the table they
+          describe. */}
+      <div className="sticky top-0 z-20">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
@@ -583,26 +583,6 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-3 flex-1 min-w-0">
-
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showVA}
-                onChange={(e) => setShowVA(e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              VA
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showTN}
-                onChange={(e) => setShowTN(e.target.checked)}
-                className="rounded border-gray-300"
-              />
-              TN
-            </label>
-
             <button
               onClick={() => void load(true)}
               disabled={refreshing || status === "loading"}
@@ -625,7 +605,14 @@ export default function ZUClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: bool
             {" / "}
             <span className="text-red-600 font-medium">&lt;{COMPLIANCE_THRESHOLD}%</span>
           </span>
+          <StoreFilterPicker
+            leaders={leaders}
+            value={storeFilter.value}
+            onChange={storeFilter.setValue}
+            className="ml-auto"
+          />
         </div>
+      </div>
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">

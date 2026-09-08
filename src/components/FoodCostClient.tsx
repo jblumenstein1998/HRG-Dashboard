@@ -8,6 +8,7 @@ import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
 
 const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
@@ -23,6 +24,9 @@ type LocationData = {
   actualCostDollars: number | null;
   variancePct: number | null;
   varianceDollars: number | null;
+  /** NetChef's own sales denominator behind the percentages above — what the
+   *  total row blends on. Not the PAR sales shown in the Sales column. */
+  salesBase: number | null;
 };
 
 type ItemData = {
@@ -47,6 +51,63 @@ function fmtPct(v: number | null, decimals = 1): string {
   if (v === null) return "—";
   if (v < 0) return `(${Math.abs(v).toFixed(decimals)}%)`;
   return `${v.toFixed(decimals)}%`;
+}
+
+/**
+ * Blends store percentages into one, weighted by size rather than averaged.
+ *
+ * A store doing $84k of business has to move the blended rate further than one
+ * doing $28k, so a plain mean of the percentages is not a total — it is the
+ * average of twelve unrelated ratios.
+ *
+ * The weight is NetChef's own sales base — the denominator behind the very
+ * percentages being blended — not the PAR net sales in the Sales column. Those
+ * two disagree slightly about a week, and weighting NetChef ratios by PAR sales
+ * lands the total a hair off the store rows above it. The Sales column stays on
+ * screen as a size reference; it is not what the maths runs on.
+ *
+ * Rows missing either half are skipped rather than counted as zero, which would
+ * quietly drag the blend toward it.
+ */
+function weightedPct(entries: { pct: number | null; salesBase: number | null }[]): Blend {
+  let weighted = 0;
+  let sales = 0;
+  let used = 0;
+  for (const e of entries) {
+    if (e.pct === null || e.salesBase === null || e.salesBase <= 0) continue;
+    weighted += e.pct * e.salesBase;
+    sales += e.salesBase;
+    used++;
+  }
+  return { pct: sales > 0 ? weighted / sales : null, used, skipped: entries.length - used };
+}
+
+/**
+ * A blended percentage and how much of the table it actually covers.
+ *
+ * The count is carried because a store with no percentage, or none of the
+ * sales behind one, cannot be blended and has to be left out — and a total
+ * that quietly describes eleven of the twelve stores listed above it is worse
+ * than one that admits it. `TotalPct` marks the figure when `skipped` is
+ * non-zero, so the omission is on screen rather than in the arithmetic.
+ */
+type Blend = { pct: number | null; used: number; skipped: number };
+
+/** A blended percentage, marked when it could not cover every row. */
+function TotalPct({ blend, decimals = 1 }: { blend: Blend; decimals?: number }) {
+  return (
+    <>
+      {fmtPct(blend.pct, decimals)}
+      {blend.skipped > 0 && (
+        <span
+          className="ml-0.5 cursor-help text-gray-400"
+          title={`Blended for ${blend.used}/${blend.used + blend.skipped} locations — excludes locations where no data is available`}
+        >
+          *
+        </span>
+      )}
+    </>
+  );
 }
 
 function fmtDollars(v: number | null): string {
@@ -131,12 +192,12 @@ function rangeToHistoryParams(key: RangeKey): { start: string; end?: string } {
 type RecentWeeksData = {
   weeks: string[];
   weekRanges: { start: string; end: string }[];
-  stores: { locationId: number; name: string; values: (number | null)[] }[];
+  stores: { locationId: number; name: string; values: (number | null)[]; salesBase: (number | null)[] }[];
 };
 
 type WeekItemPair = { prev: ItemData[] | "loading" | "error"; curr: ItemData[] | "loading" | "error" };
 
-function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean }) {
+function RecentWeeksTable({ allowed, totalLabel }: { allowed: Set<string> | null; totalLabel: string }) {
   const [data, setData] = useState<RecentWeeksData | null>(null);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -216,10 +277,7 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
           </tr>
         </thead>
         <tbody>
-          {data.stores.filter(s =>
-            (VA_STORES.includes(s.name) && showVA) ||
-            (TN_STORES.includes(s.name) && showTN)
-          ).map((store, i) => {
+          {data.stores.filter(s => inFilter(allowed, s.name)).map((store, i) => {
             const prev = store.values[0];
             const curr = store.values[1];
             const wow = prev !== null && curr !== null ? curr - prev : null;
@@ -268,6 +326,41 @@ function RecentWeeksTable({ showVA, showTN }: { showVA: boolean; showTN: boolean
               </Fragment>
             );
           })}
+          {(() => {
+            const shown = data.stores.filter(s => inFilter(allowed, s.name));
+            if (shown.length === 0) return null;
+            // One blended figure per week column, then the same week-over-week
+            // comparison the store rows make — computed from the blends rather
+            // than averaged from the stores' own changes, so the total's W/W
+            // agrees with its own two week figures.
+            const weekTotals = data.weeks.map((_, j) =>
+              weightedPct(shown.map(s => ({ pct: s.values[j], salesBase: s.salesBase?.[j] ?? null }))),
+            );
+            const prev = weekTotals[0].pct;
+            const curr = weekTotals[1].pct;
+            const wow = prev !== null && curr !== null ? curr - prev : null;
+            const absDelta = prev !== null && curr !== null ? Math.abs(curr) - Math.abs(prev) : null;
+            return (
+              <tr className="border-t-2 border-gray-200 bg-gray-50">
+                <td className="px-3 py-3" />
+                <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
+                {weekTotals.map((b, j) => (
+                  <td key={j} className="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">
+                    <TotalPct blend={b} decimals={2} />
+                  </td>
+                ))}
+                <td
+                  className={`px-4 py-3 text-right tabular-nums font-semibold ${
+                    absDelta === null ? "text-gray-400" :
+                    absDelta > 0 ? "text-red-600" :
+                    absDelta < 0 ? "text-green-600" : "text-gray-500"
+                  }`}
+                >
+                  {fmtWow(wow)}
+                </td>
+              </tr>
+            );
+          })()}
         </tbody>
       </table>
     </div>
@@ -313,6 +406,7 @@ function YoyMetricTable({
   currRange,
   priorRange,
   isLoading,
+  totalLabel,
 }: {
   title: string;
   metric: YoyMetric;
@@ -321,10 +415,22 @@ function YoyMetricTable({
   currRange: { start: string; end: string } | null;
   priorRange: { start: string; end: string } | null;
   isLoading: boolean;
+  totalLabel: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const pctKey  = metric === "cogs" ? "actualCostPct" : "variancePct";
+  const dollarsKey = metric === "cogs" ? "actualCostDollars" : "varianceDollars";
   const colorFn = metric === "cogs" ? actualColor : varianceColor;
+
+  const entry = (r: LocationData | null | undefined) =>
+    ({ pct: r?.[pctKey] ?? null, salesBase: r?.salesBase ?? null });
+  const currBlend = weightedPct(rows.map(entry));
+  const priorBlend = weightedPct(rows.map(r => entry(priorLocMap[r.locationId])));
+  const totalCurr = currBlend.pct;
+  const totalPrior = priorBlend.pct;
+  const totalChange = totalCurr !== null && totalPrior !== null ? totalCurr - totalPrior : null;
+  const totalAbsDelta =
+    totalCurr !== null && totalPrior !== null ? Math.abs(totalCurr) - Math.abs(totalPrior) : null;
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden w-fit">
@@ -382,6 +488,27 @@ function YoyMetricTable({
               );
             })
           )}
+          {rows.length > 0 && !isLoading && (
+            <tr className="border-t-2 border-gray-200 bg-gray-50">
+              <td className="px-3 py-3" />
+              <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${colorFn(totalPrior)}`}>
+                <TotalPct blend={priorBlend} decimals={2} />
+              </td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${colorFn(totalCurr)}`}>
+                <TotalPct blend={currBlend} decimals={2} />
+              </td>
+              <td
+                className={`px-4 py-3 text-right tabular-nums font-semibold ${
+                  totalAbsDelta === null ? "text-gray-400" :
+                  totalAbsDelta < 0 ? "text-green-600" :
+                  totalAbsDelta > 0 ? "text-red-600" : "text-gray-500"
+                }`}
+              >
+                {fmtYoyChange(totalChange)}
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -391,13 +518,13 @@ function YoyMetricTable({
 function VarianceYoyTable({
   dateOptions,
   reportMeta,
-  showVA,
-  showTN,
+  allowed,
+  totalLabel,
 }: {
   dateOptions: DateOption[];
   reportMeta: { startDate: string; endDate: string } | null;
-  showVA: boolean;
-  showTN: boolean;
+  allowed: Set<string> | null;
+  totalLabel: string;
 }) {
   const [currEnd,   setCurrEnd]   = useState("");
   const [priorEnd,  setPriorEnd]  = useState("");
@@ -462,10 +589,7 @@ function VarianceYoyTable({
   const rowsFor = (metric: YoyMetric) => {
     const pctKey = metric === "cogs" ? "actualCostPct" : "variancePct";
     return Object.values(currLocMap)
-      .filter(l =>
-        (VA_STORES.includes(l.locationName) && showVA) ||
-        (TN_STORES.includes(l.locationName) && showTN)
-      )
+      .filter(l => inFilter(allowed, l.locationName))
       .sort((a, b) => {
         const aCurr  = a[pctKey];
         const aPrior = (priorLocMap[a.locationId] as LocationData | null | undefined)?.[pctKey] ?? null;
@@ -493,6 +617,7 @@ function VarianceYoyTable({
         currRange={currRange}
         priorRange={priorRange}
         isLoading={isLoading}
+        totalLabel={totalLabel}
       />
       <YoyMetricTable
         title="COGS — Comparison"
@@ -502,6 +627,7 @@ function VarianceYoyTable({
         currRange={currRange}
         priorRange={priorRange}
         isLoading={isLoading}
+        totalLabel={totalLabel}
       />
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-4 shrink-0">
@@ -851,6 +977,7 @@ function RankTable({
   onToggle,
   marketGroups,
   salesByName,
+  totalLabel,
   sortByMagnitude,
 }: {
   title: string;
@@ -870,6 +997,11 @@ function RankTable({
   itemsCache?: Record<number, ItemData[] | "loading" | "error">;
   onToggle?: (row: LocationData) => void;
   marketGroups?: { label: string; rows: LocationData[] }[];
+  /** Caption for the total row — omit to leave the table without one. Names
+   *  whatever is currently filtered ("Total", "VA Total", "Tommy Demorest
+   *  Total") so the row says what it is summing rather than always claiming to
+   *  be the estate. */
+  totalLabel?: string;
   /** Net sales for the same window as the costs, keyed by location name. Omit to
    *  drop the Sales column entirely rather than show a column of dashes. */
   salesByName?: Record<string, number>;
@@ -885,6 +1017,33 @@ function RankTable({
   const red    = rows.filter(r => colorFn(r[pctKey] as number | null).includes("red")).length;
   const cardRef = useRef<HTMLDivElement>(null);
   const colCount = salesByName ? 5 : 4;
+
+  /**
+   * The total row.
+   *
+   * Dollars and the Sales column are plain sums of what is displayed. The
+   * percentage is not — it is blended by `weightedPct`, on NetChef's own sales
+   * base, so it agrees with the store percentages stacked above it rather than
+   * with the PAR figures in the Sales column beside it. Dividing the two summed
+   * columns would give a slightly different number; the percentages are
+   * NetChef's, so their blend has to be too.
+   *
+   * Rows with no cost figure are excluded rather than counted as zero, which
+   * would quietly drag the total down.
+   */
+  const total = (() => {
+    const usable = rows.filter(r => r[dollarsKey] !== null);
+    if (usable.length === 0) return null;
+    const dollars = usable.reduce((sum, r) => sum + (r[dollarsKey] as number), 0);
+    const sales = usable.reduce((sum, r) => sum + (salesByName?.[r.locationName] ?? 0), 0);
+    // Blended over every displayed row, not just the ones with dollars: the
+    // sums above cover what they can and the blend reports its own coverage,
+    // rather than the two quietly describing different sets of stores.
+    const blend = weightedPct(
+      rows.map(r => ({ pct: r[pctKey] as number | null, salesBase: r.salesBase })),
+    );
+    return { dollars, sales, blend };
+  })();
 
   // Null means the order the rows came in with, which is the meaningful default -
   // best COGS first, smallest variance first. Sorting is a detour from that, so a
@@ -1065,6 +1224,25 @@ function RankTable({
                     </td>
                   </tr>
                 )}
+                {/* Held back until the last store is in — a total over a
+                    partial fetch is a wrong number, not an early one. */}
+                {totalLabel && total && !loading && (
+                  <tr className="border-t-2 border-gray-200 bg-gray-50">
+                    <td className="px-3 py-3" />
+                    <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
+                    {salesByName && (
+                      <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">
+                        {fmtDollars(total.sales)}
+                      </td>
+                    )}
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-700">
+                      {fmtDollars(total.dollars)}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-semibold tabular-nums ${colorFn(total.blend.pct)}`}>
+                      <TotalPct blend={total.blend} decimals={pctDecimals} />
+                    </td>
+                  </tr>
+                )}
                 {rows.length === 0 && !loading && (
                   <tr><td colSpan={colCount} className="px-4 py-8 text-center text-sm text-gray-400">No data</td></tr>
                 )}
@@ -1180,9 +1358,8 @@ function useCategoryMatrix(startDate: string, endDate: string): { data: Category
   return { data, status: !current ? "loading" : data ? "done" : "error" };
 }
 
-function visibleLocations(data: CategoryMatrix, showVA: boolean, showTN: boolean) {
-  const visible = new Set([...(showVA ? VA_STORES : []), ...(showTN ? TN_STORES : [])]);
-  return data.locations.filter(l => visible.has(l.locationName));
+function visibleLocations(data: CategoryMatrix, allowed: Set<string> | null) {
+  return data.locations.filter(l => inFilter(allowed, l.locationName));
 }
 
 function MetricToggle({ metric, setMetric }: { metric: MatrixMetric; setMetric: (m: MatrixMetric) => void }) {
@@ -1388,13 +1565,11 @@ function HighlightLabel(props: {
 function CategoryBarChart({
   startDate,
   endDate,
-  showVA,
-  showTN,
+  allowed,
 }: {
   startDate: string;
   endDate: string;
-  showVA: boolean;
-  showTN: boolean;
+  allowed: Set<string> | null;
 }) {
   const { data, status } = useCategoryMatrix(startDate, endDate);
   const [metric, setMetric] = useState<MatrixMetric>("cogs");
@@ -1437,10 +1612,10 @@ function CategoryBarChart({
     </div>
   );
 
-  const columns = visibleLocations(data, showVA, showTN);
+  const columns = visibleLocations(data, allowed);
   if (!columns.length) return shell(
     <div className="h-20 flex items-center justify-center">
-      <span className="text-xs text-gray-400">Select VA or TN to show locations</span>
+      <span className="text-xs text-gray-400">No locations match the current filters</span>
     </div>
   );
 
@@ -1601,7 +1776,15 @@ function CategoryBarChart({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function FoodCostClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
   const [dateOptions, setDateOptions] = useState<DateOption[]>([]);
   const [datesLoading, setDatesLoading] = useState(true);
@@ -1621,8 +1804,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const [cogsItemsCache, setCogsItemsCache] = useState<Record<number, ItemData[] | "loading" | "error">>({});
   const [varItemsCache,  setVarItemsCache]  = useState<Record<number, ItemData[] | "loading" | "error">>({});
 
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
+  const storeFilter = useStoreFilter(leaders);
 
   const fetchData = useCallback(async (start: string, end: string, bust = false) => {
     if (!start || !end) return;
@@ -1761,24 +1943,32 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
   const allLocations = Object.values(locMap);
   const loading = loadingIds.size > 0;
 
-  const byActual = [...allLocations]
-    .filter(l => l.actualCostPct !== null)
-    .sort((a, b) => (a.actualCostPct ?? 0) - (b.actualCostPct ?? 0));
+  // A location NetChef returned nothing for keeps its row, showing dashes, the
+  // way the Comparison and Recent Weeks tables already show it. Dropping it
+  // instead made it vanish from a table whose header still counted it, so the
+  // total silently covered nine stores while claiming twelve — and the store
+  // that failed to report is usually the one worth chasing.
+  //
+  // Ranking them needs the null sunk explicitly. The old `?? 0` was harmless
+  // only because the filter above removed nulls first; left as it was, a store
+  // with no data would rank as 0% cost and head the table as the best performer.
+  const sinkingNull =
+    (value: (l: LocationData) => number | null) => (a: LocationData, b: LocationData) => {
+      const va = value(a);
+      const vb = value(b);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return va - vb;
+    };
 
-  const vaActual = byActual.filter(l => VA_STORES.includes(l.locationName));
-  const tnActual = byActual.filter(l => TN_STORES.includes(l.locationName));
-  const cogsRows = byActual.filter(l =>
-    (VA_STORES.includes(l.locationName) && showVA) ||
-    (TN_STORES.includes(l.locationName) && showTN)
-  );
+  const byActual = [...allLocations].sort(sinkingNull(l => l.actualCostPct));
+
+  const cogsRows = byActual.filter(l => inFilter(storeFilter.allowed, l.locationName));
 
   const byVariance = [...allLocations]
-    .filter(l => l.variancePct !== null)
-    .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
-    .filter(l =>
-      (VA_STORES.includes(l.locationName) && showVA) ||
-      (TN_STORES.includes(l.locationName) && showTN)
-    );
+    .sort(sinkingNull(l => (l.variancePct === null ? null : Math.abs(l.variancePct))))
+    .filter(l => inFilter(storeFilter.allowed, l.locationName));
 
   const fetchedLabel = reportMeta
     ? `${fmtDate(reportMeta.startDate)} – ${fmtDate(reportMeta.endDate)} · ${new Date(reportMeta.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
@@ -1909,14 +2099,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             </span>
           </span>
           <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input type="checkbox" checked={showVA} onChange={e => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-              VA
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-              <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-              TN
-            </label>
+            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
           </div>
         </div>
       </div>
@@ -1963,6 +2146,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               itemsCache={cogsItemsCache}
               onToggle={handleToggle}
               salesByName={salesByName}
+              totalLabel={totalLabelFor(storeFilter)}
             />
             <RankTable
               title="Variance"
@@ -1981,6 +2165,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
               itemsCache={varItemsCache}
               onToggle={handleToggle}
               salesByName={salesByName}
+              totalLabel={totalLabelFor(storeFilter)}
               sortByMagnitude
             />
           </div>
@@ -1991,8 +2176,7 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             <CategoryBarChart
               startDate={startDate}
               endDate={endDate}
-              showVA={showVA}
-              showTN={showTN}
+              allowed={storeFilter.allowed}
             />
           </div>
         )}
@@ -2002,14 +2186,14 @@ export default function FoodCostClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
             <VarianceYoyTable
               dateOptions={dateOptions}
               reportMeta={reportMeta}
-              showVA={showVA}
-              showTN={showTN}
+              allowed={storeFilter.allowed}
+              totalLabel={totalLabelFor(storeFilter)}
             />
           </div>
         )}
 
         <div className="mt-6">
-          <RecentWeeksTable showVA={showVA} showTN={showTN} />
+          <RecentWeeksTable allowed={storeFilter.allowed} totalLabel={totalLabelFor(storeFilter)} />
         </div>
 
         <HistoryChart />

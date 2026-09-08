@@ -56,13 +56,16 @@ export async function GET() {
     const locationIds = Object.keys(LOCATION_NAMES).map(Number);
 
     // Fetch one week at a time (12 concurrent) to avoid overwhelming the Net-Chef session
-    const weekResults: (number | null)[][] = [];
+    // NetChef's own sales base rides along with the percentage: the table blends
+    // stores into a weighted total, and a percentage on its own carries no weight
+    // to do it with. Cheap to include — the same report call already has it.
+    const weekResults: ({ pct: number | null; salesBase: number | null })[][] = [];
     for (const w of weeks) {
       const weekData = await Promise.all(
         locationIds.map(id =>
           fetchLocationReport(id, w.startDate, w.endDate)
-            .then(r => r.variancePct)
-            .catch(() => null)
+            .then(r => ({ pct: r.variancePct, salesBase: r.salesBase }))
+            .catch(() => ({ pct: null, salesBase: null }))
         )
       );
       weekResults.push(weekData);
@@ -71,7 +74,8 @@ export async function GET() {
     const stores = locationIds.map((id, locIdx) => ({
       locationId: id,
       name: LOCATION_NAMES[id],
-      values: weekResults.map(weekData => weekData[locIdx]),
+      values: weekResults.map(weekData => weekData[locIdx].pct),
+      salesBase: weekResults.map(weekData => weekData[locIdx].salesBase),
     }));
 
     // Sort by most recent week, ascending absolute value (best first)

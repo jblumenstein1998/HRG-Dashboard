@@ -8,8 +8,9 @@ import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { RangeKey, PERIODS } from "@/lib/fiscal";
-import { groupBranches, getStoreLabel, getStoreSection } from "@/lib/stores";
+import { groupBranches, getStoreLabel, getStoreSection, type StoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import { TOTAL_TIME_TIERS, WINDOW_TIME_TIERS, fmtGoalSecs, goalColor, lookupMetric } from "@/lib/salesTierGoals";
 
 const QUICK_TOGGLE: { key: RangeKey; label: string }[] = [
@@ -28,7 +29,15 @@ const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
   ...PERIODS.map((p) => ({ key: `p${p.period}` as RangeKey, label: `P${p.period} (Full)` })),
 ];
 
-export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function DashboardClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
   const latestFetchId = useRef(0);
   const branchesLoaded = useRef(false);
@@ -46,8 +55,7 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
   const [productivityByStoreId, setProductivityByStoreId] = useState<Record<string, number | null>>({});
   const [driveThruLabel, setDriveThruLabel] = useState("");
   const [salesLabel, setSalesLabel] = useState("");
-  const [showVA, setShowVA] = useState(true);
-  const [showTN, setShowTN] = useState(true);
+  const storeFilter = useStoreFilter(leaders);
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -120,9 +128,12 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
       .catch(err => console.error("[DriveThru] sales-tier fetch failed", err));
   }, [rangeKey]);
 
+  // One filter, so a branch is either in the chosen slice or not. Branches with
+  // no section are still dropped — that predates the filter and means a store
+  // BerryAI returned that lib/stores.ts doesn't know about.
   const visibleBranches = branches.filter(b => {
     const section = getStoreSection(b);
-    return (section === "Virginia" && showVA) || (section === "Tennessee" && showTN);
+    return section !== null && inFilter(storeFilter.allowed, getStoreLabel(b));
   });
 
   // Stagger card reveal after data loads — cards pop in one-by-one at 60ms each
@@ -308,16 +319,7 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
               {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showVA} onChange={e => setShowVA(e.target.checked)} className="rounded border-gray-300" />
-                  VA
-                </label>
-                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" checked={showTN} onChange={e => setShowTN(e.target.checked)} className="rounded border-gray-300" />
-                  TN
-                </label>
-              </div>
+              <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
               <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
                 {(["summary", "daypart"] as const).map((mode) => (
                   <button
@@ -376,35 +378,30 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
             )}
 
             {!branchesLoading && visibleBranches.length > 0 && (() => {
-              let gIdx = 0;
+              // The reveal stagger counts across the whole page, not per
+              // section, so each group is told where it starts rather than
+              // sharing a mutable counter through the map.
+              const groups = groupBranches(visibleBranches).filter(g => g.branches.length > 0);
+              let startIndex = 0;
               return (
                 <div className="flex flex-col gap-8">
-                  {groupBranches(visibleBranches).map(({ section, branches: sectionBranches }) =>
-                    sectionBranches.length > 0 ? (
-                      <div key={section}>
-                        <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
-                          {section}
-                        </h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {sectionBranches.map(branch => {
-                            const visible = gIdx++ < revealedCount;
-                            const salesForTier = lookupMetric(branch, getMetrics(branch), salesByStoreId) ?? null;
-                            return (
-                              <LocationCard
-                                key={branch.id}
-                                branch={branch}
-                                metrics={visible ? getMetrics(branch) : null}
-                                loading={!visible}
-                                rangeLabel={rangeLabel}
-                                viewMode={viewMode}
-                                salesForTier={visible ? salesForTier : null}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : null
-                  )}
+                  {groups.map(({ section, branches: sectionBranches }) => {
+                    const from = startIndex;
+                    startIndex += sectionBranches.length;
+                    return (
+                      <SectionGroup
+                        key={section}
+                        section={section}
+                        branches={sectionBranches}
+                        startIndex={from}
+                        revealedCount={revealedCount}
+                        getMetrics={getMetrics}
+                        rangeLabel={rangeLabel}
+                        viewMode={viewMode}
+                        salesByStoreId={salesByStoreId}
+                      />
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -412,6 +409,13 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
             {!branchesLoading && visibleBranches.length === 0 && !error && (
               <div className="text-center py-20 text-gray-400">
                 <p className="text-lg font-medium">No locations found</p>
+                {/* Naming the filter is the difference between "nothing to
+                    show for this slice" and "the data failed to load". */}
+                {storeFilter.label && (
+                  <p className="text-sm mt-1">
+                    Nothing matches <span className="font-medium">{storeFilter.label}</span>.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -419,6 +423,72 @@ export default function DashboardClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmi
 
         <DriveThruTrendCharts branches={visibleBranches} />
       </main>
+    </div>
+  );
+}
+
+/**
+ * One state's worth of cards, under a header that copies them.
+ *
+ * Its own component purely so it can hold a ref: the grid used to be built
+ * inline in a `.map`, and a hook can't be called per iteration. The ref is what
+ * lets the header hand CopyableTitle *this* section's grid rather than the
+ * whole page — clicking "Virginia" copies the Virginia cards and nothing else.
+ *
+ * `startIndex` rather than a shared counter, for the same reason: the reveal
+ * stagger is numbered across the page, so each section has to be told where its
+ * own cards fall in that sequence.
+ */
+function SectionGroup({
+  section,
+  branches,
+  startIndex,
+  revealedCount,
+  getMetrics,
+  rangeLabel,
+  viewMode,
+  salesByStoreId,
+}: {
+  section: StoreSection;
+  branches: BranchStore[];
+  startIndex: number;
+  revealedCount: number;
+  getMetrics: (b: BranchStore) => StoreMetrics | null;
+  rangeLabel: string;
+  viewMode: "summary" | "daypart";
+  salesByStoreId: Record<string, number>;
+}) {
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div>
+      {/* Spacing lives on this wrapper, not on the grid: a margin on the copy
+          target itself gets picked up by the raw capture. */}
+      <div className="mb-3">
+        <CopyableTitle
+          title={section}
+          targetRef={gridRef}
+          className="text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-600"
+          heightBufferPx={40}
+        />
+      </div>
+      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {branches.map((branch, i) => {
+          const visible = startIndex + i < revealedCount;
+          const salesForTier = lookupMetric(branch, getMetrics(branch), salesByStoreId) ?? null;
+          return (
+            <LocationCard
+              key={branch.id}
+              branch={branch}
+              metrics={visible ? getMetrics(branch) : null}
+              loading={!visible}
+              rangeLabel={rangeLabel}
+              viewMode={viewMode}
+              salesForTier={visible ? salesForTier : null}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
