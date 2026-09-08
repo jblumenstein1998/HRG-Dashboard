@@ -101,7 +101,7 @@ function TotalPct({ blend, decimals = 1 }: { blend: Blend; decimals?: number }) 
       {blend.skipped > 0 && (
         <span
           className="ml-0.5 cursor-help text-gray-400"
-          title={`Blended over ${blend.used} of ${blend.used + blend.skipped} locations — the rest reported no figure for this window, or none of the sales behind one.`}
+          title={`Blended for ${blend.used}/${blend.used + blend.skipped} locations — excludes locations where no data is available`}
         >
           *
         </span>
