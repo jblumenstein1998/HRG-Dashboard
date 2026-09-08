@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { PARLocation } from "@/lib/par";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
-import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFilter } from "@/components/StoreFilter";
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
@@ -460,28 +460,38 @@ function MetricFigureCell({ figure, fmt }: { figure: MetricFigure; fmt: (v: numb
 }
 
 function MetricCompTable({
-  title, stores, loading, allowed, fmt,
+  title, stores, loading, filter, fmt,
 }: {
   title: string;
   stores: StoreMetricComp[];
   loading: boolean;
-  allowed: Set<string> | null;
+  filter: StoreFilter;
   fmt: (v: number) => string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
   // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
   // filtered table can't show one leader's stores under a market-wide average.
-  const tnStores = stores.filter(s => s.state === "TN" && inFilter(allowed, s.name));
-  const vaStores = stores.filter(s => s.state === "VA" && inFilter(allowed, s.name));
-  // A group with no stores is dropped rather than totalled. The state boxes
-  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
-  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
-  const groups = [
-    ...(tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
-  ];
-  const hrgStores = [...tnStores, ...vaStores];
+  const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  // Unfiltered, the markets are the split worth seeing, and an empty one is
+  // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
+  // selection reads as "VA sold nothing", not "no VA stores here".
+  //
+  // Filtered, the selection is the subtotal: one row under its own name, not a
+  // market split of it. "Total - Tommy Demorest" is the question being asked;
+  // splitting his three stores back into TN and VA answers a different one.
+  const groups = filter.label
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    : [
+        ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
+        ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+      ];
+
+  // HRG is deliberately not filtered. It is the benchmark the rows above are
+  // read against — narrowing it to the selection would make it restate the
+  // subtotal directly above it and leave nothing to compare to.
+  const hrgStores = stores;
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -522,7 +532,7 @@ function MetricCompTable({
                 </Fragment>
               ))}
               <tr className="bg-gray-100 border-t-2 border-gray-200">
-                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">Total - HRG</td>
                 {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={sumFigures(hrgStores, c.field)} fmt={fmt} />)}
               </tr>
             </>
@@ -577,26 +587,36 @@ function useAvgCheckComp() {
 }
 
 function AvgCheckCompTable({
-  stores, loading, allowed,
+  stores, loading, filter,
 }: {
   stores: StoreAvgCheckRaw[];
   loading: boolean;
-  allowed: Set<string> | null;
+  filter: StoreFilter;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
   // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
   // filtered table can't show one leader's stores under a market-wide average.
-  const tnStores = stores.filter(s => s.state === "TN" && inFilter(allowed, s.name));
-  const vaStores = stores.filter(s => s.state === "VA" && inFilter(allowed, s.name));
-  // A group with no stores is dropped rather than totalled. The state boxes
-  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
-  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
-  const groups = [
-    ...(tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
-  ];
-  const hrgStores = [...tnStores, ...vaStores];
+  const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  // Unfiltered, the markets are the split worth seeing, and an empty one is
+  // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
+  // selection reads as "VA sold nothing", not "no VA stores here".
+  //
+  // Filtered, the selection is the subtotal: one row under its own name, not a
+  // market split of it. "Total - Tommy Demorest" is the question being asked;
+  // splitting his three stores back into TN and VA answers a different one.
+  const groups = filter.label
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    : [
+        ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
+        ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+      ];
+
+  // HRG is deliberately not filtered. It is the benchmark the rows above are
+  // read against — narrowing it to the selection would make it restate the
+  // subtotal directly above it and leave nothing to compare to.
+  const hrgStores = stores;
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -637,7 +657,7 @@ function AvgCheckCompTable({
                 </Fragment>
               ))}
               <tr className="bg-gray-100 border-t-2 border-gray-200">
-                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">Total - HRG</td>
                 {COMP_RANGE_COLS.map(c => <MetricFigureCell key={c.field} figure={deriveAvgCheckFigure(sumAvgCheckRaw(hrgStores, c.field))} fmt={fmtProductivity} />)}
               </tr>
             </>
@@ -782,12 +802,12 @@ function useSalesSnapshot(range: SnapshotRange) {
 }
 
 function SnapshotVsLastYearTable({
-  stores, meta, loading, allowed, range, onRangeChange,
+  stores, meta, loading, filter, range, onRangeChange,
 }: {
   stores: SnapshotRaw[];
   meta: SnapshotMeta;
   loading: boolean;
-  allowed: Set<string> | null;
+  filter: StoreFilter;
   range: SnapshotRange;
   onRangeChange: (range: SnapshotRange) => void;
 }) {
@@ -795,16 +815,26 @@ function SnapshotVsLastYearTable({
 
   // The leader narrows the rows *and* the TN/VA/HRG totals below them, so a
   // filtered table can't show one leader's stores under a market-wide average.
-  const tnStores = stores.filter(s => s.state === "TN" && inFilter(allowed, s.name));
-  const vaStores = stores.filter(s => s.state === "VA" && inFilter(allowed, s.name));
-  // A group with no stores is dropped rather than totalled. The state boxes
-  // alone could never empty one, but a leader can — and an all-zeros "VA Total"
-  // under a TN-only leader reads as "VA sold nothing", not "no VA stores here".
-  const groups = [
-    ...(tnStores.length > 0 ? [{ label: "TN Total", stores: tnStores }] : []),
-    ...(vaStores.length > 0 ? [{ label: "VA Total", stores: vaStores }] : []),
-  ];
-  const hrgStores = [...tnStores, ...vaStores];
+  const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
+  const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  // Unfiltered, the markets are the split worth seeing, and an empty one is
+  // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
+  // selection reads as "VA sold nothing", not "no VA stores here".
+  //
+  // Filtered, the selection is the subtotal: one row under its own name, not a
+  // market split of it. "Total - Tommy Demorest" is the question being asked;
+  // splitting his three stores back into TN and VA answers a different one.
+  const groups = filter.label
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    : [
+        ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
+        ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+      ];
+
+  // HRG is deliberately not filtered. It is the benchmark the rows above are
+  // read against — narrowing it to the selection would make it restate the
+  // subtotal directly above it and leave nothing to compare to.
+  const hrgStores = stores;
 
   const periods = completedPeriods();
 
@@ -812,10 +842,9 @@ function SnapshotVsLastYearTable({
   // (last year's comparison is sliced to the same local time-of-day, not a
   // single blanket time for every store) — only show the labels for whichever
   // group(s) are actually visible. Settled ranges have no cutoff at all.
-  const asOfParts = [
-    ...(tnStores.length > 0 ? [meta.asOfLabelCT] : []),
-    ...(vaStores.length > 0 ? [meta.asOfLabelET] : []),
-  ].filter(Boolean);
+  // Both cutoffs, whatever is filtered: the HRG row spans both markets now, so
+  // a Central cutoff is in play even on a screen showing only Virginia stores.
+  const asOfParts = [meta.asOfLabelCT, meta.asOfLabelET].filter(Boolean);
 
   // Single-day ranges show the full ISO date (a bare "7/26" reads ambiguously
   // next to last year's date); multi-day ranges are short M/D–M/D.
@@ -914,7 +943,7 @@ function SnapshotVsLastYearTable({
                 </Fragment>
               ))}
               <tr className="bg-gray-100 border-t-2 border-gray-200">
-                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">HRG Total</td>
+                <td className="px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-gray-900">Total - HRG</td>
                 {SNAPSHOT_METRIC_COLS.map(c => <MetricFigureCell key={c.key} figure={c.derive(sumSnapshotRaw(hrgStores))} fmt={c.fmt} />)}
                 <SimpleFigureCell value={deriveSplh(sumSnapshotRaw(hrgStores))} fmt={fmtProductivity} />
                 <SimpleFigureCell value={deriveSnapshotTplh(sumSnapshotRaw(hrgStores))} fmt={fmtTplh} />
@@ -1039,18 +1068,18 @@ export default function PARClient({
           stores={salesSnapshot.stores}
           meta={salesSnapshot.meta}
           loading={salesSnapshot.loading}
-          allowed={storeFilter.allowed}
+          filter={storeFilter}
           range={snapshotRange}
           onRangeChange={setSnapshotRange}
         />
         <div className="mt-6">
-          <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} allowed={storeFilter.allowed} fmt={fmtDollars} />
+          <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} filter={storeFilter} fmt={fmtDollars} />
         </div>
         <div className="mt-6">
-          <MetricCompTable title="Transactions" stores={transactionsComp.stores} loading={transactionsComp.loading} allowed={storeFilter.allowed} fmt={v => Math.round(v).toLocaleString()} />
+          <MetricCompTable title="Transactions" stores={transactionsComp.stores} loading={transactionsComp.loading} filter={storeFilter} fmt={v => Math.round(v).toLocaleString()} />
         </div>
         <div className="mt-6">
-          <AvgCheckCompTable stores={avgCheckComp.stores} loading={avgCheckComp.loading} allowed={storeFilter.allowed} />
+          <AvgCheckCompTable stores={avgCheckComp.stores} loading={avgCheckComp.loading} filter={storeFilter} />
         </div>
         <div className="mt-6">
           <PosTierTable locations={locations} allowed={storeFilter.allowed} mode={mode} metric="dollars" {...posData} />
