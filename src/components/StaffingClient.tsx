@@ -14,6 +14,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from "recharts";
+import { STORE_COLOR } from "@/lib/surveyMeta";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import ReconciliationSection from "@/components/ReconciliationSection";
@@ -357,6 +361,8 @@ function OpenCloseSection() {
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
+      {data && <OpenCloseChart data={data} side={side} />}
+
       {data && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -416,6 +422,136 @@ function OpenCloseSection() {
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The same labor the table below shows, as a line per store.
+ *
+ * Store colours come from the shared map the survey and drive-thru charts use,
+ * so a store is the same colour wherever it appears — reading two charts side
+ * by side is otherwise a memory test.
+ *
+ * The market checkboxes and the per-store ones follow the same pattern as the
+ * survey trend chart: hiding a store hides the line, and the market box is
+ * checked only when all of its stores are.
+ */
+function OpenCloseChart({ data, side }: { data: OpenCloseReport; side: "open" | "close" }) {
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+
+  const markets = useMemo(() => {
+    const tn = data.stores.filter((s) => s.state === "TN").map((s) => s.storeName);
+    const va = data.stores.filter((s) => s.state === "VA").map((s) => s.storeName);
+    return [
+      { key: "TN", stores: tn },
+      { key: "VA", stores: va },
+    ];
+  }, [data]);
+
+  // One row per date, one key per store — the shape recharts wants.
+  const series = useMemo(
+    () =>
+      data.dates.map((date) => {
+        const row: Record<string, string | number | null> = { date: dateHeader(date) };
+        for (const store of data.stores) {
+          const cells = side === "open" ? store.open : store.close;
+          const cell = cells.find((c) => c.businessDate === date);
+          row[store.storeName] = cell && cell.people > 0
+            ? Math.round((cell.laborMinutes / 60) * 10) / 10
+            : null;
+        }
+        return row;
+      }),
+    [data, side],
+  );
+
+  const toggleStore = (name: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+
+  const toggleMarket = (stores: string[], on: boolean) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      for (const n of stores) { if (on) next.delete(n); else next.add(n); }
+      return next;
+    });
+
+  return (
+    <div className="px-3 pt-3 pb-2 border-b border-gray-100">
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={series} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+            <YAxis
+              tick={{ fontSize: 11, fill: "#94a3b8" }}
+              axisLine={false}
+              tickLine={false}
+              width={44}
+              tickFormatter={(v: number) => `${v}h`}
+            />
+            <Tooltip
+              contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}
+              formatter={(v, name) => [`${v}h`, String(name)]}
+              // Busiest store first. Recharts defaults itemSorter to "name", so
+              // twelve stores came out alphabetically and the day's biggest
+              // number could sit anywhere in the list. The sort is ascending on
+              // whatever the sorter returns, hence the negation.
+              itemSorter={(item) => -(Number(item.value) || 0)}
+            />
+            {data.stores.map((store) =>
+              hidden.has(store.storeName) ? null : (
+                <Line
+                  key={store.storeId}
+                  type="monotone"
+                  dataKey={store.storeName}
+                  stroke={STORE_COLOR[store.storeName] ?? "#6b7280"}
+                  strokeWidth={2}
+                  dot={{ r: 2.5 }}
+                  activeDot={{ r: 4 }}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ),
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-2 space-y-1.5">
+        {markets.map((market) => {
+          const allOn = market.stores.every((n) => !hidden.has(n));
+          return (
+            <div key={market.key} className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none w-8">
+                <input
+                  type="checkbox"
+                  checked={allOn}
+                  onChange={(e) => toggleMarket(market.stores, e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                {market.key}
+              </label>
+              {market.stores.map((name) => (
+                <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!hidden.has(name)}
+                    onChange={() => toggleStore(name)}
+                    className="rounded border-gray-300"
+                    style={{ accentColor: STORE_COLOR[name] ?? "#6b7280" }}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
