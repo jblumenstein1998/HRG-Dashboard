@@ -528,9 +528,10 @@ export default function ZUClient({
       ? report.total
       : subtotal(visible)
     : null;
-  // Names whatever the one filter selected — "TN", "VA", a leader — so the
-  // subtotal row says what it is adding up.
-  const totalsLabel = showingEverything ? "All Stores" : (storeFilter.label ?? "Selected");
+  // Names whatever the filter selected — "Total - VA", "Total - Tommy
+  // Demorest" — so the row says what it is adding up, and reads the same as
+  // the POS and SMG totals. Unfiltered it is the estate, which HRG calls HRG.
+  const totalsLabel = `Total - ${storeFilter.label ?? "HRG"}`;
 
   /**
    * The grid answers to the same controls as the table above it, so the two
