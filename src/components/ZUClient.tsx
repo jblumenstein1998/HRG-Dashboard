@@ -546,7 +546,12 @@ export default function ZUClient({
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      {/* Header and legend pinned together, the way every other tab does it.
+          Sticking the header alone left the compliance goals — and now the
+          store filter beside them — scrolling away from the table they
+          describe. */}
+      <div className="sticky top-0 z-20">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
@@ -577,9 +582,6 @@ export default function ZUClient({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-3 flex-1 min-w-0">
-
-            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
-
             <button
               onClick={() => void load(true)}
               disabled={refreshing || status === "loading"}
@@ -602,7 +604,14 @@ export default function ZUClient({
             {" / "}
             <span className="text-red-600 font-medium">&lt;{COMPLIANCE_THRESHOLD}%</span>
           </span>
+          <StoreFilterPicker
+            leaders={leaders}
+            value={storeFilter.value}
+            onChange={storeFilter.setValue}
+            className="ml-auto"
+          />
         </div>
+      </div>
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
