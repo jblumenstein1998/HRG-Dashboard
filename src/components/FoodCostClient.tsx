@@ -101,7 +101,7 @@ function TotalPct({ blend, decimals = 1 }: { blend: Blend; decimals?: number }) 
       {blend.skipped > 0 && (
         <span
           className="ml-0.5 cursor-help text-gray-400"
-          title={`Blended over ${blend.used} of ${blend.used + blend.skipped} locations — the rest have no sales figure to weight by.`}
+          title={`Blended over ${blend.used} of ${blend.used + blend.skipped} locations — the rest reported no figure for this window, or none of the sales behind one.`}
         >
           *
         </span>
@@ -1943,17 +1943,31 @@ export default function FoodCostClient({
   const allLocations = Object.values(locMap);
   const loading = loadingIds.size > 0;
 
-  const byActual = [...allLocations]
-    .filter(l => l.actualCostPct !== null)
-    .sort((a, b) => (a.actualCostPct ?? 0) - (b.actualCostPct ?? 0));
+  // A location NetChef returned nothing for keeps its row, showing dashes, the
+  // way the Comparison and Recent Weeks tables already show it. Dropping it
+  // instead made it vanish from a table whose header still counted it, so the
+  // total silently covered nine stores while claiming twelve — and the store
+  // that failed to report is usually the one worth chasing.
+  //
+  // Ranking them needs the null sunk explicitly. The old `?? 0` was harmless
+  // only because the filter above removed nulls first; left as it was, a store
+  // with no data would rank as 0% cost and head the table as the best performer.
+  const sinkingNull =
+    (value: (l: LocationData) => number | null) => (a: LocationData, b: LocationData) => {
+      const va = value(a);
+      const vb = value(b);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return va - vb;
+    };
 
-  const vaActual = byActual.filter(l => VA_STORES.includes(l.locationName));
-  const tnActual = byActual.filter(l => TN_STORES.includes(l.locationName));
+  const byActual = [...allLocations].sort(sinkingNull(l => l.actualCostPct));
+
   const cogsRows = byActual.filter(l => inFilter(storeFilter.allowed, l.locationName));
 
   const byVariance = [...allLocations]
-    .filter(l => l.variancePct !== null)
-    .sort((a, b) => Math.abs(a.variancePct ?? 0) - Math.abs(b.variancePct ?? 0))
+    .sort(sinkingNull(l => (l.variancePct === null ? null : Math.abs(l.variancePct))))
     .filter(l => inFilter(storeFilter.allowed, l.locationName));
 
   const fetchedLabel = reportMeta
