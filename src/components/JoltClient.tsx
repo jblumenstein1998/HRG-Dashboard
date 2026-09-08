@@ -436,11 +436,14 @@ function SummaryCard({
   rows,
   highlighted,
   onPick,
+  totalLabel,
 }: {
   rows: SummaryRow[];
   /** The row the user clicked, or null when nothing is marked. */
   highlighted: string | null;
   onPick: (store: string) => void;
+  /** Caption for the totals row, naming whatever the store filter selected. */
+  totalLabel: string;
 }) {
   const live = rows.map(r => r.data).filter((d): d is StoreLists => d != null);
 
@@ -586,7 +589,7 @@ function SummaryCard({
             <tfoot>
               <tr className="border-t border-gray-200 bg-gray-50/60 font-medium">
                 <td className="px-4 sm:px-5 py-2 text-gray-900">
-                  All Jolt stores
+                  {totalLabel}
                   <span className="ml-2 text-xs font-normal text-gray-400">{live.length} shown</span>
                 </td>
                 <td className={`${numCell} font-semibold ${completeColor(totalCompletePct)}`}>
@@ -1112,7 +1115,12 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
           )
         ) : (
           <>
-            <SummaryCard rows={visible} highlighted={highlighted} onPick={toggleHighlight} />
+            <SummaryCard
+              rows={visible}
+              highlighted={highlighted}
+              onPick={toggleHighlight}
+              totalLabel={`Total - ${storeFilter.label ?? "HRG"}`}
+            />
             {selected && (
               <StorePanel
                 store={selected}
