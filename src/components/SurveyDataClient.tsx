@@ -718,7 +718,7 @@ export default function SurveyDataClient({
 
         <p className="text-xs text-gray-500 mt-3">
           Visit date — a guest&apos;s response counts on the day they visited, not the day they
-          answered. The total line is pooled across stores, weighted by survey count.
+          answered.
         </p>
 
         {/* Always store-level with its own grain and range, so it can span a
