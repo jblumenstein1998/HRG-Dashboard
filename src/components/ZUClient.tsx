@@ -544,6 +544,13 @@ export default function ZUClient({
   );
 
   const COLUMNS = 6;
+  /**
+   * Share of the table given to the store name, with the data columns splitting
+   * the rest evenly. The tables are fixed-layout so that picking an ASM — which
+   * both shortens the store list and renames the total row after the leader —
+   * can't re-measure the columns underneath whoever is reading them.
+   */
+  const STORE_COL_PCT = 22;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -634,7 +641,13 @@ export default function ZUClient({
               ref={tableRef}
               className="mt-2 rounded-lg border border-gray-200 bg-white overflow-x-auto"
             >
-              <table className="w-full border-collapse text-sm">
+              <table className="w-full border-collapse text-sm table-fixed min-w-[64rem]">
+                <colgroup>
+                  <col style={{ width: `${STORE_COL_PCT}%` }} />
+                  {Array.from({ length: COLUMNS - 1 }).map((_, i) => (
+                    <col key={i} style={{ width: `${(100 - STORE_COL_PCT) / (COLUMNS - 1)}%` }} />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
                     <SortTh
@@ -805,7 +818,10 @@ export default function ZUClient({
 
                   {totals && visible.length > 0 && (
                     <tr className="border-t-2 border-gray-300 font-semibold text-gray-900">
-                      <td className="px-4 py-2 whitespace-nowrap">{totalsLabel}</td>
+                      {/* The one cell whose text follows the filter, so it
+                          wraps inside its column rather than spilling over the
+                          number beside it. */}
+                      <td className="px-4 py-2">{totalsLabel}</td>
                       <td
                         className={`px-4 py-2 text-right tabular-nums ${rateColor(
                           totals.complianceRate,
@@ -847,7 +863,18 @@ export default function ZUClient({
               )}
 
               {testsStatus === "done" && tests && (
-                <table className="w-full border-collapse text-sm">
+                <table className="w-full border-collapse text-sm table-fixed min-w-[64rem]">
+                  {/* Same store column as the table above, so the two sections
+                      line up and neither shifts when the filter changes. */}
+                  <colgroup>
+                    <col style={{ width: `${STORE_COL_PCT}%` }} />
+                    {tests.tests.map((t) => (
+                      <col
+                        key={t.id}
+                        style={{ width: `${(100 - STORE_COL_PCT) / tests.tests.length}%` }}
+                      />
+                    ))}
+                  </colgroup>
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50">
                       <SortTh
