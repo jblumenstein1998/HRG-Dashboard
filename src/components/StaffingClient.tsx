@@ -817,6 +817,24 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
   const data = state.data;
   const periods = data?.payPeriods ?? [];
   const cardRef = useRef<HTMLElement>(null);
+
+  /**
+   * The business dates this answer actually covers.
+   *
+   * Taken from the report rather than from the period that was asked for: a
+   * fortnight still being worked is only read through yesterday, so the window
+   * requested and the window examined are not the same thing, and only one of
+   * them is true of the rows below.
+   */
+  const examined = (() => {
+    const d = data?.dates ?? [];
+    if (d.length === 0) return null;
+    const first = d[0];
+    const last = d[d.length - 1];
+    return first === last
+      ? dateHeader(first)
+      : `${dateHeader(first)} – ${dateHeader(last)}`;
+  })();
   const selected = payDate ? periods.find((p) => p.payDate === payDate) ?? null : null;
 
   const visible = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
@@ -833,7 +851,11 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
           targetRef={cardRef}
           className="text-sm font-semibold text-gray-900 hover:text-gray-600"
         />
-        <span className="text-xs text-gray-400">still on the clock at 2:13am</span>
+        {/* The dates actually examined, not the ones asked for. A pay period
+            still being worked is only read through yesterday, and saying
+            09/14-09/27 when the data stops on the 19th would overstate what
+            has been checked. */}
+        {examined && <span className="text-xs text-gray-400">{examined}</span>}
 
         {rows.length > 0 && (
           <span className="text-xs font-medium text-amber-700">
@@ -873,16 +895,6 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
           {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
         </div>
       </div>
-
-      {/* A period still being worked will always show fewer problems than a
-          closed one, having had fewer days to collect them. Say so, rather than
-          let a small number read as a good one. */}
-      {selected?.inProgress && (
-        <p className="px-3 py-2 text-xs text-gray-500">
-          This fortnight is still being worked — {selected.start.slice(5).replace("-", "/")} to{" "}
-          {selected.end.slice(5).replace("-", "/")}, counted through yesterday. Expect it to grow.
-        </p>
-      )}
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
