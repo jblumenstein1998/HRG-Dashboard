@@ -216,11 +216,26 @@ export default function StaffingClient({
     setRefreshKey((k) => k + 1);
   }, []);
 
-  // Filtered once, here, so the headline count and the cards below it can never
+  // Filtered once, here, so the headline count and the card below it can never
   // disagree about which stores are being talked about.
   const shownStores = (data?.stores ?? []).filter((s) => inFilter(storeFilter.allowed, s.storeName));
   const totalOn = shownStores.reduce((n, s) => n + s.onClock.length, 0);
   const storesReporting = shownStores.filter((s) => !s.error).length;
+
+  /*
+   * One store's roster at a time.
+   *
+   * Twelve open cards was several screens of names to get past, and the
+   * headline above already answers the estate-wide question — how many are on
+   * and at how many stores. So the detail is one store, chosen here.
+   *
+   * The choice falls back to the first available rather than being remembered
+   * blindly: the leader filter can take the selected store off the list
+   * entirely, and a selection pointing at a store that is no longer offered
+   * would render nothing with no explanation.
+   */
+  const [storeId, setStoreId] = useState<string | null>(null);
+  const shownStore = shownStores.find((s) => s.storeId === storeId) ?? shownStores[0] ?? null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -309,10 +324,29 @@ export default function StaffingClient({
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
-            title={`On the clock — ${data ? new Date(data.at).toLocaleString() : when.replace("T", " ")}`}
+            title={`On the clock — ${shownStore?.storeName ?? "no store"} — ${data ? new Date(data.at).toLocaleString() : when.replace("T", " ")}`}
             targetRef={cardRef}
             className="text-base font-semibold text-gray-900"
           />
+          {/* Every store is already loaded — the whole estate comes back in one
+              PAR read — so this only chooses which one is drawn. The count on
+              each option is what the twelve open cards used to give you at a
+              glance: where the people are, without switching to find out. */}
+          {shownStores.length > 0 && (
+            <select
+              data-copy-image-ignore="true"
+              value={shownStore?.storeId ?? ""}
+              onChange={(e) => setStoreId(e.target.value)}
+              aria-label="Store"
+              className="text-sm border border-gray-200 rounded-lg py-1 pl-2 pr-6 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-gray-200"
+            >
+              {shownStores.map((s) => (
+                <option key={s.storeId} value={s.storeId}>
+                  {s.storeName} ({s.error ? "—" : s.onClock.length})
+                </option>
+              ))}
+            </select>
+          )}
           {loading && (
             <span className="flex items-center gap-1.5 text-xs text-gray-400">
               <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />
@@ -322,10 +356,10 @@ export default function StaffingClient({
         </div>
 
         <div className={`space-y-3 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
-          {shownStores.map((store) => <StoreCard key={store.storeId} store={store} />)}
-          {!loading && data && data.stores.length === 0 && (
+          {shownStore && <StoreCard key={shownStore.storeId} store={shownStore} />}
+          {!loading && data && shownStores.length === 0 && (
             <div className="bg-white rounded-xl border border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
-              No stores configured.
+              No stores to show.
             </div>
           )}
         </div>
@@ -1375,11 +1409,12 @@ function WorkstreamSyncBanner({
 }
 
 function StoreCard({ store }: { store: StoreRoster }) {
-  // Collapsed on arrival. Twelve stores of open rosters is several screens of
-  // names to scroll past, and the collapsed header already carries what the
-  // page is usually opened for — headcount, who is on break, the tier counts
-  // and the wage run rate. Open the one you actually want.
-  const [open, setOpen] = useState(false);
+  // Open on arrival, now that only the chosen store is drawn. It was collapsed
+  // when all twelve were on the page and the roster was several screens to
+  // scroll past; with one store, picking it from the dropdown *is* the request
+  // to see it, and a closed bar under your own selection reads as broken.
+  // Still collapsible, for reading the header figures without the names.
+  const [open, setOpen] = useState(true);
 
   const grouped = new Map<string, typeof store.onClock>();
   for (const p of store.onClock) {
