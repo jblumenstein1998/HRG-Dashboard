@@ -816,6 +816,7 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
   const loading = state.key !== requestKey;
   const data = state.data;
   const periods = data?.payPeriods ?? [];
+  const cardRef = useRef<HTMLElement>(null);
   const selected = payDate ? periods.find((p) => p.payDate === payDate) ?? null : null;
 
   const visible = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
@@ -823,9 +824,15 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
   const storeErrors = visible.filter((s) => s.error);
 
   return (
-    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <section ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
-        <span className="text-sm font-semibold text-gray-900">Timecards to fix</span>
+        {/* The title names the window, so a screenshot pasted into a message
+            says which fortnight it is about without anyone having to add it. */}
+        <CopyableTitle
+          title={`Timecards to fix — ${selected ? selected.label : "yesterday"}`}
+          targetRef={cardRef}
+          className="text-sm font-semibold text-gray-900 hover:text-gray-600"
+        />
         <span className="text-xs text-gray-400">still on the clock at 2:13am</span>
 
         {rows.length > 0 && (
@@ -834,7 +841,9 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
           </span>
         )}
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/* Controls are for the person at the screen, not for the picture —
+            a screenshot of a button nobody can press is noise. */}
+        <div data-copy-image-ignore="true" className="ml-auto flex flex-wrap items-center gap-2">
           <button
             onClick={() => setPayDate(null)}
             className={`text-xs px-2.5 py-1 rounded-lg border transition ${
