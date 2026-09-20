@@ -27,9 +27,11 @@
  */
 
 import { PERIODS } from "./fiscal";
-import { shiftWorkedMinutesInWindow } from "./parRollup";
+import { shiftWorkedMinutesInWindow, todayCentralISO } from "./parRollup";
 import {
   PAR_LOCATIONS,
+  getOrders,
+  getOrdersLive,
   getShifts,
   getShiftsLive,
   getBusinessHours,
@@ -930,6 +932,169 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
   );
 
   return { dates, stores, fetchedAt: Date.now() };
+}
+
+// ── Daypart productivity ─────────────────────────────────────────────────────
+
+/**
+ * Sales and transactions per labor hour, by daypart, for one business date.
+ *
+ * SPLH and TPLH are the two numbers a manager schedules against: what each paid
+ * hour brought in, and how many transactions it served. Split by daypart
+ * because a day that looks fine in total can be two good shifts either side of
+ * an overstaffed afternoon, and the total hides exactly that.
+ *
+ * The three fixed bands are DAYPARTS 2–4 (11–2, 2–5, 5–8) from lib/dayparts.ts,
+ * so this screen and the POS Sales tab are cutting the day the same way. The
+ * last band runs from 8pm to **each store's own close**, which is why it cannot
+ * be a fixed window: closes differ by store and by weekday, and a store that
+ * shuts at ten judged against one that shuts at midnight would look short-
+ * staffed for the two hours it was not open.
+ *
+ * "Opening" is the odd one out and carries hours and cost rather than SPLH: it
+ * is the labor spent before the doors open, when there are no sales to divide
+ * by. A productivity figure there would be a division by zero dressed up as a
+ * number.
+ */
+export type DaypartCell = {
+  label: string;
+  /** Minutes worked inside the window, breaks excluded. */
+  laborMinutes: number;
+  netSales: number;
+  transactions: number;
+  /** Net sales per labor hour, or null when nobody was on the clock. */
+  splh: number | null;
+  /** Transactions per labor hour, or null when nobody was on the clock. */
+  tplh: number | null;
+};
+
+export type StoreDayparts = {
+  storeId: string;
+  storeName: string;
+  state: "TN" | "VA";
+  /** Labor before the doors open — hours and what it cost. */
+  opening: { laborMinutes: number; laborCost: number; openLabel: string | null };
+  /** 11–2, 2–5, 5–8, then 8pm to this store's own close. */
+  cells: DaypartCell[];
+  closeLabel: string | null;
+  error: string | null;
+};
+
+export type DaypartReport = {
+  businessDate: string;
+  /** Column headings, so the table and the data cannot disagree. */
+  columns: string[];
+  stores: StoreDayparts[];
+  fetchedAt: number;
+};
+
+/** The three fixed bands. The fourth runs to each store's own close. */
+const PRODUCTIVITY_BANDS = [
+  { label: "11–2", start: 11 * 60, end: 14 * 60 },
+  { label: "2–5", start: 14 * 60, end: 17 * 60 },
+  { label: "5–8", start: 17 * 60, end: 20 * 60 },
+];
+
+const LATE_BAND_START = 20 * 60;
+
+export async function getDaypartProductivity(businessDate: string): Promise<DaypartReport> {
+  const isToday = businessDate === todayCentralISO();
+
+  const stores = await Promise.all(
+    PAR_LOCATIONS.map(async (loc): Promise<StoreDayparts> => {
+      const empty = {
+        storeId: loc.storeId,
+        storeName: loc.name,
+        state: loc.state,
+        opening: { laborMinutes: 0, laborCost: 0, openLabel: null },
+        cells: [],
+        closeLabel: null,
+      };
+      try {
+        // Fetched once per store, then every window is computed from the same
+        // two arrays. Asking getWindowTotals per band would re-read the day
+        // four times over, and on today's date those reads deliberately bypass
+        // the cache — four live PAR calls per store where one will do.
+        const [hours, orders, shifts] = await Promise.all([
+          getBusinessHours(loc.storeId),
+          isToday ? getOrdersLive(loc.storeId, businessDate) : getOrders(loc.storeId, businessDate),
+          isToday ? getShiftsLive(loc.storeId, businessDate) : getShifts(loc.storeId, businessDate),
+        ]);
+
+        const [y, m, d] = businessDate.split("-").map(Number);
+        const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+        const today = hours.find((h) => h.dayOfWeek === dow) ?? null;
+
+        const windowOf = (start: number, end: number, label: string): DaypartCell => {
+          const laborMinutes = shifts.reduce(
+            (sum, s) => sum + shiftWorkedMinutesInWindow(s, start, end),
+            0,
+          );
+          const inWindow = orders.filter(
+            (o) => o.openedMinutes != null && o.openedMinutes >= start && o.openedMinutes < end,
+          );
+          const netSales = inWindow.reduce((sum, o) => sum + o.netSales, 0);
+          // PAR's own flag, never orders.length — see PAROrder.isCountedOrder.
+          const transactions = inWindow.filter((o) => o.isCountedOrder).length;
+          const laborHours = laborMinutes / 60;
+          return {
+            label,
+            laborMinutes,
+            netSales,
+            transactions,
+            splh: laborHours > 0 ? netSales / laborHours : null,
+            tplh: laborHours > 0 ? transactions / laborHours : null,
+          };
+        };
+
+        const cells = PRODUCTIVITY_BANDS.map((b) => windowOf(b.start, b.end, b.label));
+
+        // 8pm to this store's close. A close past midnight already carries on
+        // past 1440 — see getBusinessHours — so no wrapping is needed here.
+        const closeMinutes = today?.closeMinutes ?? null;
+        cells.push(
+          closeMinutes != null && closeMinutes > LATE_BAND_START
+            ? windowOf(LATE_BAND_START, closeMinutes, "8–Close")
+            : { label: "8–Close", laborMinutes: 0, netSales: 0, transactions: 0, splh: null, tplh: null },
+        );
+
+        // Labor before the doors open, and what it cost. Salaried staff carry a
+        // rate of 0 in PAR, so they contribute hours and no cost — the same
+        // convention the rest of this screen uses.
+        let openingMinutes = 0;
+        let openingCost = 0;
+        if (today) {
+          for (const sh of shifts) {
+            const mins = shiftWorkedMinutesInWindow(sh, 0, today.openMinutes);
+            if (mins <= 0) continue;
+            openingMinutes += mins;
+            openingCost += (mins / 60) * (sh.payRate ?? 0);
+          }
+        }
+
+        return {
+          ...empty,
+          opening: {
+            laborMinutes: openingMinutes,
+            laborCost: Math.round(openingCost * 100) / 100,
+            openLabel: today ? clockLabel(today.openMinutes) : null,
+          },
+          cells,
+          closeLabel: closeMinutes != null ? clockLabel(closeMinutes) : null,
+          error: null,
+        };
+      } catch (err) {
+        return { ...empty, error: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+
+  return {
+    businessDate,
+    columns: ["Opening", ...PRODUCTIVITY_BANDS.map((b) => b.label), "8–Close"],
+    stores,
+    fetchedAt: Date.now(),
+  };
 }
 
 export type OpenCloseCell = {

@@ -27,7 +27,7 @@ import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFil
 import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
-  MissedPunchReport, PayPeriod,
+  MissedPunchReport, PayPeriod, DaypartReport,
 } from "@/lib/staffing";
 
 /**
@@ -321,6 +321,8 @@ export default function StaffingClient({
         {/* First on the page: the only section here that is a task rather than
             a report. */}
         <MissedClockOutSection filter={storeFilter} />
+
+        <DaypartSection filter={storeFilter} />
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
@@ -976,6 +978,128 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
                   <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 whitespace-nowrap">
                     {hrs(r.minutesWorked)}
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Sales and transactions per labor hour, by daypart.
+ *
+ * The two numbers a manager schedules against: what each paid hour brought in,
+ * and how many transactions it served. Split by daypart because a day that
+ * looks fine in total can be two good shifts either side of an overstaffed
+ * afternoon, and the total hides exactly that.
+ *
+ * Opening is hours and cost rather than SPLH — it is the labor spent before the
+ * doors open, when there are no sales to divide by, and a productivity figure
+ * there would be a division by zero wearing a number's clothes.
+ */
+function DaypartSection({ filter }: { filter: StoreFilter }) {
+  const [date, setDate] = useState(yesterdayISO);
+  const [open, setOpen] = useState(true);
+  const [state, setState] = useState<{ key: string; data: DaypartReport | null; error: string | null }>(
+    { key: "", data: null, error: null },
+  );
+  const cardRef = useRef<HTMLElement>(null);
+
+  const requestKey = date;
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/staffing/dayparts?date=${date}`)
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        return json as DaypartReport;
+      })
+      .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
+    return () => { cancelled = true; };
+  }, [requestKey, date]);
+
+  const loading = state.key !== requestKey;
+  const data = state.data;
+  const stores = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
+
+  return (
+    <section ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
+        <CopyableTitle
+          title={`Productivity by daypart — ${dateHeader(date)}`}
+          targetRef={cardRef}
+          className="text-sm font-semibold text-gray-900 hover:text-gray-600"
+        />
+        <span className="text-xs text-gray-400">sales / transactions per labor hour</span>
+
+        <div data-copy-image-ignore="true" className="ml-auto flex items-center gap-2">
+          <input
+            type="date"
+            value={date}
+            max={yesterdayISO()}
+            onChange={(e) => setDate(e.target.value)}
+            aria-label="Business date"
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+          />
+          {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
+          >
+            {open ? "Hide" : "Show"}
+          </button>
+        </div>
+      </div>
+
+      {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {open && data && (
+        <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs uppercase tracking-wide text-gray-400">
+                <th className="px-3 py-1.5 text-left font-semibold">Store</th>
+                <th className="px-3 py-1.5 text-right font-semibold">Opening</th>
+                {(data.columns ?? []).slice(1).map((c) => (
+                  <th key={c} className="px-3 py-1.5 text-right font-semibold">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stores.map((s) => (
+                <tr key={s.storeId} className="border-b border-gray-50 last:border-0">
+                  <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">
+                    {s.storeName}
+                    {s.error && <span className="ml-2 text-xs text-red-600">{s.error}</span>}
+                  </td>
+                  {/* Hours and cost, not a rate: there are no sales before the
+                      doors open to divide by. */}
+                  <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
+                    <span className="text-gray-700">{hrs(s.opening.laborMinutes)}</span>{" "}
+                    <span className="text-gray-400">{usd(s.opening.laborCost)}</span>
+                  </td>
+                  {s.cells.map((c) => (
+                    <td key={c.label} className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
+                      {c.splh === null ? (
+                        // An empty band is either a closed store or an hour
+                        // nobody was clocked in for. Say which, rather than
+                        // leaving a dash to be interpreted.
+                        <span className="text-xs text-gray-400">
+                          {c.label === "8–Close" && s.closeLabel ? `closes ${s.closeLabel}` : "no labor"}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-gray-900 font-medium">${c.splh.toFixed(0)}</span>
+                          <span className="text-gray-300"> / </span>
+                          <span className="text-gray-600">{c.tplh?.toFixed(1)}</span>
+                        </>
+                      )}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
