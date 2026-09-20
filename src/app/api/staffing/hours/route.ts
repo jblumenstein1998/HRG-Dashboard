@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStoreHours, recentCompleteWeeks, recentCompletePeriods } from "@/lib/staffing";
+import {
+  getStoreHours,
+  recentCompleteDays,
+  recentCompleteWeeks,
+  recentCompletePeriods,
+} from "@/lib/staffing";
 import { todayCentralISO } from "@/lib/parRollup";
 
 /**
@@ -7,6 +12,7 @@ import { todayCentralISO } from "@/lib/parRollup";
  *
  * GET /api/staffing/hours?weeks=4          the last 4 complete Mon–Sun weeks
  * GET /api/staffing/hours?periods=2        the last 2 complete pay periods
+ * GET /api/staffing/hours?days=14          the last 14 complete business dates
  *
  * Seven cached GetShifts calls per store per week, so four weeks across twelve
  * stores is 336 calls on a cold cache and nothing on a warm one — past business
@@ -15,6 +21,7 @@ import { todayCentralISO } from "@/lib/parRollup";
 export const maxDuration = 300;
 
 const MAX_WEEKS = 8;
+const MAX_DAYS = 21;
 
 export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
@@ -29,9 +36,17 @@ export async function GET(req: NextRequest) {
   // A pay period is four or five weeks, so two of them is roughly eight weeks of
   // shifts per store — cached, but a cold run is not cheap.
   const periods = Number(p.get("periods") ?? 0);
+  // Days are for the overtime chart, where a week is too coarse to show which
+  // shift tipped the week over. Capped at three weeks: each day is twelve more
+  // cached GetShifts calls, and a line chart past about twenty points stops
+  // being readable anyway.
+  const days = Number(p.get("days") ?? 0);
+
   const spans = periods > 0
     ? recentCompletePeriods(today, Math.min(4, Math.max(1, periods)))
-    : recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
+    : days > 0
+      ? recentCompleteDays(today, Math.min(MAX_DAYS, Math.max(1, days)))
+      : recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
 
   try {
     return NextResponse.json(await getStoreHours(spans));

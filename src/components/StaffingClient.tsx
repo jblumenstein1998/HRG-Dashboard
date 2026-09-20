@@ -567,16 +567,173 @@ function OpenCloseChart({ data, side }: { data: OpenCloseReport; side: "open" | 
  * overtime than it will finish with, which reads as a store improving when
  * nothing has changed.
  */
+/**
+ * Overtime hours per store, over whatever window the Hours section is showing.
+ *
+ * Deliberately overtime alone rather than overtime beside regular hours. They
+ * differ by an order of magnitude, so on one axis overtime flattens into the
+ * baseline and becomes unreadable — and a second axis to rescue it would be
+ * worse, since two y-scales let any two shapes be made to agree. Regular hours
+ * are in the table underneath for anyone who wants both.
+ *
+ * Store colours come from the shared map the survey, drive-thru and open/close
+ * charts use, so a store is the same colour wherever it appears. The colour
+ * follows the store, never its rank, so filtering the list never repaints the
+ * lines that remain.
+ */
+function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+
+  const markets = useMemo(() => {
+    const of = (state: "TN" | "VA") =>
+      data.stores.filter((s) => s.state === state).map((s) => s.storeName);
+    return [
+      { key: "TN", stores: of("TN") },
+      { key: "VA", stores: of("VA") },
+    ];
+  }, [data]);
+
+  // One row per span, one key per store — the shape recharts wants.
+  const series = useMemo(
+    () =>
+      data.weeks.map((span) => {
+        const row: Record<string, string | number | null> = { span: span.label };
+        for (const store of data.stores) {
+          const cell = store.weeks.find((w) => w.weekStart === span.start);
+          // Zero overtime is a real and good answer, so it plots as zero. Only
+          // a store that reported nothing at all is a gap in the line.
+          row[store.storeName] = cell ? Math.round((cell.overtimeMinutes / 60) * 10) / 10 : null;
+        }
+        return row;
+      }),
+    [data],
+  );
+
+  const anyOvertime = series.some((row) =>
+    Object.entries(row).some(([k, v]) => k !== "span" && typeof v === "number" && v > 0),
+  );
+
+  const toggleStore = (name: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+
+  const toggleMarket = (stores: string[], on: boolean) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      for (const n of stores) { if (on) next.delete(n); else next.add(n); }
+      return next;
+    });
+
+  return (
+    <div className="px-3 pt-3 pb-2 border-b border-gray-100">
+      <div className="flex flex-wrap items-baseline gap-x-2 mb-1">
+        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+          Overtime hours by {grain}
+        </span>
+        {!anyOvertime && (
+          <span className="text-xs text-gray-400">no overtime in this window</span>
+        )}
+      </div>
+
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={series} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis dataKey="span" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+            <YAxis
+              tick={{ fontSize: 11, fill: "#94a3b8" }}
+              axisLine={false}
+              tickLine={false}
+              width={44}
+              tickFormatter={(v: number) => `${v}h`}
+            />
+            <Tooltip
+              contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e5e7eb" }}
+              formatter={(v, name) => [`${v}h`, String(name)]}
+              // Worst store first: twelve stores sorted by name would scatter
+              // the number you opened the chart to find. Ascending on the
+              // sorter's result, hence the negation.
+              itemSorter={(item) => -(Number(item.value) || 0)}
+            />
+            {data.stores.map((store) =>
+              hidden.has(store.storeName) ? null : (
+                <Line
+                  key={store.storeId}
+                  type="monotone"
+                  dataKey={store.storeName}
+                  stroke={STORE_COLOR[store.storeName] ?? "#6b7280"}
+                  strokeWidth={2}
+                  dot={{ r: 2.5 }}
+                  activeDot={{ r: 4 }}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ),
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mt-2 space-y-1.5">
+        {markets.map((market) => {
+          const allOn = market.stores.every((n) => !hidden.has(n));
+          return (
+            <div key={market.key} className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none w-8">
+                <input
+                  type="checkbox"
+                  checked={allOn}
+                  onChange={(e) => toggleMarket(market.stores, e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                {market.key}
+              </label>
+              {market.stores.map((name) => (
+                <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!hidden.has(name)}
+                    onChange={() => toggleStore(name)}
+                    className="rounded border-gray-300"
+                    style={{ accentColor: STORE_COLOR[name] ?? "#6b7280" }}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+type HoursRange = "7d" | "14d" | "2" | "4" | "periods";
+
+/** The query each range asks for, and what the chart's x-axis is showing. */
+const HOURS_RANGES: Record<HoursRange, { query: string; label: string; grain: string }> = {
+  "7d": { query: "days=7", label: "7 days", grain: "day" },
+  "14d": { query: "days=14", label: "14 days", grain: "day" },
+  "2": { query: "weeks=2", label: "2 weeks", grain: "week" },
+  "4": { query: "weeks=4", label: "4 weeks", grain: "week" },
+  periods: { query: "periods=2", label: "2 pay periods", grain: "pay period" },
+};
+
 function HoursSection() {
-  // "2" / "4" are weeks; "periods" is the last two pay periods.
-  const [range, setRange] = useState<"2" | "4" | "periods">("4");
+  // Days, weeks or pay periods — one control for the chart and the table, since
+  // they are two views of the same window and two selectors that could disagree
+  // would be a way to misread both.
+  const [range, setRange] = useState<HoursRange>("4");
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
     { key: "", data: null, error: null },
   );
 
-  const query = range === "periods" ? "periods=2" : `weeks=${range}`;
+  const query = HOURS_RANGES[range].query;
   const requestKey = query;
 
   useEffect(() => {
@@ -604,9 +761,11 @@ regular / overtime · hours then cost · completed spans only
         </span>
         <select
           value={range}
-          onChange={(e) => { setRange(e.target.value as "2" | "4" | "periods"); setExpanded(null); }}
+          onChange={(e) => { setRange(e.target.value as HoursRange); setExpanded(null); }}
           className="ml-auto text-xs border border-gray-200 rounded-lg py-0.5 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
         >
+          <option value="7d">7 days</option>
+          <option value="14d">14 days</option>
           <option value="2">2 weeks</option>
           <option value="4">4 weeks</option>
           <option value="periods">Last 2 pay periods</option>
@@ -615,6 +774,8 @@ regular / overtime · hours then cost · completed spans only
       </div>
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {data && <OvertimeChart data={data} grain={HOURS_RANGES[range].grain} />}
 
       {data && (
         <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>

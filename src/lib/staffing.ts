@@ -472,6 +472,32 @@ export function recentCompleteWeeks(today: string, count: number): HoursSpan[] {
 }
 
 /**
+ * The last `count` completed business dates, oldest first.
+ *
+ * Today is left out for the same reason a running week is: a day still being
+ * worked reports less overtime than it will finish with, and a line that climbs
+ * through the afternoon reads as a store deteriorating when nothing has
+ * happened.
+ *
+ * Each span is a single date, which `getStoreHours` handles without knowing
+ * anything new — it already walks every date between start and end.
+ *
+ * Daily overtime is a different question from weekly. Overtime is a property of
+ * a payroll week, so a single day's "overtime minutes" is PAR's own attribution
+ * of that day's hours, not a day that broke forty on its own. It answers "which
+ * day did the week tip over", which is the useful version for a manager
+ * building next week's schedule.
+ */
+export function recentCompleteDays(today: string, count: number): HoursSpan[] {
+  const days: HoursSpan[] = [];
+  for (let i = count; i >= 1; i--) {
+    const date = shiftLocalDate(today, -i);
+    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
+  }
+  return days;
+}
+
+/**
  * The last `count` completed pay periods.
  *
  * A pay period here is the fiscal period from lib/fiscal — four or five weeks,
