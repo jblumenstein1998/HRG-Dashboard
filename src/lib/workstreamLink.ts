@@ -19,6 +19,23 @@
  * normalisation, and that name is unique on both sides of the store. Everything
  * else becomes a proposal with ranked candidates, and a person confirms it.
  *
+ * ── Leavers are out of scope ─────────────────────────────────────────────────
+ *
+ * Anyone terminated in Workstream is excluded from matching entirely: not
+ * offered as a candidate, not counted when deciding whether a name is unique,
+ * not listed as unlinked. Nobody should spend attention linking someone who no
+ * longer works here, and three quarters of the company's Workstream records are
+ * offboarded.
+ *
+ * That exclusion does more than hide noise. A leaver sharing a name with a
+ * current employee made that name ambiguous, which pushed somebody who should
+ * have linked automatically into the queue — so dropping leavers both shortens
+ * the queue and resolves people already in it.
+ *
+ * A link already confirmed keeps resolving after that person leaves, which is
+ * why terminated records are still looked up by uuid. Otherwise a leaver's past
+ * hours would quietly lose the title and rate they were worked at.
+ *
  * ── Why the decisions are stored and the matches are not ─────────────────────
  *
  * Only human decisions are persisted (workstreamLinkStore.ts). The automatic
@@ -318,6 +335,17 @@ export type StoreLinkReport = {
   unlinkedWorkstream: MatchCandidate[];
 };
 
+/**
+ * Has this person left?
+ *
+ * Both tests, because they disagree: 731 people are `offboarded` and only 707
+ * carry a `termination_date`. Trusting either one alone leaves two dozen
+ * leavers in the pool.
+ */
+export function isTerminated(e: WsEmployee): boolean {
+  return Boolean(e.termination_date) || e.status === "offboarded";
+}
+
 /** Candidates below this are noise and are not offered at all. */
 const MIN_CANDIDATE_SCORE = 40;
 
@@ -371,7 +399,22 @@ export function proposeStoreLinks(input: {
     else if (d.status === "rejected") rejected.add(`${d.parEmployeeId} ${d.workstreamUuid}`);
   }
 
+  // Every Workstream record, terminated included — a link confirmed while
+  // somebody worked here has to keep resolving after they leave, or their past
+  // hours would quietly lose the title and rate they were worked at.
   const wsByUuid = new Map(workstreamEmployees.map((w) => [w.uuid, w]));
+
+  /**
+   * Who is actually available to be matched: people who have not left.
+   *
+   * Nobody should be asked to link a leaver. Three quarters of the company's
+   * Workstream records are offboarded, so including them buried every real
+   * candidate under years of former staff — and worse, a leaver sharing a name
+   * with a current employee made that name ambiguous, which pushed a person who
+   * should have linked automatically into the queue instead. Dropping them
+   * both empties the queue and fills it in.
+   */
+  const matchable = workstreamEmployees.filter((w) => !isTerminated(w));
 
   // Uniqueness is counted over the whole roster, before anything is claimed —
   // a name is ambiguous or not on its own terms, regardless of what got
@@ -382,7 +425,7 @@ export function proposeStoreLinks(input: {
     if (k) parKeyCounts.set(k, (parKeyCounts.get(k) ?? 0) + 1);
   }
   const wsByKey = new Map<string, WsEmployee[]>();
-  for (const w of workstreamEmployees) {
+  for (const w of matchable) {
     const k = nameKey(w.first_name, w.last_name);
     if (!k) continue;
     const list = wsByKey.get(k) ?? [];
@@ -407,7 +450,7 @@ export function proposeStoreLinks(input: {
       parTerminated: p.terminated,
     };
 
-    const ranked = workstreamEmployees
+    const ranked = matchable
       .filter((w) => !rejected.has(`${p.id} ${w.uuid}`))
       .map((w) => {
         const name = scoreNames(p, w);
@@ -457,7 +500,10 @@ export function proposeStoreLinks(input: {
     }
   }
 
-  const unlinkedWorkstream = workstreamEmployees
+  // Leavers are not "unlinked", they are gone. Listing them here would bury the
+  // one case this section exists to surface — a current employee Workstream
+  // knows about and PAR does not — under several hundred former staff.
+  const unlinkedWorkstream = matchable
     .filter((w) => !resolved.has(w.uuid))
     .map((w) => toCandidate(w));
 

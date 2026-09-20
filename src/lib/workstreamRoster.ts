@@ -62,9 +62,11 @@ const CORROBORATION_DAYS = 7;
  * hired, and the review queue being an hour stale is invisible, while paging
  * the whole company on every page load is not.
  *
- * Terminated people are kept. The queue needs them — PAR keeps terminated
- * employees on file too, and a link confirmed today has to still resolve when
- * that person's hours are looked at next year.
+ * Terminated people are fetched but not matched. They are kept in the roster so
+ * a link confirmed while somebody worked here still resolves after they leave —
+ * otherwise their past hours would lose the title and rate they were worked at.
+ * workstreamLink.ts excludes them from candidates, from the uniqueness test and
+ * from the unlinked list, so nobody is ever asked to link a leaver.
  */
 const workstreamByLocation = unstable_cache(
   async (): Promise<Record<string, WsEmployee[]>> => {
