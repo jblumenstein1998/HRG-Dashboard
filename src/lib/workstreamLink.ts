@@ -21,15 +21,16 @@
  *
  * ── Leavers are out of scope ─────────────────────────────────────────────────
  *
- * Only people **active in both systems** are matched. Terminated in Workstream,
- * terminated in PAR, or both — either way there is nothing to decide, because
- * their shifts are in the past and no title or rate attached to them now would
- * change a number anybody reads.
+ * Only people **active in both systems** are matched. On Workstream's side that
+ * means `status === "active"` — not offboarded, and not still onboarding. On
+ * PAR's side it means not terminated.
  *
- * Nobody terminated in Workstream is offered as a candidate, counted when
- * deciding whether a name is unique, or listed as unlinked. Anyone terminated
- * in PAR is marked `ignored` and never asked about. Three quarters of the
- * company's Workstream records are offboarded, and at one store 129 of 165
+ * Anyone else is out of scope: a leaver's shifts are in the past, and a pending
+ * hire has no shifts yet. Neither can be usefully linked, and an onboarding
+ * record cannot even be found on Workstream's employee screen, because it lives
+ * in the hiring pipeline instead.
+ *
+ * Of 1,332 Workstream records, 471 are active. At one store, 129 of 165
  * outstanding reviews were people who had already left.
  *
  * That exclusion does more than hide noise. A leaver sharing a name with a
@@ -346,14 +347,26 @@ export type StoreLinkReport = {
 };
 
 /**
- * Has this person left?
+ * Is this someone who actually works here right now?
  *
- * Both tests, because they disagree: 731 people are `offboarded` and only 707
- * carry a `termination_date`. Trusting either one alone leaves two dozen
- * leavers in the pool.
+ * Workstream's lifecycle is hired → onboarding → active → offboarded, and only
+ * `active` counts. Stated as a positive test rather than "not offboarded"
+ * because the two are not the same question, and the difference is a screen
+ * full of people:
+ *
+ *   offboarded   they have left — nothing to link, their shifts are past
+ *   onboarding   paperwork in progress. Fifty-one records sit here, and they
+ *                live in Workstream's hiring pipeline rather than its employee
+ *                roster — so somebody looking one up on the employee screen
+ *                does not find it and reasonably concludes the dashboard
+ *                invented them
+ *   hired        the same, one step earlier
+ *
+ * The `termination_date` check stays as a second guard because the two fields
+ * disagree: 731 records are offboarded and only 707 carry a date.
  */
-export function isTerminated(e: WsEmployee): boolean {
-  return Boolean(e.termination_date) || e.status === "offboarded";
+export function isActiveEmployee(e: WsEmployee): boolean {
+  return e.status === "active" && !e.termination_date;
 }
 
 /** Candidates below this are noise and are not offered at all. */
@@ -415,16 +428,18 @@ export function proposeStoreLinks(input: {
   const wsByUuid = new Map(workstreamEmployees.map((w) => [w.uuid, w]));
 
   /**
-   * Who is actually available to be matched: people who have not left.
+   * Who is available to be matched: people Workstream currently calls active.
    *
-   * Nobody should be asked to link a leaver. Three quarters of the company's
-   * Workstream records are offboarded, so including them buried every real
-   * candidate under years of former staff — and worse, a leaver sharing a name
-   * with a current employee made that name ambiguous, which pushed a person who
-   * should have linked automatically into the queue instead. Dropping them
-   * both empties the queue and fills it in.
+   * Of 1,332 records, 471 are active — the rest have left, or are still being
+   * onboarded. Including the leavers buried every real candidate under years of
+   * former staff; including the onboarding ones put people in the list who
+   * cannot be found on Workstream's employee screen at all.
+   *
+   * Restricting the pool does more than hide noise. A name shared only with a
+   * leaver or a pending hire is not ambiguous, and treating it as ambiguous was
+   * pushing people who should have linked automatically into the queue instead.
    */
-  const matchable = workstreamEmployees.filter((w) => !isTerminated(w));
+  const matchable = workstreamEmployees.filter(isActiveEmployee);
 
   // Uniqueness is counted over the whole roster, before anything is claimed —
   // a name is ambiguous or not on its own terms, regardless of what got
