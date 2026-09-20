@@ -21,11 +21,16 @@
  *
  * ── Leavers are out of scope ─────────────────────────────────────────────────
  *
- * Anyone terminated in Workstream is excluded from matching entirely: not
- * offered as a candidate, not counted when deciding whether a name is unique,
- * not listed as unlinked. Nobody should spend attention linking someone who no
- * longer works here, and three quarters of the company's Workstream records are
- * offboarded.
+ * Only people **active in both systems** are matched. Terminated in Workstream,
+ * terminated in PAR, or both — either way there is nothing to decide, because
+ * their shifts are in the past and no title or rate attached to them now would
+ * change a number anybody reads.
+ *
+ * Nobody terminated in Workstream is offered as a candidate, counted when
+ * deciding whether a name is unique, or listed as unlinked. Anyone terminated
+ * in PAR is marked `ignored` and never asked about. Three quarters of the
+ * company's Workstream records are offboarded, and at one store 129 of 165
+ * outstanding reviews were people who had already left.
  *
  * That exclusion does more than hide noise. A leaver sharing a name with a
  * current employee made that name ambiguous, which pushed somebody who should
@@ -307,6 +312,11 @@ export type LinkState =
   | "confirmed"
   /** A person recorded that there is no Workstream record for them. */
   | "absent"
+  /**
+   * Terminated in PAR and never linked by hand — out of scope, not a task.
+   * Only people active in both systems are worth matching.
+   */
+  | "ignored"
   /** Nobody has decided, and this module will not decide for them. */
   | "review";
 
@@ -418,9 +428,11 @@ export function proposeStoreLinks(input: {
 
   // Uniqueness is counted over the whole roster, before anything is claimed —
   // a name is ambiguous or not on its own terms, regardless of what got
-  // matched first.
+  // matched first. Leavers are excluded on both sides, so a name shared only
+  // with a former colleague is not ambiguous at all.
   const parKeyCounts = new Map<string, number>();
   for (const p of parEmployees) {
+    if (p.terminated) continue;
     const k = nameKey(p.firstName, p.lastName);
     if (k) parKeyCounts.set(k, (parKeyCounts.get(k) ?? 0) + 1);
   }
@@ -471,6 +483,17 @@ export function proposeStoreLinks(input: {
       proposals.push({ ...base, state: "confirmed", workstreamUuid: decided, candidates: ranked });
       continue;
     }
+
+    // Gone from PAR, and never linked by hand. Only people active in both
+    // systems are worth anyone's attention: this person's shifts are in the
+    // past, and no title or rate attached to them now would change a number
+    // anybody reads. Kept in the list rather than dropped so the store's
+    // counts still add up and so a confirmed link above still wins.
+    if (p.terminated) {
+      proposals.push({ ...base, state: "ignored", workstreamUuid: null, candidates: [] });
+      continue;
+    }
+
     if (decided) {
       // Confirmed against somebody who is no longer in this location's roster —
       // a transfer, or a record Workstream deleted. Say so rather than quietly
@@ -510,20 +533,31 @@ export function proposeStoreLinks(input: {
   return { parStoreId, proposals, unlinkedWorkstream };
 }
 
-/** How much of a store is joined, for a banner that says whether to trust a column. */
+/**
+ * How much of a store is joined, for a banner that says whether to trust a
+ * column.
+ *
+ * Counted over people who are active in both systems — `total` deliberately
+ * excludes the ignored leavers, because a coverage figure of "34 of 199" when
+ * 129 of those 199 left the company reads as a broken integration rather than
+ * a nearly-finished one.
+ */
 export function linkCoverage(report: StoreLinkReport): {
   total: number;
   linked: number;
   review: number;
   absent: number;
+  ignored: number;
 } {
   let linked = 0;
   let review = 0;
   let absent = 0;
+  let ignored = 0;
   for (const p of report.proposals) {
     if (p.state === "auto" || p.state === "confirmed") linked++;
     else if (p.state === "absent") absent++;
+    else if (p.state === "ignored") ignored++;
     else review++;
   }
-  return { total: report.proposals.length, linked, review, absent };
+  return { total: linked + review + absent, linked, review, absent, ignored };
 }

@@ -167,7 +167,8 @@ export type StoreLinkView = {
   workstreamLocationUuid: string | null;
   proposals: LinkProposal[];
   unlinkedWorkstream: MatchCandidate[];
-  coverage: { total: number; linked: number; review: number; absent: number };
+  /** Counted over people active in both systems; `ignored` are the leavers. */
+  coverage: { total: number; linked: number; review: number; absent: number; ignored: number };
   /** Why this store has nothing to show, when it has nothing to show. */
   error: string | null;
 };
@@ -188,7 +189,7 @@ export async function getStoreLinkView(storeId: string, today: string): Promise<
     workstreamLocationUuid: store?.workstreamLocationUuid ?? null,
     proposals: [],
     unlinkedWorkstream: [],
-    coverage: { total: 0, linked: 0, review: 0, absent: 0 },
+    coverage: { total: 0, linked: 0, review: 0, absent: 0, ignored: 0 },
   };
 
   if (!store) return { ...base, error: `Unknown store ${storeId}` };

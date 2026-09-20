@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
+import ReconciliationSection from "@/components/ReconciliationSection";
+import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
 import type {
@@ -271,6 +273,10 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         <OpenCloseSection />
 
         <HoursSection />
+
+        {/* Admin-only: it shows everyone's pay rate side by side and its
+            decisions determine whose hours are costed at whose rate. */}
+        {isAdmin && <ReconciliationSection stores={BONUS_STORES} />}
 
         <p className="text-[11px] text-gray-400">
           Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
