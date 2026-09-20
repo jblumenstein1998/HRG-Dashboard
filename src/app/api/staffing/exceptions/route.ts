@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     // The period that pay date covers, clipped at yesterday — the run being
     // prepared is usually still open, and asking PAR about tomorrow is an
     // error rather than an empty answer.
-    const period = payPeriodFor(rawPayDate);
+    const period = payPeriodFor(rawPayDate, today);
     payPeriod = period;
     const to = period.end > yesterday ? yesterday : period.end;
     dates = period.start > to ? [] : dateRange(period.start, to).slice(-MAX_DAYS);

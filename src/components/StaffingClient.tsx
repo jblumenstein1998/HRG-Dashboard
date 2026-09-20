@@ -780,6 +780,7 @@ function MissedClockOutSection() {
   const loading = state.key !== requestKey;
   const data = state.data;
   const periods = data?.payPeriods ?? [];
+  const selected = payDate ? periods.find((p) => p.payDate === payDate) ?? null : null;
 
   const rows = (data?.stores ?? []).flatMap((s) =>
     s.rows.map((r) => ({ ...r, storeName: s.storeName })),
@@ -821,12 +822,23 @@ function MissedClockOutSection() {
             {periods.map((p) => (
               <option key={p.payDate} value={p.payDate}>
                 {p.label} ({p.start.slice(5).replace("-", "/")}–{p.end.slice(5).replace("-", "/")})
+                {p.inProgress ? " · in progress" : ""}
               </option>
             ))}
           </select>
           {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
         </div>
       </div>
+
+      {/* A period still being worked will always show fewer problems than a
+          closed one, having had fewer days to collect them. Say so, rather than
+          let a small number read as a good one. */}
+      {selected?.inProgress && (
+        <p className="px-3 py-2 text-xs text-gray-500">
+          This fortnight is still being worked — {selected.start.slice(5).replace("-", "/")} to{" "}
+          {selected.end.slice(5).replace("-", "/")}, counted through yesterday. Expect it to grow.
+        </p>
+      )}
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 

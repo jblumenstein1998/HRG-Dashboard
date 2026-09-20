@@ -752,29 +752,47 @@ export type PayPeriod = {
   start: string;
   /** Last business date worked, a Sunday. */
   end: string;
+  /** Still being worked — the fortnight has not finished yet. */
+  inProgress: boolean;
   label: string;
 };
 
-/** The pay period paid on `payDate`. */
-export function payPeriodFor(payDate: string): PayPeriod {
+/**
+ * The pay period paid on `payDate`.
+ *
+ * `today` only decides whether the fortnight is still running. It matters on
+ * screen: a period in progress will always show fewer accumulated problems
+ * than a closed one, for no reason other than that fewer days have happened.
+ */
+export function payPeriodFor(payDate: string, today?: string): PayPeriod {
   const end = shiftLocalDate(payDate, -PAY_LAG_DAYS);
   const start = shiftLocalDate(end, -13);
   return {
     payDate,
     start,
     end,
+    inProgress: today ? end >= today : false,
     label: `Paid ${payDate.slice(5).replace("-", "/")}`,
   };
 }
 
 /**
- * Recent pay dates, newest first, starting with the next one due.
+ * Pay dates, newest first, led by one whose fortnight is still being worked.
  *
- * The next pay date leads deliberately: it is the run being prepared, and
- * cleaning up its timecards before it goes out is the entire reason this
- * screen exists. Thanks to the nine-day lag its working period has already
- * closed by the time it appears, so it is a complete fortnight to correct
- * rather than a moving target.
+ * Two future-facing entries rather than one, and they answer different
+ * questions:
+ *
+ *   the run being prepared   its working period closed days ago, thanks to the
+ *                            nine-day lag, so it is a complete fortnight to
+ *                            correct before the money goes out
+ *   the one after it         still being worked. Not actionable in the same
+ *                            way, but it shows what is piling up rather than
+ *                            waiting for it to arrive as a finished list
+ *
+ * The second is marked `inProgress`, because it will always show fewer
+ * problems than a closed period for no reason other than having had fewer days
+ * to collect them, and a count that means something different from the one
+ * above it should say so.
  */
 export function recentPayPeriods(today: string, count = 6): PayPeriod[] {
   // Step to the first pay date on or after today, from the anchor.
@@ -782,9 +800,12 @@ export function recentPayPeriods(today: string, count = 6): PayPeriod[] {
   while (date < today) date = shiftLocalDate(date, 14);
   while (shiftLocalDate(date, -14) >= today) date = shiftLocalDate(date, -14);
 
+  // Then one beyond it: the fortnight currently being worked.
+  date = shiftLocalDate(date, 14);
+
   const out: PayPeriod[] = [];
   for (let i = 0; i < count; i++) {
-    out.push(payPeriodFor(date));
+    out.push(payPeriodFor(date, today));
     date = shiftLocalDate(date, -14);
   }
   return out;
