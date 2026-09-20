@@ -108,6 +108,24 @@ function dateHeader(iso: string): string {
   return `${dow} ${iso.slice(5).replace("-", "/")}`;
 }
 
+/**
+ * A PAR job name with its payroll prefix taken off.
+ *
+ * PAR spells its jobs "Hourly - Assistant Manager", "Salary - General Manager",
+ * "SAL Mgr Asst Gen" — the pay type welded onto the front of the position,
+ * because the same role exists twice in its setup depending on how it is paid.
+ * Nobody reading a staffing screen needs that: whether a manager is salaried is
+ * already visible in the rate beside their name.
+ *
+ * Cosmetic only, and temporary. Positions come from Workstream once somebody is
+ * linked, and Workstream says "Shift Lead" without the ceremony — at which
+ * point this only applies to people the reconciliation queue has not reached.
+ */
+function cleanJobTitle(job: string | null | undefined): string | null {
+  if (!job) return null;
+  return job.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
+}
+
 /** Hours, #,##0.0 — the one format used everywhere on this screen. */
 function hrs(minutes: number | null | undefined): string {
   if (minutes == null || !Number.isFinite(minutes)) return "—";
@@ -290,8 +308,10 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           includes breaks; <strong>trailing 7d</strong> is PAR&apos;s paid minutes-worked, which
           excludes them, over the seven business dates before the one shown. Wages sum the hourly
           rates on the clock; salaried staff carry no rate in PAR and are counted separately rather
-          than added as zero. The Hours chart and table show <strong>overtime only</strong> —
-          PAR&apos;s own overtime split, costed at the rate recorded on each shift times{" "}
+          than added as zero. The Hours chart and store rows show <strong>overtime only</strong>;
+          opening a store adds each person&apos;s regular hours beside theirs, without a second
+          dollar figure. Overtime is PAR&apos;s own split, costed at the rate recorded on each
+          shift times{" "}
           <strong>1.5×</strong>, the one figure on this screen that is assumed rather than read,
           since PAR records the hours but never what it pays for them. It is gross pay, not a
           burdened cost, and salaried hours cost nothing in it. Every window ends{" "}
@@ -904,23 +924,32 @@ function StoreHoursRows({
                     <tr key={id} className="border-b border-gray-100 last:border-0">
                       <td className="px-2 py-1 text-gray-800 whitespace-nowrap">
                         {meta.name}
-                        {meta.position && (
-                          <span className="ml-2 text-[11px] text-gray-600">{meta.position}</span>
+                        {/* One position, not two. Workstream's where the person
+                            has been linked, PAR's job otherwise — and PAR's with
+                            its "Hourly - " pay-type prefix taken off, which is
+                            payroll's business and not a job title. */}
+                        {(meta.position ?? cleanJobTitle(meta.job)) && (
+                          <span className="ml-2 text-[11px] text-gray-600">
+                            {meta.position ?? cleanJobTitle(meta.job)}
+                          </span>
                         )}
                         {meta.rateOfRecord != null && (
                           <span className="ml-1.5 text-[11px] text-gray-400 tabular-nums">
                             ${meta.rateOfRecord.toFixed(2)}/hr
                           </span>
                         )}
-                        {meta.job && meta.job !== meta.position && (
-                          <span className="ml-2 text-[11px] text-gray-400">clocks in as {meta.job}</span>
-                        )}
                       </td>
                       {store.weeks.map((w) => {
                         const row = w.people.find((p) => p.employeeId === id);
                         if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-xs text-gray-300">—</td>;
+                        // Regular hours for context — how much of a person's
+                        // week the overtime sits on top of — but no cost beside
+                        // them. The dollar figure that matters is the overtime
+                        // one, and a second one next to it is what buried it.
                         return (
                           <td key={w.weekStart} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+                            <span className="text-gray-600">{hrs(row.regularMinutes)}</span>
+                            <span className="text-gray-300"> / </span>
                             <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
                               {hrs(row.overtimeMinutes)}
                             </span>{" "}
@@ -1134,7 +1163,7 @@ function StoreCard({ store }: { store: StoreRoster }) {
                         </span>
                       </div>
                       <div className="text-[11px] text-gray-500 truncate">
-                        {titleOf(p) ?? "no position recorded"}
+                        {cleanJobTitle(titleOf(p)) ?? "no position recorded"}
                         {!p.workstream && (
                           <span className="text-gray-400"> · not linked to Workstream</span>
                         )}
@@ -1143,7 +1172,7 @@ function StoreCard({ store }: { store: StoreRoster }) {
                           they hold. A Shift Lead on a Cook shift is a Tuesday,
                           not an error — but it is worth being able to see. */}
                       {p.workstream?.position && p.job && p.job !== p.workstream.position && (
-                        <div className="text-[11px] text-gray-400 truncate">clocked in as {p.job}</div>
+                        <div className="text-[11px] text-gray-400 truncate">clocked in as {cleanJobTitle(p.job)}</div>
                       )}
                       {/* Where the two rates disagree, say so rather than
                           reconcile them: one of the two records is wrong. */}
