@@ -729,25 +729,28 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
 const PAY_DATE_ANCHOR = "2026-09-22";
 
 /**
- * How long after the period ends the money arrives.
+ * How long after the work ends the money arrives.
  *
- * Two days: the period runs Monday to Sunday twice over and is paid on the
- * Tuesday. Inferred from the two known pay dates rather than told to us — 9/22
- * pays the fortnight ending Sunday 9/20, and 9/8 pays the one ending Sunday
- * 9/6 — and it fits the Mon–Sun week this whole screen already counts in.
+ * Nine days, which is stated by the estate and not inferred: pay date 9/22
+ * covers 8/31–9/13, and pay date 9/8 covers 8/17–8/30. Both are Mon–Sun
+ * fortnights ending nine days before the Tuesday they are paid on, so there is
+ * better than a week between the last shift and the money.
  *
- * **If payroll actually closes its books on a different day, this is the line
- * to change and nothing else.** The selector, the ranges and the labels all
- * come off it.
+ * That gap is the reason this screen is useful rather than a curiosity: when
+ * the next pay date comes into view its working period is already closed, so
+ * every timecard in it can be corrected before payroll runs rather than after.
+ *
+ * **If payroll moves its cut-off, this is the line to change and nothing
+ * else.** The selector, the ranges and the labels all come off it.
  */
-const PAY_LAG_DAYS = 2;
+const PAY_LAG_DAYS = 9;
 
 export type PayPeriod = {
   /** The Tuesday the money lands. */
   payDate: string;
-  /** First business date covered, a Monday. */
+  /** First business date worked, a Monday. */
   start: string;
-  /** Last business date covered, a Sunday. */
+  /** Last business date worked, a Sunday. */
   end: string;
   label: string;
 };
@@ -767,10 +770,11 @@ export function payPeriodFor(payDate: string): PayPeriod {
 /**
  * Recent pay dates, newest first, starting with the next one due.
  *
- * The next pay date is included deliberately: it is the one being prepared,
- * and cleaning up its timecards before it runs is the entire reason this
- * screen exists. Its period may still be open, which the caller can see from
- * `end` being in the future.
+ * The next pay date leads deliberately: it is the run being prepared, and
+ * cleaning up its timecards before it goes out is the entire reason this
+ * screen exists. Thanks to the nine-day lag its working period has already
+ * closed by the time it appears, so it is a complete fortnight to correct
+ * rather than a moving target.
  */
 export function recentPayPeriods(today: string, count = 6): PayPeriod[] {
   // Step to the first pay date on or after today, from the anchor.
