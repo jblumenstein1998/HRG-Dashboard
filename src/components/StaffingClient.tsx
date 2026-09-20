@@ -1074,17 +1074,16 @@ function DaypartSection({ filter }: { filter: StoreFilter }) {
                 <tr key={s.storeId} className="border-b border-gray-50 last:border-0">
                   <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">
                     {s.storeName}
-                    {/* The 8–Close band ran to the last order because PAR's
-                        configured close was earlier than the store was still
-                        selling. Flagged rather than silently corrected: the
-                        setting is wrong in PAR and anything else reading it is
-                        wrong too. */}
-                    {s.closeFromOrders && (
+                    {/* The window is PAR's close, always. This only says that
+                        PAR's close disagrees with the till — which means the
+                        setting wants updating, and that the labor-after-close
+                        figures below are reading the same stale number. */}
+                    {s.soldAfterClose && (
                       <span
                         className="ml-2 text-[11px] text-amber-700"
-                        title="PAR's configured close is earlier than the last order — close taken from sales"
+                        title={`PAR has this store closing at ${s.closeLabel}, but the last order was ${s.lastOrderLabel}`}
                       >
-                        close from sales
+                        sold past {s.closeLabel}
                       </span>
                     )}
                     {s.error && <span className="ml-2 text-xs text-red-600">{s.error}</span>}

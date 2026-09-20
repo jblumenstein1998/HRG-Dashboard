@@ -976,9 +976,12 @@ export type StoreDayparts = {
   opening: { laborMinutes: number; laborCost: number; openLabel: string | null };
   /** 11–2, 2–5, 5–8, then 8pm to this store's own close. */
   cells: DaypartCell[];
+  /** PAR's own close for this weekday. */
   closeLabel: string | null;
-  /** The close came from the last order, because the configured one was wrong. */
-  closeFromOrders: boolean;
+  /** The last order actually rung, for comparison against that close. */
+  lastOrderLabel: string | null;
+  /** The store was still selling after the close PAR has on file. */
+  soldAfterClose: boolean;
   error: string | null;
 };
 
@@ -1011,7 +1014,8 @@ export async function getDaypartProductivity(businessDate: string): Promise<Dayp
         opening: { laborMinutes: 0, laborCost: 0, openLabel: null },
         cells: [],
         closeLabel: null,
-        closeFromOrders: false,
+        lastOrderLabel: null,
+        soldAfterClose: false,
       };
       try {
         // Fetched once per store, then every window is computed from the same
@@ -1053,24 +1057,31 @@ export async function getDaypartProductivity(businessDate: string): Promise<Dayp
         const cells = PRODUCTIVITY_BANDS.map((b) => windowOf(b.start, b.end, b.label));
 
         /*
-         * 8pm to close — where "close" is when the store stopped selling, not
-         * what its settings claim.
-         *
-         * PAR's configured close is not dependable: four stores return a flat
-         * 10:30am–7:00pm for all seven days, an untouched default, while they
-         * are plainly still taking orders at ten at night. Trusting it blanked
-         * this band for a third of the estate and hid their busiest hours.
-         *
-         * So the band runs to the later of the configured close and the last
-         * order actually rung. Correctly configured stores are unaffected —
-         * their close already sits past the last order — and the broken ones
-         * get measured against what really happened. The POS tab has never
-         * needed the setting either; it reads the orders.
+         * 8pm to close, where close is PAR's own — the same GetBusinessHours
+         * the labor-after-close section reads, so the two cannot disagree about
+         * when a store shut.
          *
          * Minutes are already store-local and already carry past 1440 for a
          * store trading beyond midnight, so nothing needs wrapping here.
          */
-        const configuredClose = today?.closeMinutes ?? null;
+        const closeMinutes = today?.closeMinutes ?? null;
+
+        cells.push(
+          closeMinutes != null && closeMinutes > LATE_BAND_START
+            ? windowOf(LATE_BAND_START, closeMinutes, "8–Close")
+            : { label: "8–Close", laborMinutes: 0, netSales: 0, transactions: 0, splh: null, tplh: null },
+        );
+
+        /*
+         * Did the store keep selling after the close PAR has on file?
+         *
+         * Reported, never acted on. The window above is PAR's, full stop — but
+         * a store still ringing orders an hour after its recorded close means
+         * the setting is stale, and that is worth seeing rather than inferring
+         * from a blank cell. It reads on nearly every store, which says the
+         * closing times in PAR want a look generally, not just at the four
+         * sitting on an untouched 7:00pm default.
+         */
         const lastOrder = orders.reduce<number | null>(
           (latest, o) =>
             o.openedMinutes != null && (latest === null || o.openedMinutes > latest)
@@ -1078,15 +1089,8 @@ export async function getDaypartProductivity(businessDate: string): Promise<Dayp
               : latest,
           null,
         );
-        // +1 so the last order falls inside a half-open window.
-        const tradedUntil = lastOrder === null ? null : lastOrder + 1;
-        const effectiveClose = Math.max(configuredClose ?? 0, tradedUntil ?? 0) || null;
-
-        cells.push(
-          effectiveClose != null && effectiveClose > LATE_BAND_START
-            ? windowOf(LATE_BAND_START, effectiveClose, "8–Close")
-            : { label: "8–Close", laborMinutes: 0, netSales: 0, transactions: 0, splh: null, tplh: null },
-        );
+        const soldAfterClose =
+          closeMinutes != null && lastOrder != null && lastOrder > closeMinutes;
 
         // Labor before the doors open, and what it cost. Salaried staff carry a
         // rate of 0 in PAR, so they contribute hours and no cost — the same
@@ -1110,15 +1114,9 @@ export async function getDaypartProductivity(businessDate: string): Promise<Dayp
             openLabel: today ? clockLabel(today.openMinutes) : null,
           },
           cells,
-          closeLabel: effectiveClose != null ? clockLabel(effectiveClose) : null,
-          /**
-           * True when the configured close was behind the trading and the last
-           * order had to stand in for it. Worth surfacing rather than silently
-           * correcting: the setting is wrong in PAR and everything else that
-           * reads it is wrong too.
-           */
-          closeFromOrders:
-            effectiveClose != null && (configuredClose ?? 0) < effectiveClose,
+          closeLabel: closeMinutes != null ? clockLabel(closeMinutes) : null,
+          lastOrderLabel: lastOrder != null ? clockLabel(lastOrder) : null,
+          soldAfterClose,
           error: null,
         };
       } catch (err) {
