@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
     const name = LOCATION_NAMES[id];
     if (!name) return NextResponse.json({ error: "Unknown locationId" }, { status: 400 });
     try {
-      const { actualCostPct, actualCostDollars, variancePct, varianceDollars } = await fetchLocationReport(id, start, end);
-      const loc: LocationData = { locationId: id, locationName: name, actualCostPct, actualCostDollars, variancePct, varianceDollars };
+      const { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase } = await fetchLocationReport(id, start, end);
+      const loc: LocationData = { locationId: id, locationName: name, actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
       return NextResponse.json(loc);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

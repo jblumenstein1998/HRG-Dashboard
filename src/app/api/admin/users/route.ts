@@ -1,12 +1,13 @@
 import { NextRequest } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
+import { apiViewer } from "@/lib/users/access";
 import { ALLOWED_HD } from "@/lib/users/google";
 import {
   createUser,
+  deleteUser,
   findByEmail,
   listPositions,
   listUsers,
-  setDisabled,
   updateUser,
 } from "@/lib/users/store";
 
@@ -78,7 +79,6 @@ export async function PATCH(request: NextRequest) {
     name?: string;
     email?: string;
     positionId?: string;
-    disabled?: boolean;
   };
 
   if (!body.id) return Response.json({ error: "Missing user id" }, { status: 400 });
@@ -95,9 +95,32 @@ export async function PATCH(request: NextRequest) {
     });
   }
 
-  if (typeof body.disabled === "boolean") {
-    await setDisabled(body.id, body.disabled);
+  return Response.json({ ok: true });
+}
+
+/**
+ * Removes an account for good, as opposed to PATCH's `disabled`.
+ *
+ * Deleting yourself is refused here rather than in lib/users/store, because
+ * this is the layer that knows who is asking — and it's the one deletion that
+ * can't be undone by the person who made it: they'd lose the screen on the way
+ * out. Disabling has the same rule, enforced by the UI hiding the button; this
+ * being irreversible, it's checked on the server too.
+ */
+export async function DELETE(request: NextRequest) {
+  const viewer = await apiViewer();
+  if (!viewer) return Response.json({ error: "Not signed in" }, { status: 401 });
+  if (!viewer.position.isAdmin) return Response.json({ error: "Not allowed" }, { status: 403 });
+
+  const id = request.nextUrl.searchParams.get("id");
+  if (!id) return Response.json({ error: "Missing id" }, { status: 400 });
+
+  if (id === viewer.user.id) {
+    return Response.json({ error: "You can't delete your own account." }, { status: 409 });
   }
+
+  const problem = await deleteUser(id);
+  if (problem) return Response.json({ error: problem }, { status: 409 });
 
   return Response.json({ ok: true });
 }

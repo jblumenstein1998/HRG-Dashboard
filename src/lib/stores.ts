@@ -24,6 +24,27 @@ const STORE_CONFIG: {
   { fragment: "2332 elson green",         label: "Beach",       section: "Virginia",  order: 6 },
 ];
 
+/**
+ * Every store, in display order, without needing a BerryAI branch list in hand.
+ *
+ * `groupBranches` can only describe the stores BerryAI returned; the admin
+ * screen has to offer the whole estate before anyone has fetched anything, so
+ * the catalog is derived from the same STORE_CONFIG rather than typed out a
+ * second time and left to drift.
+ */
+export const ALL_STORES: { label: string; section: StoreSection }[] = (
+  ["Tennessee", "Virginia"] as StoreSection[]
+).flatMap((section) =>
+  STORE_CONFIG.filter((c) => c.section === section)
+    .sort((a, b) => a.order - b.order)
+    .map((c) => ({ label: c.label, section })),
+);
+
+/** Whether a stored store label still names a store in the catalog above. */
+export function isKnownStoreLabel(label: string): boolean {
+  return ALL_STORES.some((s) => s.label === label);
+}
+
 function findConfig(branch: BranchStore) {
   const loc = (branch.location ?? "").toLowerCase();
   return STORE_CONFIG.find(({ fragment }) => loc.includes(fragment)) ?? null;

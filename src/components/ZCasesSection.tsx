@@ -151,6 +151,7 @@ export default function ZCasesSection({
   refreshKey,
   fetchKey,
   stores,
+  totalLabel,
 }: {
   start: string | null;
   end: string | null;
@@ -165,6 +166,8 @@ export default function ZCasesSection({
    * rows here, so the tiles can't disagree with the table.
    */
   stores: string[] | null;
+  /** Caption for the totals row, naming whatever the page filter selected. */
+  totalLabel: string;
 }) {
   const [sort, setSort] = useState<{ col: SortCol; dir: "asc" | "desc" }>({ col: "cases", dir: "desc" });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -580,7 +583,7 @@ export default function ZCasesSection({
             {!loading && totals && sortedStores.length > 0 && (
               <tfoot>
                 <tr className="border-t border-gray-200 bg-gray-50/60 font-semibold text-gray-900">
-                  <td className="px-4 py-2.5">All stores</td>
+                  <td className="px-4 py-2.5">{totalLabel}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{totals.cases}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">
                     {totals.avgResolveHours == null ? "—" : `${totals.avgResolveHours} hrs`}
