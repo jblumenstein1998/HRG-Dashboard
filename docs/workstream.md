@@ -373,7 +373,50 @@ for everyone — so the app keeps deriving it from `OVERTIME_MULTIPLIER` in
 policy ever stops being uniform, read the rate and delete the constant; do one
 or the other, not both.
 
-## Retention (next, not built)
+## Retention — computed, deliberately not wired in
+
+`src/lib/workstreamRetention.ts` computes 30/60/90-day new-hire retention per
+store. `scripts/workstream-retention-check.mjs` prints it for any window.
+
+**The cohort is pinned to the anniversary, not the hire date.** A period's
+30-day figure covers people whose 30th day fell inside it. Scoring by hire date
+instead would mean a period's number could not be known until thirty days after
+it closed, and would keep moving after the bonus had been paid.
+
+The scorecard still has `t_retention_30/60/90` as `source: "manual"`, and they
+should stay that way until these figures have been checked against a period
+somebody scored by hand. This drives pay; "the computer says 78%" is not a
+reason to believe it.
+
+### Why they are not trustworthy yet
+
+Roughly a quarter of each cohort carries **no store**, because a terminated
+Workstream record usually loses its job assignment — and the assignment is what
+names the location. Measured over the 90 days to 2026-09-20:
+
+| 90-day cohort | Stayed | Left | Retention |
+| --- | --- | --- | --- |
+| With a store | 132 | 97 | **57.6%** |
+| No store | 10 | 49 | **16.9%** |
+
+The storeless group is overwhelmingly leavers, so dropping it flatters every
+store. Company-wide the true figure is 49.3%, not 57.6% — an eight-point
+overstatement, and worse for stores whose leavers happen to lose their
+assignment more often.
+
+Two things to settle before this can gate a bonus:
+
+1. **Recover the store for terminated records.** Nothing in the API offers it
+   once the assignment is gone. The practical fix may be to snapshot each
+   person's store *while they are still employed*, which is the argument for the
+   snapshot table below.
+2. **Transfers.** Workstream creates a new record when somebody moves store, so
+   a transfer reads as a departure plus a hire unless the old record is closed.
+
+Portland also reports 7.7% at 30 days (1 of 13), which is either a real story
+about a new store or a data problem, and is worth a human look either way.
+
+## Retention plumbing still to build
 
 Workstream is the only system that knows hire and termination dates, so it is
 the only possible source for retention — which is why the bonus scorecard wants
