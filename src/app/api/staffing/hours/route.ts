@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  currentWeekDays,
   getStoreHours,
   recentCompleteDays,
   recentCompleteWeeks,
   recentCompletePeriods,
+  weekToDateSpan,
 } from "@/lib/staffing";
 import { todayCentralISO } from "@/lib/parRollup";
 
@@ -13,6 +15,8 @@ import { todayCentralISO } from "@/lib/parRollup";
  * GET /api/staffing/hours?weeks=4          the last 4 complete Mon–Sun weeks
  * GET /api/staffing/hours?periods=2        the last 2 complete pay periods
  * GET /api/staffing/hours?days=14          the last 14 complete business dates
+ * GET /api/staffing/hours?weeks=3&wtd=1    3 complete weeks, then this week so far
+ * GET /api/staffing/hours?wtdDays=1        this week, Monday through yesterday
  *
  * Seven cached GetShifts calls per store per week, so four weeks across twelve
  * stores is 336 calls on a cold cache and nothing on a warm one — past business
@@ -42,11 +46,23 @@ export async function GET(req: NextRequest) {
   // being readable anyway.
   const days = Number(p.get("days") ?? 0);
 
-  const spans = periods > 0
-    ? recentCompletePeriods(today, Math.min(4, Math.max(1, periods)))
-    : days > 0
-      ? recentCompleteDays(today, Math.min(MAX_DAYS, Math.max(1, days)))
-      : recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
+  // This week broken into days, Monday through yesterday.
+  const wtdDays = p.get("wtdDays") === "1";
+  // Append the running week, so completed weeks and "so far" sit on one axis.
+  const withWtd = p.get("wtd") === "1";
+
+  const weeks = recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
+  const wtd = weekToDateSpan(today);
+
+  const spans = wtdDays
+    ? currentWeekDays(today)
+    : periods > 0
+      ? recentCompletePeriods(today, Math.min(4, Math.max(1, periods)))
+      : days > 0
+        ? recentCompleteDays(today, Math.min(MAX_DAYS, Math.max(1, days)))
+        : withWtd && wtd
+          ? [...weeks, wtd]
+          : weeks;
 
   try {
     return NextResponse.json(await getStoreHours(spans));

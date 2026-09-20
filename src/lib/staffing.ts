@@ -498,6 +498,43 @@ export function recentCompleteDays(today: string, count: number): HoursSpan[] {
 }
 
 /**
+ * This week so far — Monday through yesterday.
+ *
+ * Null on a Monday, when there is no "so far" yet. Returning an empty span
+ * instead would plot a point at zero, which is a claim that nobody worked
+ * overtime rather than that the week has not started.
+ *
+ * Today is excluded, as everywhere else on this screen: a day still being
+ * worked reports less overtime than it will finish with.
+ *
+ * It sits alongside completed weeks knowing it is not their equal — a partial
+ * week is always lower than a full one, and the axis cannot say so. The label
+ * carries that warning, which is why it reads "WTD" rather than a date.
+ */
+export function weekToDateSpan(today: string): HoursSpan | null {
+  const monday = mondayOf(today);
+  const yesterday = shiftLocalDate(today, -1);
+  if (yesterday < monday) return null;
+  return { start: monday, end: yesterday, label: "WTD" };
+}
+
+/**
+ * Each day of the current week, Monday through yesterday.
+ *
+ * The breakdown behind the WTD point: same window, one column per day, for
+ * working out which shift put the week where it is.
+ */
+export function currentWeekDays(today: string): HoursSpan[] {
+  const monday = mondayOf(today);
+  const yesterday = shiftLocalDate(today, -1);
+  const days: HoursSpan[] = [];
+  for (const date of eachDate(monday, yesterday)) {
+    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
+  }
+  return days;
+}
+
+/**
  * The last `count` completed pay periods.
  *
  * A pay period here is the fiscal period from lib/fiscal — four or five weeks,

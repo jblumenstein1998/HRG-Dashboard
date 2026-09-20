@@ -290,11 +290,14 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           includes breaks; <strong>trailing 7d</strong> is PAR&apos;s paid minutes-worked, which
           excludes them, over the seven business dates before the one shown. Wages sum the hourly
           rates on the clock; salaried staff carry no rate in PAR and are counted separately rather
-          than added as zero. In the weekly table the hours are PAR&apos;s own split of regular and
-          overtime, and the dollars are those hours at the rate recorded on each shift — with
-          overtime at <strong>1.5×</strong>, the one figure on this screen that is assumed rather
-          than read, since PAR records the hours but never what it pays for them. All of it is
-          gross pay, not a burdened cost, and salaried hours cost nothing in it.
+          than added as zero. The Hours chart and table show <strong>overtime only</strong> —
+          PAR&apos;s own overtime split, costed at the rate recorded on each shift times{" "}
+          <strong>1.5×</strong>, the one figure on this screen that is assumed rather than read,
+          since PAR records the hours but never what it pays for them. It is gross pay, not a
+          burdened cost, and salaried hours cost nothing in it. Every window ends{" "}
+          <strong>yesterday</strong>, because a day still being worked reports less overtime than
+          it will finish with; the <strong>WTD</strong> point is a part-week and will sit below the
+          full weeks beside it for that reason alone.
         </p>
       </main>
     </div>
@@ -711,22 +714,27 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
   );
 }
 
-type HoursRange = "7d" | "14d" | "2" | "4" | "periods";
+type HoursRange = "3w-wtd" | "wtd-days" | "7d" | "14d" | "4" | "periods";
 
 /** The query each range asks for, and what the chart's x-axis is showing. */
 const HOURS_RANGES: Record<HoursRange, { query: string; label: string; grain: string }> = {
-  "7d": { query: "days=7", label: "7 days", grain: "day" },
-  "14d": { query: "days=14", label: "14 days", grain: "day" },
-  "2": { query: "weeks=2", label: "2 weeks", grain: "week" },
+  // The default: three finished weeks to read a trend against, then where this
+  // week has got to. The WTD point is not their equal — a partial week is
+  // always lower than a full one — which is why it is labelled rather than
+  // dated, and why the footnote below says so.
+  "3w-wtd": { query: "weeks=3&wtd=1", label: "3 weeks + WTD", grain: "week" },
+  "wtd-days": { query: "wtdDays=1", label: "This week by day", grain: "day this week" },
+  "7d": { query: "days=7", label: "Last 7 days", grain: "day" },
+  "14d": { query: "days=14", label: "Last 14 days", grain: "day" },
   "4": { query: "weeks=4", label: "4 weeks", grain: "week" },
-  periods: { query: "periods=2", label: "2 pay periods", grain: "pay period" },
+  periods: { query: "periods=2", label: "Last 2 pay periods", grain: "pay period" },
 };
 
 function HoursSection() {
   // Days, weeks or pay periods — one control for the chart and the table, since
   // they are two views of the same window and two selectors that could disagree
   // would be a way to misread both.
-  const [range, setRange] = useState<HoursRange>("4");
+  const [range, setRange] = useState<HoursRange>("3w-wtd");
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
@@ -757,18 +765,18 @@ function HoursSection() {
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-900">Hours</span>
         <span className="text-xs text-gray-400">
-regular / overtime · hours then cost · completed spans only
+          overtime hours and cost · through yesterday
         </span>
         <select
           value={range}
           onChange={(e) => { setRange(e.target.value as HoursRange); setExpanded(null); }}
           className="ml-auto text-xs border border-gray-200 rounded-lg py-0.5 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
         >
-          <option value="7d">7 days</option>
-          <option value="14d">14 days</option>
-          <option value="2">2 weeks</option>
-          <option value="4">4 weeks</option>
-          <option value="periods">Last 2 pay periods</option>
+          {(Object.keys(HOURS_RANGES) as HoursRange[]).map((key) => (
+            <option key={key} value={key}>
+              {HOURS_RANGES[key].label}
+            </option>
+          ))}
         </select>
         {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
       </div>
@@ -858,11 +866,12 @@ function StoreHoursRows({
           {store.storeName}
           {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
         </td>
+        {/* Overtime only. Regular hours took four times the width for a number
+            nobody opens this table to read — the overtime is the actionable
+            figure, and sitting it beside one ten times its size made it the
+            small print. */}
         {store.weeks.map((w) => (
           <td key={w.weekStart} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
-            <span className="text-gray-700">{hrs(w.regularMinutes)}</span>{" "}
-            <span className="text-gray-400">{usd(w.regularCost)}</span>
-            <span className="text-gray-300"> / </span>
             <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
               {hrs(w.overtimeMinutes)}
             </span>{" "}
@@ -912,9 +921,6 @@ function StoreHoursRows({
                         if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-xs text-gray-300">—</td>;
                         return (
                           <td key={w.weekStart} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
-                            <span className="text-gray-600">{hrs(row.regularMinutes)}</span>{" "}
-                            <span className="text-gray-400">{usd(row.regularCost)}</span>
-                            <span className="text-gray-300"> / </span>
                             <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
                               {hrs(row.overtimeMinutes)}
                             </span>{" "}
