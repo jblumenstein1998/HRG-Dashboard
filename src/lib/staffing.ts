@@ -720,6 +720,193 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
  * that runs past midnight is measured in its own frame rather than wrapping to
  * a negative span.
  */
+// ── Payroll calendar ─────────────────────────────────────────────────────────
+
+/**
+ * A known pay date, to count fortnights from. 2026-09-22 is a Tuesday, and
+ * 2026-09-08 — the one before it — confirms the fourteen-day step.
+ */
+const PAY_DATE_ANCHOR = "2026-09-22";
+
+/**
+ * How long after the period ends the money arrives.
+ *
+ * Two days: the period runs Monday to Sunday twice over and is paid on the
+ * Tuesday. Inferred from the two known pay dates rather than told to us — 9/22
+ * pays the fortnight ending Sunday 9/20, and 9/8 pays the one ending Sunday
+ * 9/6 — and it fits the Mon–Sun week this whole screen already counts in.
+ *
+ * **If payroll actually closes its books on a different day, this is the line
+ * to change and nothing else.** The selector, the ranges and the labels all
+ * come off it.
+ */
+const PAY_LAG_DAYS = 2;
+
+export type PayPeriod = {
+  /** The Tuesday the money lands. */
+  payDate: string;
+  /** First business date covered, a Monday. */
+  start: string;
+  /** Last business date covered, a Sunday. */
+  end: string;
+  label: string;
+};
+
+/** The pay period paid on `payDate`. */
+export function payPeriodFor(payDate: string): PayPeriod {
+  const end = shiftLocalDate(payDate, -PAY_LAG_DAYS);
+  const start = shiftLocalDate(end, -13);
+  return {
+    payDate,
+    start,
+    end,
+    label: `Paid ${payDate.slice(5).replace("-", "/")}`,
+  };
+}
+
+/**
+ * Recent pay dates, newest first, starting with the next one due.
+ *
+ * The next pay date is included deliberately: it is the one being prepared,
+ * and cleaning up its timecards before it runs is the entire reason this
+ * screen exists. Its period may still be open, which the caller can see from
+ * `end` being in the future.
+ */
+export function recentPayPeriods(today: string, count = 6): PayPeriod[] {
+  // Step to the first pay date on or after today, from the anchor.
+  let date = PAY_DATE_ANCHOR;
+  while (date < today) date = shiftLocalDate(date, 14);
+  while (shiftLocalDate(date, -14) >= today) date = shiftLocalDate(date, -14);
+
+  const out: PayPeriod[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(payPeriodFor(date));
+    date = shiftLocalDate(date, -14);
+  }
+  return out;
+}
+
+// ── Missed punches ───────────────────────────────────────────────────────────
+
+/**
+ * Still on the clock at 2:13am: they forgot to punch out.
+ *
+ * The rule is the estate's, not an inference. Every store is long shut by then
+ * — the latest close plus cleanup is nowhere near two in the morning — so a
+ * shift still running at 2:13 is a timecard to fix, not a night worked.
+ *
+ * It has to be a time-of-day rule rather than "the shift never ended", because
+ * PAR does not leave these open: something closes them out, so `isOpen` is
+ * false by the time anybody looks and the only surviving evidence is an end
+ * time in the small hours. Checking `isOpen` alone found nothing across a whole
+ * pay period, which is what sent us looking for the real tell.
+ *
+ * `isOpen` is still checked, for the case where nothing has closed it yet.
+ *
+ * Minutes are counted from the business date's own midnight, so a shift that
+ * legitimately runs past twelve carries on past 1440 rather than wrapping — see
+ * lib/par.ts. 2:13am the following morning is therefore minute 1573.
+ *
+ * Missed *break* punches are the obvious companion and are deliberately not
+ * here yet: "didn't clock out for a break" splits into a break left open, a
+ * shift with no break at all, and a break shorter than policy, and the last two
+ * need a rule nobody has written down yet.
+ */
+const MISSED_CLOCKOUT_MINUTE = 24 * 60 + 2 * 60 + 13;
+
+export type MissedPunch = {
+  businessDate: string;
+  employeeId: string | null;
+  name: string;
+  job: string | null;
+  /** When the shift began, in the store's own clock. */
+  startLabel: string;
+  /** When PAR says it ended, or "still open" if nothing ever closed it. */
+  endLabel: string;
+  /** Nothing has closed this shift at all — the worse of the two cases. */
+  stillOpen: boolean;
+  /**
+   * Minutes PAR currently credits the shift. Not what anybody will be paid —
+   * shown so the size of the correction is visible, not as a fact.
+   */
+  minutesWorked: number;
+};
+
+export type StoreMissedPunches = {
+  storeId: string;
+  storeName: string;
+  state: "TN" | "VA";
+  rows: MissedPunch[];
+  error: string | null;
+};
+
+export type MissedPunchReport = {
+  /** Business dates examined, oldest first. */
+  dates: string[];
+  stores: StoreMissedPunches[];
+  fetchedAt: number;
+};
+
+/**
+ * Every missed punch across the estate, over the given business dates.
+ *
+ * Dates are taken rather than a count so one report serves both "yesterday" and
+ * a whole pay period without the caller having to know how either is built.
+ */
+export async function getMissedPunches(dates: string[]): Promise<MissedPunchReport> {
+  const stores = await Promise.all(
+    PAR_LOCATIONS.map(async (loc): Promise<StoreMissedPunches> => {
+      try {
+        const [employees, jobs, ...days] = await Promise.all([
+          getEmployees(loc.storeId),
+          getJobs(loc.storeId),
+          ...dates.map((d) => getShifts(loc.storeId, d)),
+        ]);
+        const empById = new Map(employees.map((e) => [e.id, e]));
+        const jobById = new Map(jobs.map((j) => [j.id, j]));
+
+        const rows: MissedPunch[] = [];
+        days.forEach((shifts, i) => {
+          const businessDate = dates[i];
+          for (const sh of shifts) {
+            // Still on the clock at 2:13am, or never closed at all.
+            if (!sh.isOpen && sh.endMinutes <= MISSED_CLOCKOUT_MINUTE) continue;
+            rows.push({
+              businessDate,
+              employeeId: sh.employeeId,
+              name: fullName(sh.employeeId ? empById.get(sh.employeeId) : undefined)
+                ?? (sh.employeeId ? `#${sh.employeeId}` : "unknown"),
+              job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
+              startLabel: clockLabel(sh.startMinutes),
+              endLabel: sh.isOpen ? "still open" : clockLabel(sh.endMinutes),
+              stillOpen: sh.isOpen,
+              minutesWorked: sh.minutesWorked,
+            });
+          }
+        });
+
+        // Oldest first, then by who started earliest — the order somebody would
+        // work down a list of corrections.
+        rows.sort(
+          (a, b) => a.businessDate.localeCompare(b.businessDate) || a.name.localeCompare(b.name),
+        );
+
+        return { storeId: loc.storeId, storeName: loc.name, state: loc.state, rows, error: null };
+      } catch (err) {
+        return {
+          storeId: loc.storeId,
+          storeName: loc.name,
+          state: loc.state,
+          rows: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }),
+  );
+
+  return { dates, stores, fetchedAt: Date.now() };
+}
+
 export type OpenCloseCell = {
   businessDate: string;
   /** Null when PAR has no hours for that day of week. */

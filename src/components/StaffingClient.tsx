@@ -26,6 +26,7 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
+  MissedPunchReport, PayPeriod,
 } from "@/lib/staffing";
 
 /**
@@ -270,6 +271,10 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         )}
 
         <WorkstreamSyncBanner sync={data?.workstreamSync} />
+
+        {/* First on the page: the only section here that is a task rather than
+            a report. */}
+        <MissedClockOutSection />
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
@@ -733,6 +738,149 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * Timecards to fix: still on the clock at 2:13am.
+ *
+ * Top of the page because it is the only thing here that is a task. Everything
+ * below reports what happened; this says what to go and correct, and it is
+ * worth nothing if it is found by scrolling.
+ *
+ * Two windows, which are the two moments anybody asks. **Yesterday** is for
+ * catching it while people still remember the shift. **The pay period** is the
+ * pre-payroll sweep — every date the run will pay for, so nothing wrong goes
+ * out the door.
+ *
+ * Empty is the expected state, and says so rather than showing a bare table.
+ */
+function MissedClockOutSection() {
+  const [payDate, setPayDate] = useState<string | null>(null);
+  const [state, setState] = useState<{
+    key: string; data: MissedPunchReport & { payPeriods?: PayPeriod[] } | null; error: string | null;
+  }>({ key: "", data: null, error: null });
+
+  const query = payDate ? `payDate=${payDate}` : "";
+  const requestKey = query || "yesterday";
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/staffing/exceptions${query ? `?${query}` : ""}`)
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        return json as MissedPunchReport & { payPeriods?: PayPeriod[] };
+      })
+      .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
+    return () => { cancelled = true; };
+  }, [requestKey, query]);
+
+  const loading = state.key !== requestKey;
+  const data = state.data;
+  const periods = data?.payPeriods ?? [];
+
+  const rows = (data?.stores ?? []).flatMap((s) =>
+    s.rows.map((r) => ({ ...r, storeName: s.storeName })),
+  );
+  const storeErrors = (data?.stores ?? []).filter((s) => s.error);
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
+        <span className="text-sm font-semibold text-gray-900">Timecards to fix</span>
+        <span className="text-xs text-gray-400">still on the clock at 2:13am</span>
+
+        {rows.length > 0 && (
+          <span className="text-xs font-medium text-amber-700">
+            {rows.length} to correct
+          </span>
+        )}
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setPayDate(null)}
+            className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+              payDate === null
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            Yesterday
+          </button>
+          <select
+            value={payDate ?? ""}
+            onChange={(e) => setPayDate(e.target.value || null)}
+            aria-label="Pay period"
+            className={`text-xs border rounded-lg py-1 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+              payDate ? "border-gray-400 text-gray-900" : "border-gray-200 text-gray-500"
+            }`}
+          >
+            <option value="">Pay period…</option>
+            {periods.map((p) => (
+              <option key={p.payDate} value={p.payDate}>
+                {p.label} ({p.start.slice(5).replace("-", "/")}–{p.end.slice(5).replace("-", "/")})
+              </option>
+            ))}
+          </select>
+          {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+        </div>
+      </div>
+
+      {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {storeErrors.length > 0 && (
+        <p className="px-3 py-2 text-xs text-amber-700">
+          Could not read {storeErrors.map((s) => s.storeName).join(", ")} — those stores are not
+          included in the count above.
+        </p>
+      )}
+
+      {data && rows.length === 0 && !loading && (
+        <p className="px-3 py-4 text-sm text-gray-500">
+          Nothing to fix{payDate ? " in this pay period" : " from yesterday"}. Every shift was
+          clocked out.
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs uppercase tracking-wide text-gray-400">
+                <th className="px-3 py-1.5 text-left font-semibold">Date</th>
+                <th className="px-3 py-1.5 text-left font-semibold">Store</th>
+                <th className="px-3 py-1.5 text-left font-semibold">Employee</th>
+                <th className="px-3 py-1.5 text-left font-semibold">Job</th>
+                <th className="px-3 py-1.5 text-right font-semibold">In</th>
+                <th className="px-3 py-1.5 text-right font-semibold">Out</th>
+                <th className="px-3 py-1.5 text-right font-semibold">PAR credits</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={`${r.storeName}-${r.businessDate}-${r.employeeId ?? i}`} className="border-b border-gray-50 last:border-0">
+                  <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{dateHeader(r.businessDate)}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap text-gray-900">{r.storeName}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">{r.name}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap text-gray-500">{cleanJobTitle(r.job) ?? "—"}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-gray-600 whitespace-nowrap">{r.startLabel}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap text-amber-700 font-medium">
+                    {r.endLabel}
+                  </td>
+                  {/* Flagged as what PAR currently credits, not as hours worked:
+                      the whole point is that this figure is wrong. */}
+                  <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 whitespace-nowrap">
+                    {hrs(r.minutesWorked)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
