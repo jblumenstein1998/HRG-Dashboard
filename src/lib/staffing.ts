@@ -39,6 +39,7 @@ import {
   type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
+import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
   employeeId: string | null;
@@ -132,6 +133,22 @@ export type StaffingReport = {
   at: string;
   stores: StoreRoster[];
   fetchedAt: number;
+  /**
+   * When the stored Workstream roster was last filled, and how big it is.
+   *
+   * On the report rather than left implicit because the failure it describes is
+   * invisible otherwise: with an empty or stale table every card reads "not
+   * linked to Workstream" and everybody lands under "Other", which looks like
+   * broken matching rather than absent data. An hour was already lost to
+   * exactly that confusion once.
+   */
+  workstreamSync: {
+    rows: number;
+    lastSyncedAt: string | null;
+    /** Hours since the last sync, or null if it has never run. Computed here
+     *  rather than in the component, which must stay pure. */
+    ageHours: number | null;
+  };
 };
 
 /**
@@ -334,8 +351,21 @@ async function rosterForStore(
  * costs nothing.
  */
 export async function getStaffingAt(at: Date): Promise<StaffingReport> {
-  const stores = await Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, at)));
-  return { at: at.toISOString(), stores, fetchedAt: Date.now() };
+  const [stores, status] = await Promise.all([
+    Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, at))),
+    // Never a reason for the page to fail: if the roster table cannot be read,
+    // say it has never synced and let the banner explain the blank columns.
+    workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
+  ]);
+
+  const workstreamSync = {
+    ...status,
+    ageHours: status.lastSyncedAt
+      ? Math.round(((Date.now() - new Date(status.lastSyncedAt).getTime()) / 3_600_000) * 10) / 10
+      : null,
+  };
+
+  return { at: at.toISOString(), stores, fetchedAt: Date.now(), workstreamSync };
 }
 
 // ── Hours by store by week ───────────────────────────────────────────────────

@@ -247,6 +247,8 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           </div>
         )}
 
+        <WorkstreamSyncBanner sync={data?.workstreamSync} />
+
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
             title={`On the clock — ${data ? new Date(data.at).toLocaleString() : when.replace("T", " ")}`}
@@ -701,6 +703,46 @@ function groupOf(p: StaffOnClock): string {
   const title = p.workstream?.position;
   if (!title) return "other";
   return JOB_GROUPS.find((g) => g.titles.includes(title))?.key ?? "other";
+}
+
+/**
+ * Says when the Workstream roster was last read, but only when that matters.
+ *
+ * Silent on a fresh sync, because a line reporting that everything is fine is a
+ * line people stop reading. It speaks up when the table is empty or a day and a
+ * half stale — the states where every card reads "not linked to Workstream" and
+ * everybody falls into "Other", which looks like broken matching rather than
+ * absent data. That misreading has already cost an hour once.
+ */
+function WorkstreamSyncBanner({
+  sync,
+}: {
+  sync?: { rows: number; lastSyncedAt: string | null; ageHours: number | null };
+}) {
+  if (!sync) return null;
+
+  const ageHours = sync.ageHours;
+  const empty = sync.rows === 0;
+  // The cron runs daily, so a day and a bit is normal and two days is not.
+  const stale = ageHours !== null && ageHours > 36;
+  if (!empty && !stale) return null;
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-2.5">
+      {empty ? (
+        <>
+          <strong>Workstream positions and pay rates are unavailable.</strong> The stored
+          roster is empty, so everyone shows their PAR job and shift rate and falls under
+          &ldquo;Other&rdquo;. Hours and headcount below are unaffected — they come from PAR.
+        </>
+      ) : (
+        <>
+          <strong>Workstream roster is {Math.floor((ageHours ?? 0) / 24)} days old.</strong>{" "}
+          Positions and pay rates may be out of date; recent hires and leavers will be missing.
+        </>
+      )}
+    </div>
+  );
 }
 
 function StoreCard({ store }: { store: StoreRoster }) {
