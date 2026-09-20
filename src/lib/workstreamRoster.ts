@@ -23,26 +23,18 @@
  * the staffing tab already reads PAR's rate off the shift being displayed.
  */
 
-import { unstable_cache } from "next/cache";
 import { BONUS_STORES, storeById } from "./bonus/storeMap";
 import { dateRange, getEmployees, getJobs, getShifts } from "./par";
-import {
-  EMPLOYEE_EMBED,
-  employeeLocationId,
-  employeeName,
-  hourlyRate,
-  jobTitle,
-  listEmployees,
-  type WsEmployee,
-} from "./workstream";
 import {
   linkCoverage,
   proposeStoreLinks,
   type LinkProposal,
   type MatchCandidate,
   type ParPerson,
+  type WorkstreamPerson,
 } from "./workstreamLink";
 import { listDecisions } from "./workstreamLinkStore";
+import { listStoredEmployeesForStore, type WorkstreamEmployeeRow } from "./workstreamStore";
 
 /**
  * How many business dates back to look for a pay rate and a job name.
@@ -55,42 +47,40 @@ const CORROBORATION_DAYS = 7;
 
 // ── Workstream side ──────────────────────────────────────────────────────────
 
-/**
- * Every Workstream employee, grouped by location uuid.
- *
- * Cached for an hour rather than per request: a roster changes when somebody is
- * hired, and the review queue being an hour stale is invisible, while paging
- * the whole company on every page load is not.
- *
- * Everyone is fetched, including leavers and pending hires, but only people
- * Workstream calls `active` are matched. The rest are kept in the roster so a
- * link confirmed while somebody worked here still resolves after they leave —
- * otherwise their past hours would lose the title and rate they were worked at.
- * workstreamLink.ts does the filtering: see isActiveEmployee.
- */
-const workstreamByLocation = unstable_cache(
-  async (): Promise<Record<string, WsEmployee[]>> => {
-    const all = await listEmployees({ embed: EMPLOYEE_EMBED });
-    const out: Record<string, WsEmployee[]> = {};
-    for (const e of all) {
-      // The location on the job assignment, not the employee's own — the latter
-      // is routinely null even when embedded. See employeeLocationId.
-      const uuid = employeeLocationId(e);
-      if (!uuid) continue;
-      (out[uuid] ??= []).push(e);
-    }
-    return out;
-  },
-  ["workstream-employees-by-location"],
-  { revalidate: 60 * 60, tags: ["workstream-data"] },
-);
+/** A stored row, in the shape the matcher works on. */
+function toPerson(r: WorkstreamEmployeeRow): WorkstreamPerson {
+  return {
+    uuid: r.uuid,
+    firstName: r.firstName,
+    lastName: r.lastName,
+    preferredName: r.preferredName,
+    status: r.status,
+    hiredDate: r.hiredDate,
+    startDate: r.startDate,
+    terminationDate: r.terminationDate,
+    title: r.jobTitle,
+    hourlyRate: r.hourlyRate,
+  };
+}
 
-/** Workstream's roster for one PAR store, or an empty list if unmapped. */
-export async function workstreamRosterFor(storeId: string): Promise<WsEmployee[]> {
-  const uuid = storeById(storeId)?.workstreamLocationUuid;
-  if (!uuid) return [];
-  const byLocation = await workstreamByLocation();
-  return byLocation[uuid] ?? [];
+/**
+ * Workstream's roster for one PAR store, **from Postgres**.
+ *
+ * This used to page the vendor's whole company on every call, behind a cache
+ * that was silently declining to store a payload that size — two identical
+ * requests took 32.4s each, and the staffing tab did it once per store. It
+ * ended in a 429 and nineteen hours locked out. See workstreamStore.ts.
+ *
+ * Now it is one indexed query against a table a morning cron fills.
+ *
+ * Everyone is returned, leavers and pending hires included, so a link confirmed
+ * while somebody worked here still resolves after they leave — otherwise their
+ * past hours would lose the title and rate they were worked at.
+ * workstreamLink.ts decides who is matchable: see isActiveEmployee.
+ */
+export async function workstreamRosterFor(storeId: string): Promise<WorkstreamPerson[]> {
+  if (!storeById(storeId)?.workstreamLocationUuid) return [];
+  return (await listStoredEmployeesForStore(storeId)).map(toPerson);
 }
 
 // ── PAR side ─────────────────────────────────────────────────────────────────
@@ -286,11 +276,11 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
     out.set(p.parEmployeeId, {
       parEmployeeId: p.parEmployeeId,
       workstreamUuid: e.uuid,
-      name: employeeName(e),
-      title: jobTitle(e),
-      hourlyRate: hourlyRate(e),
-      hiredDate: e.hired_date ?? e.start_date ?? null,
-      terminationDate: e.termination_date ?? null,
+      name: [e.firstName, e.lastName].filter(Boolean).join(" ").trim() || null,
+      title: e.title,
+      hourlyRate: e.hourlyRate,
+      hiredDate: e.hiredDate ?? e.startDate ?? null,
+      terminationDate: e.terminationDate,
       linkedBy: p.state,
     });
   }

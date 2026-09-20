@@ -78,13 +78,10 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
     setRefreshing(true);
     setError(null);
     try {
+      // A real re-read of the vendor into Postgres, so by the time it returns
+      // the change is already stored and one reload shows it.
       const res = await fetch("/api/workstream/refresh", { method: "POST" });
       if (!res.ok) throw new Error(String((await res.json()).error ?? res.status));
-      // Expiring the tag serves the old roster once more while the new one
-      // loads behind it, so read twice: the first reload kicks the refetch off
-      // and the second, a few seconds later, is the one that shows the change.
-      await load(storeId);
-      await new Promise((r) => setTimeout(r, 6000));
       await load(storeId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

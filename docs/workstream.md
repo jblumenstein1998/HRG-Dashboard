@@ -297,6 +297,49 @@ that never empties is one people stop opening.
 Two partial unique indexes enforce the shape: one live decision per PAR
 employee, and one confirmed claim per Workstream person *per store*.
 
+## The roster is stored, not fetched
+
+The app reads Workstream **from Postgres**, filled by a cron at 11:00 UTC.
+`src/lib/workstreamStore.ts` owns the table; nothing else in the app calls the
+vendor at request time.
+
+It did, once, and the way that failed is worth keeping:
+
+| | Before | After |
+| --- | --- | --- |
+| `/api/workstream/links` | 32.4s | **1.7s** |
+| `/api/staffing` | 170.8s | **4.6s** |
+
+Two identical `links` calls both took 32.4s, which is how the real problem
+surfaced: `unstable_cache` **was not caching**. Next silently declines entries
+over its size limit, and a roster carrying job assignments and earning rates is
+well over it — so the cache was a no-op and every request re-read all 1,332
+employees across fourteen paged calls, once per store.
+
+It ended as it had to: `429 Too many requests. Try again after 69401 seconds`.
+Nineteen hours locked out of the vendor, because a screen people open a few
+times an hour was pulling the whole company each time.
+
+Two fixes came out of it:
+
+- **`wsFetch` no longer sleeps on a long `Retry-After`.** It used to multiply
+  the header by 1000 and wait — on that response it would have slept nineteen
+  hours, hung the function until it timed out, and told nobody why. Past a
+  minute it now throws and says what happened. The answer to a 429 is to stop
+  asking, not to ask later.
+- **A refresh button that actually re-reads.** `POST /api/workstream/refresh`
+  pages the vendor and writes the table, so when it returns the change is
+  already visible. It is the only on-demand path to Workstream in the app.
+
+### Last known store is never forgotten
+
+The sync keeps a row's `location_uuid` when the incoming record has none.
+That is not tidiness — it is the fix for the retention gap above. A terminated
+record loses its job assignment, and the assignment is the only thing naming
+the store, so leavers were becoming unattributable at exactly the moment
+retention needed them. Once we have seen where somebody works, we do not
+unlearn it because they left.
+
 ### Where it lives
 
 | File | Role |

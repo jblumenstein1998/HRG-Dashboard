@@ -59,8 +59,47 @@
  * against a fixture and keeps the rules in one readable place.
  */
 
-import type { WsEmployee } from "./workstream";
-import { employeeName, hourlyRate, preferredName, primaryAssignment } from "./workstream";
+/**
+ * A person as Workstream knows them, flattened.
+ *
+ * Deliberately not the API's own shape. The roster is read from Postgres now
+ * (workstreamStore.ts), not from the vendor, and this module should not care
+ * which — it matches names, and a nested job assignment is somebody else's
+ * problem. It also keeps this file free of any import that reaches the
+ * database, which is what lets the matching rules be exercised against a
+ * fixture.
+ */
+export type WorkstreamPerson = {
+  uuid: string;
+  firstName: string | null;
+  lastName: string | null;
+  /** What they go by, when Workstream records one. */
+  preferredName: string | null;
+  /** "hired" | "onboarding" | "active" | "offboarded". */
+  status: string;
+  hiredDate: string | null;
+  startDate: string | null;
+  terminationDate: string | null;
+  title: string | null;
+  hourlyRate: number | null;
+};
+
+/** Their full name, or null when Workstream has neither part. */
+function fullName(p: WorkstreamPerson): string | null {
+  return [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || null;
+}
+
+/**
+ * What they go by, when it is not simply their first name again.
+ *
+ * "Amy Schutt (Amy)" is noise; "Robert Ellison (Trey)" is the whole reason PAR
+ * and Workstream disagree about who somebody is.
+ */
+function goesByName(p: WorkstreamPerson): string | null {
+  const pref = (p.preferredName ?? "").trim();
+  if (!pref) return null;
+  return pref.toLowerCase() === (p.firstName ?? "").trim().toLowerCase() ? null : pref;
+}
 
 // ── The two sides ────────────────────────────────────────────────────────────
 
@@ -198,17 +237,17 @@ function similarity(a: string, b: string): number {
  * candidate so a reviewer can see *why* it was offered and disagree on the
  * evidence rather than on a score they have no way to interpret.
  */
-function scoreNames(par: ParPerson, ws: WsEmployee): { score: number; reasons: string[] } {
+function scoreNames(par: ParPerson, ws: WorkstreamPerson): { score: number; reasons: string[] } {
   const reasons: string[] = [];
   const pFirst = normalizeName(par.firstName).split(" ")[0] ?? "";
   const pLast = (normalizeName(par.lastName).split(" ").filter(Boolean).pop()) ?? "";
-  const wFirst = normalizeName(ws.first_name).split(" ")[0] ?? "";
-  const wLast = (normalizeName(ws.last_name).split(" ").filter(Boolean).pop()) ?? "";
+  const wFirst = normalizeName(ws.firstName).split(" ")[0] ?? "";
+  const wLast = (normalizeName(ws.lastName).split(" ").filter(Boolean).pop()) ?? "";
 
   if (!pLast || !wLast) {
     // PAR sometimes carries only a DisplayName. Fall back to whole-string
     // similarity so the person is still offered candidates rather than none.
-    const s = similarity(normalizeName(par.displayName), normalizeName(employeeName(ws)));
+    const s = similarity(normalizeName(par.displayName), normalizeName(fullName(ws)));
     if (s > 0) reasons.push(`names ${Math.round(s * 100)}% alike (no last name on the PAR record)`);
     return { score: Math.round(s * 60), reasons };
   }
@@ -221,9 +260,9 @@ function scoreNames(par: ParPerson, ws: WsEmployee): { score: number; reasons: s
   // "Robert". Treated as an alternative first name for ranking only: a
   // preferred name that matches is strong evidence for a human, and still not
   // grounds for an automatic link.
-  const wPreferred = normalizeName(preferredName(ws)).split(" ")[0] ?? "";
+  const wPreferred = normalizeName(goesByName(ws)).split(" ")[0] ?? "";
   if (lastExact && wPreferred && wPreferred === pFirst && pFirst !== wFirst) {
-    reasons.push(`last name matches; Workstream has them as "${ws.first_name}" but they go by "${ws.preferred_name}"`);
+    reasons.push(`last name matches; Workstream has them as "${ws.firstName}" but they go by "${ws.preferredName}"`);
     return { score: 92, reasons };
   }
 
@@ -252,11 +291,11 @@ function scoreNames(par: ParPerson, ws: WsEmployee): { score: number; reasons: s
 }
 
 /** Corroborating evidence. Adjusts the ranking; never creates a match. */
-function scoreCorroboration(par: ParPerson, ws: WsEmployee): { delta: number; reasons: string[] } {
+function scoreCorroboration(par: ParPerson, ws: WorkstreamPerson): { delta: number; reasons: string[] } {
   const reasons: string[] = [];
   let delta = 0;
 
-  const wsRate = hourlyRate(ws);
+  const wsRate = ws.hourlyRate;
   if (par.payRate != null && par.payRate > 0 && wsRate != null) {
     const gap = Math.abs(par.payRate - wsRate);
     if (gap < 0.005) {
@@ -271,7 +310,7 @@ function scoreCorroboration(par: ParPerson, ws: WsEmployee): { delta: number; re
     }
   }
 
-  const title = primaryAssignment(ws)?.title;
+  const title = ws.title;
   if (par.jobName && title) {
     const s = similarity(normalizeName(par.jobName), normalizeName(title));
     if (s > 0.6) {
@@ -283,7 +322,7 @@ function scoreCorroboration(par: ParPerson, ws: WsEmployee): { delta: number; re
   // Someone PAR has terminated who is still active in Workstream, or the other
   // way round, is common and normal during the week either system lags. Worth
   // saying out loud, not worth penalising.
-  if (par.terminated && !ws.termination_date) {
+  if (par.terminated && !ws.terminationDate) {
     reasons.push("terminated in PAR, still active in Workstream");
   }
 
@@ -365,8 +404,8 @@ export type StoreLinkReport = {
  * The `termination_date` check stays as a second guard because the two fields
  * disagree: 731 records are offboarded and only 707 carry a date.
  */
-export function isActiveEmployee(e: WsEmployee): boolean {
-  return e.status === "active" && !e.termination_date;
+export function isActiveEmployee(e: WorkstreamPerson): boolean {
+  return e.status === "active" && !e.terminationDate;
 }
 
 /** Candidates below this are noise and are not offered at all. */
@@ -375,16 +414,15 @@ const MIN_CANDIDATE_SCORE = 40;
 /** How many alternatives a reviewer is shown. */
 const MAX_CANDIDATES = 5;
 
-function toCandidate(ws: WsEmployee, score = 0, reasons: string[] = []): MatchCandidate {
-  const assignment = primaryAssignment(ws);
+function toCandidate(ws: WorkstreamPerson, score = 0, reasons: string[] = []): MatchCandidate {
   return {
     workstreamUuid: ws.uuid,
-    name: employeeName(ws),
-    goesBy: preferredName(ws),
-    title: assignment?.title ?? null,
-    hourlyRate: hourlyRate(ws),
-    hiredDate: ws.hired_date ?? ws.start_date ?? null,
-    terminationDate: ws.termination_date ?? null,
+    name: fullName(ws),
+    goesBy: goesByName(ws),
+    title: ws.title,
+    hourlyRate: ws.hourlyRate,
+    hiredDate: ws.hiredDate ?? ws.startDate ?? null,
+    terminationDate: ws.terminationDate ?? null,
     score,
     reasons,
   };
@@ -407,7 +445,7 @@ function toCandidate(ws: WsEmployee, score = 0, reasons: string[] = []): MatchCa
 export function proposeStoreLinks(input: {
   parStoreId: string;
   parEmployees: ParPerson[];
-  workstreamEmployees: WsEmployee[];
+  workstreamEmployees: WorkstreamPerson[];
   decisions: LinkDecision[];
 }): StoreLinkReport {
   const { parStoreId, parEmployees, workstreamEmployees } = input;
@@ -451,9 +489,9 @@ export function proposeStoreLinks(input: {
     const k = nameKey(p.firstName, p.lastName);
     if (k) parKeyCounts.set(k, (parKeyCounts.get(k) ?? 0) + 1);
   }
-  const wsByKey = new Map<string, WsEmployee[]>();
+  const wsByKey = new Map<string, WorkstreamPerson[]>();
   for (const w of matchable) {
-    const k = nameKey(w.first_name, w.last_name);
+    const k = nameKey(w.firstName, w.lastName);
     if (!k) continue;
     const list = wsByKey.get(k) ?? [];
     list.push(w);

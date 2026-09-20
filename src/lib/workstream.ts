@@ -89,6 +89,12 @@ const TOKEN_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PER_PAGE = 100;
 
 /**
+ * The longest a 429 is worth waiting out in-request. Beyond this the quota is
+ * gone for the day and the honest answer is an error, not a hung function.
+ */
+const MAX_RETRY_WAIT_MS = 60_000;
+
+/**
  * Hard stop on pagination. Twelve stores of Zaxby's is a few hundred active
  * employees and a few thousand lifetime, so 200 pages of 100 is far past any
  * legitimate result. It exists so a filter that silently stops being applied
@@ -251,6 +257,20 @@ export async function wsFetch<T>(path: string, query: WsQuery = {}): Promise<T> 
         const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
           ? retryAfter * 1000
           : Math.min(30_000, 1000 * 2 ** attempt);
+
+        // Workstream's quota is measured in hours, not seconds: exhausting it
+        // returned "try again after 69401 seconds" — nineteen hours. Sleeping
+        // on that would hang the request until the function timed out and tell
+        // nobody why, so past a point this stops waiting and says what
+        // happened. The fix for a 429 is to stop asking, not to ask later.
+        if (waitMs > MAX_RETRY_WAIT_MS) {
+          const body = await res.text();
+          throw new Error(
+            `Workstream rate limit on ${path}: asked to wait ${Math.round(waitMs / 1000)}s`
+              + ` (${(waitMs / 3_600_000).toFixed(1)}h). ${body.slice(0, 200)}`,
+          );
+        }
+
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }

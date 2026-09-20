@@ -1,32 +1,39 @@
-import { revalidateTag } from "next/cache";
 import { requireAdminApi } from "@/lib/users/adminGuard";
+import { syncWorkstreamEmployees, workstreamSyncStatus } from "@/lib/workstreamStore";
 
 /**
- * Drop the cached Workstream roster.
+ * Re-read Workstream now, instead of waiting for tomorrow's cron.
  *
- * The roster is cached for an hour (workstreamRoster.ts), which is right for a
- * list that changes when somebody is hired. It is wrong for the ten minutes
- * after you have just fixed something in Workstream and want to see it: a
- * terminated employee keeps appearing in the reconciliation list, which reads
- * as the app ignoring the change rather than as a cache.
+ * The roster is synced once a morning (api/cron/workstream-sync) and read from
+ * Postgres. That is right for a list that changes when somebody is hired, and
+ * wrong for the ten minutes after you have fixed a record by hand and want to
+ * see it — a terminated employee still showing in the list reads as the app
+ * ignoring you rather than as yesterday's copy.
  *
- * So there is a button. It expires the tag every Workstream read is filed
- * under.
+ * This is a real re-read, not a cache expiry: it pages the vendor and writes
+ * the table, so when it returns the change is already visible. It takes about
+ * 35 seconds.
  *
- * `revalidateTag` is stale-while-revalidate in this version of Next — it hands
- * back the old roster once more while fetching the new one behind it, and the
- * whole company takes about 35 seconds to re-read. So the screen can still
- * show the previous answer immediately after pressing the button, and be right
- * a few seconds later. `updateTag` is the read-your-own-writes version and
- * cannot be used here: it only works inside a Server Action.
- *
- * Admin-only, like everything else that touches this data.
+ * Deliberately the only path that hits Workstream on demand. Every other read
+ * in the app goes to Postgres, which is what keeps us inside the vendor's rate
+ * limit — one sync a morning plus the occasional button, rather than the whole
+ * company once per store per page load.
  */
+
+export const maxDuration = 300;
+
 export async function POST() {
   const denied = await requireAdminApi();
   if (denied) return denied;
 
-  revalidateTag("workstream-data", "max");
-  console.log("[workstream] roster cache expired by hand");
-  return Response.json({ ok: true });
+  try {
+    const result = await syncWorkstreamEmployees();
+    const status = await workstreamSyncStatus();
+    console.log(`[workstream] manual sync: ${result.fetched} fetched, ${status.rows} rows`);
+    return Response.json({ ok: true, ...result, ...status });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[workstream] manual sync failed:", msg);
+    return Response.json({ error: msg }, { status: 502 });
+  }
 }
