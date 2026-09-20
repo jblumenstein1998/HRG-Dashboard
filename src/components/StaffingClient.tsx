@@ -704,7 +704,11 @@ function groupOf(p: StaffOnClock): string {
 }
 
 function StoreCard({ store }: { store: StoreRoster }) {
-  const [open, setOpen] = useState(true);
+  // Collapsed on arrival. Twelve stores of open rosters is several screens of
+  // names to scroll past, and the collapsed header already carries what the
+  // page is usually opened for — headcount, who is on break, the tier counts
+  // and the wage run rate. Open the one you actually want.
+  const [open, setOpen] = useState(false);
 
   const grouped = new Map<string, typeof store.onClock>();
   for (const p of store.onClock) {
