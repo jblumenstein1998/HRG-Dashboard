@@ -44,6 +44,11 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
   const [error, setError] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Open on arrival, and the data loads either way — collapsing hides the
+  // queue, it does not stop it being read. Somebody who has already worked
+  // their store today wants it out of the way without losing the count in the
+  // header telling them whether that is still true.
+  const [open, setOpen] = useState(true);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -67,12 +72,12 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
   }, [storeId, load]);
 
   /**
-   * Re-read Workstream now, rather than waiting out the hour-long cache.
+   * Re-read Workstream now, rather than waiting for tomorrow's sync.
    *
    * Worth a button because the moment you want it is right after fixing
    * something in Workstream — terminating a record that was superseded, say —
-   * and until the cache turns over the screen keeps showing the old answer and
-   * looks like it is ignoring you.
+   * and until the next sync the screen keeps showing yesterday's answer and
+   * looks like it is ignoring you. Takes about 35 seconds.
    */
   async function refresh() {
     setRefreshing(true);
@@ -126,10 +131,30 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-100">
-        <span className="text-sm font-semibold text-gray-900">
+      <div
+        className={`px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2 ${
+          open ? "border-b border-gray-100" : ""
+        }`}
+      >
+        {/* The title toggles, rather than the whole header — the store picker
+            and the buttons live up here too, and a header that swallowed those
+            clicks would collapse the section every time you changed store. */}
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:text-gray-600 transition"
+        >
+          <svg
+            className={`w-3 h-3 text-gray-400 transition-transform ${open ? "" : "-rotate-90"}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={3}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
           Workstream / PAR Reconciliation
-        </span>
+        </button>
 
         <select
           value={storeId}
@@ -160,7 +185,7 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
           <button
             onClick={refresh}
             disabled={refreshing || loading}
-            title="Re-read Workstream now instead of waiting out the hour-long cache"
+            title="Re-read Workstream now instead of waiting for tomorrow's sync (about 35 seconds)"
             className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
           >
             {refreshing ? "Re-reading Workstream…" : "Refresh from Workstream"}
@@ -176,7 +201,7 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
         </div>
       </div>
 
-      <div className="p-3 space-y-3 bg-gray-50">
+      <div className={`p-3 space-y-3 bg-gray-50 ${open ? "" : "hidden"}`}>
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
             {error}
