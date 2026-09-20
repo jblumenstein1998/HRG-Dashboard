@@ -43,6 +43,7 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -64,6 +65,33 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
   useEffect(() => {
     if (storeId) void load(storeId);
   }, [storeId, load]);
+
+  /**
+   * Re-read Workstream now, rather than waiting out the hour-long cache.
+   *
+   * Worth a button because the moment you want it is right after fixing
+   * something in Workstream — terminating a record that was superseded, say —
+   * and until the cache turns over the screen keeps showing the old answer and
+   * looks like it is ignoring you.
+   */
+  async function refresh() {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/workstream/refresh", { method: "POST" });
+      if (!res.ok) throw new Error(String((await res.json()).error ?? res.status));
+      // Expiring the tag serves the old roster once more while the new one
+      // loads behind it, so read twice: the first reload kicks the refetch off
+      // and the second, a few seconds later, is the one that shows the change.
+      await load(storeId);
+      await new Promise((r) => setTimeout(r, 6000));
+      await load(storeId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   /**
    * Record one decision.
@@ -132,6 +160,14 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
         {loading && <span className="text-xs text-gray-500">Loading…</span>}
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={refresh}
+            disabled={refreshing || loading}
+            title="Re-read Workstream now instead of waiting out the hour-long cache"
+            className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+          >
+            {refreshing ? "Re-reading Workstream…" : "Refresh from Workstream"}
+          </button>
           {settled.length > 0 && (
             <button
               onClick={() => setShowSettled((v) => !v)}
