@@ -1074,6 +1074,19 @@ function DaypartSection({ filter }: { filter: StoreFilter }) {
                 <tr key={s.storeId} className="border-b border-gray-50 last:border-0">
                   <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">
                     {s.storeName}
+                    {/* The 8–Close band ran to the last order because PAR's
+                        configured close was earlier than the store was still
+                        selling. Flagged rather than silently corrected: the
+                        setting is wrong in PAR and anything else reading it is
+                        wrong too. */}
+                    {s.closeFromOrders && (
+                      <span
+                        className="ml-2 text-[11px] text-amber-700"
+                        title="PAR's configured close is earlier than the last order — close taken from sales"
+                      >
+                        close from sales
+                      </span>
+                    )}
                     {s.error && <span className="ml-2 text-xs text-red-600">{s.error}</span>}
                   </td>
                   {/* Hours and cost, not a rate: there are no sales before the
@@ -1085,11 +1098,8 @@ function DaypartSection({ filter }: { filter: StoreFilter }) {
                   {s.cells.map((c) => (
                     <td key={c.label} className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
                       {c.splh === null ? (
-                        // An empty band is either a closed store or an hour
-                        // nobody was clocked in for. Say which, rather than
-                        // leaving a dash to be interpreted.
                         <span className="text-xs text-gray-400">
-                          {c.label === "8–Close" && s.closeLabel ? `closes ${s.closeLabel}` : "no labor"}
+                          {c.label === "8–Close" && s.closeLabel ? `closed ${s.closeLabel}` : "no labor"}
                         </span>
                       ) : (
                         <>
