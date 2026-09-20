@@ -317,7 +317,9 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           burdened cost, and salaried hours cost nothing in it. Every window ends{" "}
           <strong>yesterday</strong>, because a day still being worked reports less overtime than
           it will finish with; the <strong>WTD</strong> point is a part-week and will sit below the
-          full weeks beside it for that reason alone.
+          full weeks beside it for that reason alone. On a custom range a weekly column marked{" "}
+          <strong>~</strong> is a week cut short by the dates you chose, and is low for the same
+          reason.
         </p>
       </main>
     </div>
@@ -734,35 +736,61 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
   );
 }
 
-type HoursRange = "3w-wtd" | "wtd-days" | "7d" | "14d" | "4" | "periods";
+/** Yesterday, ISO — the latest date any window on this screen may end on. */
+function yesterdayISO(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
-/** The query each range asks for, and what the chart's x-axis is showing. */
-const HOURS_RANGES: Record<HoursRange, { query: string; label: string; grain: string }> = {
-  // The default: three finished weeks to read a trend against, then where this
-  // week has got to. The WTD point is not their equal — a partial week is
-  // always lower than a full one — which is why it is labelled rather than
-  // dated, and why the footnote below says so.
-  "3w-wtd": { query: "weeks=3&wtd=1", label: "3 weeks + WTD", grain: "week" },
-  "wtd-days": { query: "wtdDays=1", label: "This week by day", grain: "day this week" },
-  "7d": { query: "days=7", label: "Last 7 days", grain: "day" },
-  "14d": { query: "days=14", label: "Last 14 days", grain: "day" },
-  "4": { query: "weeks=4", label: "4 weeks", grain: "week" },
-  periods: { query: "periods=2", label: "Last 2 pay periods", grain: "pay period" },
-};
+/** `days` before yesterday, ISO — the default start of a custom range. */
+function daysBeforeYesterday(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1 - days);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 function HoursSection() {
-  // Days, weeks or pay periods — one control for the chart and the table, since
-  // they are two views of the same window and two selectors that could disagree
-  // would be a way to misread both.
-  const [range, setRange] = useState<HoursRange>("3w-wtd");
+  /*
+   * Two independent choices, because they are two questions.
+   *
+   *   grain  — are the columns days or weeks?
+   *   range  — week to date, or dates you pick?
+   *
+   * They used to be one dropdown of six canned combinations, which meant
+   * "weekly, but for last month" was not on the menu at all. Splitting them
+   * makes every combination reachable and the control smaller.
+   *
+   * One control still drives the chart and the table: they are two views of the
+   * same window, and two selectors that could disagree would be a way to
+   * misread both.
+   */
+  const [grain, setGrain] = useState<"day" | "week">("week");
+  const [mode, setMode] = useState<"wtd" | "custom">("wtd");
+  const [from, setFrom] = useState(() => daysBeforeYesterday(27));
+  const [to, setTo] = useState(yesterdayISO);
+
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ key: string; data: HoursReport | null; error: string | null }>(
     { key: "", data: null, error: null },
   );
 
-  const query = HOURS_RANGES[range].query;
+  /*
+   * Week to date means different things at the two grains, and both are what
+   * somebody asking for "WTD" wants to see:
+   *
+   *   weekly  three finished weeks to read a trend against, then where this
+   *           week has got to
+   *   daily   this week alone, one column per day through yesterday
+   */
+  const query = mode === "wtd"
+    ? (grain === "week" ? "weeks=3&wtd=1" : "wtdDays=1")
+    : `from=${from}&to=${to}&grain=${grain}`;
   const requestKey = query;
+  const badRange = mode === "custom" && to < from;
 
   useEffect(() => {
     let cancelled = false;
@@ -787,23 +815,73 @@ function HoursSection() {
         <span className="text-xs text-gray-400">
           overtime hours and cost · through yesterday
         </span>
-        <select
-          value={range}
-          onChange={(e) => { setRange(e.target.value as HoursRange); setExpanded(null); }}
-          className="ml-auto text-xs border border-gray-200 rounded-lg py-0.5 pl-2 pr-6 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
-        >
-          {(Object.keys(HOURS_RANGES) as HoursRange[]).map((key) => (
-            <option key={key} value={key}>
-              {HOURS_RANGES[key].label}
-            </option>
-          ))}
-        </select>
-        {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Grain. A segmented pair rather than a dropdown: two options that
+              are always both worth seeing should not need opening. */}
+          <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+            {(["day", "week"] as const).map((g) => (
+              <button
+                key={g}
+                onClick={() => { setGrain(g); setExpanded(null); }}
+                className={`text-xs px-2.5 py-1 transition ${
+                  grain === g ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {g === "day" ? "Daily" : "Weekly"}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() => { setMode("wtd"); setExpanded(null); }}
+            title="Week to date, through yesterday"
+            className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+              mode === "wtd"
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            WTD
+          </button>
+
+          {/* Touching either date switches to the custom range, so there is no
+              separate "custom" button to press first and forget. */}
+          <label className="flex items-center gap-1 text-xs text-gray-500">
+            <input
+              type="date"
+              value={from}
+              max={to}
+              onChange={(e) => { setFrom(e.target.value); setMode("custom"); setExpanded(null); }}
+              className={`text-xs border rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                mode === "custom" ? "border-gray-400 text-gray-900" : "border-gray-200 text-gray-500"
+              }`}
+            />
+            <span className="text-gray-400">to</span>
+            <input
+              type="date"
+              value={to}
+              min={from}
+              max={yesterdayISO()}
+              onChange={(e) => { setTo(e.target.value); setMode("custom"); setExpanded(null); }}
+              className={`text-xs border rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                mode === "custom" ? "border-gray-400 text-gray-900" : "border-gray-200 text-gray-500"
+              }`}
+            />
+          </label>
+
+          {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+        </div>
       </div>
+
+      {badRange && (
+        <p className="px-3 py-2 text-xs text-amber-700">
+          The start date is after the end date.
+        </p>
+      )}
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
-      {data && <OvertimeChart data={data} grain={HOURS_RANGES[range].grain} />}
+      {data && <OvertimeChart data={data} grain={grain === "day" ? "day" : "week"} />}
 
       {data && (
         <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>

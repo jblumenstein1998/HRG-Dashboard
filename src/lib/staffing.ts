@@ -535,6 +535,47 @@ export function currentWeekDays(today: string): HoursSpan[] {
 }
 
 /**
+ * A chosen range, cut into days or into weeks.
+ *
+ * Weeks are Mon–Sun as everywhere else on this screen, and the first and last
+ * are **clipped to the range** rather than dropped. Dropping them would be
+ * tidier arithmetic and a worse answer: someone who picks the 3rd to the 17th
+ * means those dates, and silently returning only the whole weeks inside would
+ * answer a question they did not ask — sometimes with nothing at all.
+ *
+ * The cost is that an edge week can be short, and a short week carries less
+ * overtime for that reason alone. A clipped span is marked with a `~` in its
+ * label so the chart can say so rather than leaving it to be noticed.
+ */
+export function customSpans(from: string, to: string, grain: "day" | "week"): HoursSpan[] {
+  if (to < from) return [];
+
+  if (grain === "day") {
+    return eachDate(from, to).map((date) => ({
+      start: date,
+      end: date,
+      label: date.slice(5).replace("-", "/"),
+    }));
+  }
+
+  const spans: HoursSpan[] = [];
+  let cursor = mondayOf(from);
+  while (cursor <= to) {
+    const weekEnd = shiftLocalDate(cursor, 6);
+    const start = cursor < from ? from : cursor;
+    const end = weekEnd > to ? to : weekEnd;
+    const clipped = start !== cursor || end !== weekEnd;
+    spans.push({
+      start,
+      end,
+      label: `${clipped ? "~" : ""}${start.slice(5).replace("-", "/")}`,
+    });
+    cursor = shiftLocalDate(cursor, 7);
+  }
+  return spans;
+}
+
+/**
  * The last `count` completed pay periods.
  *
  * A pay period here is the fiscal period from lib/fiscal — four or five weeks,

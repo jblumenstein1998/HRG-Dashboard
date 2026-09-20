@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   currentWeekDays,
+  customSpans,
   getStoreHours,
   recentCompleteDays,
   recentCompleteWeeks,
@@ -17,6 +18,7 @@ import { todayCentralISO } from "@/lib/parRollup";
  * GET /api/staffing/hours?days=14          the last 14 complete business dates
  * GET /api/staffing/hours?weeks=3&wtd=1    3 complete weeks, then this week so far
  * GET /api/staffing/hours?wtdDays=1        this week, Monday through yesterday
+ * GET /api/staffing/hours?from=&to=&grain= a chosen range, cut by day or week
  *
  * Seven cached GetShifts calls per store per week, so four weeks across twelve
  * stores is 336 calls on a cold cache and nothing on a warm one — past business
@@ -54,7 +56,28 @@ export async function GET(req: NextRequest) {
   const weeks = recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
   const wtd = weekToDateSpan(today);
 
-  const spans = wtdDays
+  // A chosen range, cut by `grain`. The end is capped at yesterday for the same
+  // reason every other window here is, and the span count is capped because
+  // each one is twelve more PAR reads and a line chart past a few dozen points
+  // is unreadable anyway.
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  const rawFrom = p.get("from");
+  const rawTo = p.get("to");
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000)
+    .toISOString().slice(0, 10);
+
+  let custom: ReturnType<typeof customSpans> | null = null;
+  if (rawFrom && rawTo && ISO.test(rawFrom) && ISO.test(rawTo)) {
+    const grain = p.get("grain") === "day" ? "day" : "week";
+    const to = rawTo > yesterday ? yesterday : rawTo;
+    const from = rawFrom > to ? to : rawFrom;
+    const spansForRange = customSpans(from, to, grain);
+    custom = spansForRange.slice(-(grain === "day" ? MAX_DAYS * 3 : MAX_WEEKS * 3));
+  }
+
+  const spans = custom
+    ? custom
+    : wtdDays
     ? currentWeekDays(today)
     : periods > 0
       ? recentCompletePeriods(today, Math.min(4, Math.max(1, periods)))
