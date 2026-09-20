@@ -23,6 +23,7 @@ import TabOptions from "@/components/TabOptions";
 import ReconciliationSection from "@/components/ReconciliationSection";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFilter } from "@/components/StoreFilter";
 import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
@@ -148,8 +149,30 @@ function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function StaffingClient({
+  tabs,
+  isAdmin,
+  leaders,
+}: {
+  tabs: Tab[];
+  isAdmin: boolean;
+  leaders: Leader[];
+}) {
   const router = useRouter();
+
+  /*
+   * One filter for the whole tab, held here and passed down.
+   *
+   * Every section on this page is a list of the same twelve stores, so a filter
+   * that applied to only some of them would be worse than none — a manager
+   * filtered to their four stores would still be reading the estate's overtime
+   * chart underneath their own roster.
+   *
+   * It filters on the store *label*, which is what makes one control work
+   * across tabs that identify stores differently. PAR_LOCATIONS, lib/stores.ts
+   * and surveyMeta all name these twelve identically.
+   */
+  const storeFilter = useStoreFilter(leaders);
 
   // Held as the datetime-local string the input wants, seeded from now. `live`
   // means "follow the clock" — it survives until the field is touched, so the
@@ -193,8 +216,11 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
     setRefreshKey((k) => k + 1);
   }, []);
 
-  const totalOn = data?.stores.reduce((n, s) => n + s.onClock.length, 0) ?? 0;
-  const storesReporting = data?.stores.filter((s) => !s.error).length ?? 0;
+  // Filtered once, here, so the headline count and the cards below it can never
+  // disagree about which stores are being talked about.
+  const shownStores = (data?.stores ?? []).filter((s) => inFilter(storeFilter.allowed, s.storeName));
+  const totalOn = shownStores.reduce((n, s) => n + s.onClock.length, 0);
+  const storesReporting = shownStores.filter((s) => !s.error).length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -228,6 +254,11 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
         <div className="bg-white border-b border-gray-200 shadow-sm">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <StoreFilterPicker
+              leaders={leaders}
+              value={storeFilter.value}
+              onChange={storeFilter.setValue}
+            />
             <input
               type="datetime-local"
               value={when}
@@ -274,7 +305,7 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
         {/* First on the page: the only section here that is a task rather than
             a report. */}
-        <MissedClockOutSection />
+        <MissedClockOutSection filter={storeFilter} />
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
@@ -291,7 +322,7 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
         </div>
 
         <div className={`space-y-3 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
-          {(data?.stores ?? []).map((store) => <StoreCard key={store.storeId} store={store} />)}
+          {shownStores.map((store) => <StoreCard key={store.storeId} store={store} />)}
           {!loading && data && data.stores.length === 0 && (
             <div className="bg-white rounded-xl border border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
               No stores configured.
@@ -299,13 +330,13 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
           )}
         </div>
 
-        <OpenCloseSection />
+        <OpenCloseSection filter={storeFilter} />
 
-        <HoursSection />
+        <HoursSection filter={storeFilter} />
 
         {/* Admin-only: it shows everyone's pay rate side by side and its
             decisions determine whose hours are costed at whose rate. */}
-        {isAdmin && <ReconciliationSection stores={BONUS_STORES} />}
+        {isAdmin && <ReconciliationSection stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />}
 
         <p className="text-[11px] text-gray-400">
           Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
@@ -340,7 +371,7 @@ export default function StaffingClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
  * closing shift running past midnight is measured in its own frame rather than
  * wrapping into a negative span.
  */
-function OpenCloseSection() {
+function OpenCloseSection({ filter }: { filter: StoreFilter }) {
   const [side, setSide] = useState<"open" | "close">("open");
   const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ loaded: boolean; data: OpenCloseReport | null; error: string | null }>(
@@ -360,7 +391,12 @@ function OpenCloseSection() {
     return () => { cancelled = true; };
   }, []);
 
-  const data = state.data;
+  // Filtered once, at the source, so this section's table, chart and legend
+  // cannot disagree about which stores are on screen.
+  const data = useMemo(
+    () => (state.data ? { ...state.data, stores: state.data.stores.filter((s) => inFilter(filter.allowed, s.storeName)) } : null),
+    [state.data, filter.allowed],
+  );
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -755,7 +791,7 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
  *
  * Empty is the expected state, and says so rather than showing a bare table.
  */
-function MissedClockOutSection() {
+function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
   const [payDate, setPayDate] = useState<string | null>(null);
   const [state, setState] = useState<{
     key: string; data: MissedPunchReport & { payPeriods?: PayPeriod[] } | null; error: string | null;
@@ -782,10 +818,9 @@ function MissedClockOutSection() {
   const periods = data?.payPeriods ?? [];
   const selected = payDate ? periods.find((p) => p.payDate === payDate) ?? null : null;
 
-  const rows = (data?.stores ?? []).flatMap((s) =>
-    s.rows.map((r) => ({ ...r, storeName: s.storeName })),
-  );
-  const storeErrors = (data?.stores ?? []).filter((s) => s.error);
+  const visible = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
+  const rows = visible.flatMap((s) => s.rows.map((r) => ({ ...r, storeName: s.storeName })));
+  const storeErrors = visible.filter((s) => s.error);
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -912,7 +947,7 @@ function daysBeforeYesterday(days: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function HoursSection() {
+function HoursSection({ filter }: { filter: StoreFilter }) {
   /*
    * Two independent choices, because they are two questions.
    *
@@ -966,7 +1001,10 @@ function HoursSection() {
   }, [requestKey, query]);
 
   const loading = state.key !== requestKey;
-  const data = state.data;
+  const data = useMemo(
+    () => (state.data ? { ...state.data, stores: state.data.stores.filter((s) => inFilter(filter.allowed, s.storeName)) } : null),
+    [state.data, filter.allowed],
+  );
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
