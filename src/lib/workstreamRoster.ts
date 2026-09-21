@@ -34,7 +34,7 @@ import {
   type WorkstreamPerson,
 } from "./workstreamLink";
 import { listDecisions } from "./workstreamLinkStore";
-import { listStoredEmployeesForStore, type WorkstreamEmployeeRow } from "./workstreamStore";
+import { listStoredEmployees, listStoredEmployeesForStore, type WorkstreamEmployeeRow } from "./workstreamStore";
 
 /**
  * How many business dates back to look for a pay rate and a job name.
@@ -44,6 +44,20 @@ import { listStoredEmployeesForStore, type WorkstreamEmployeeRow } from "./works
  * which is honest — there is nothing recent to corroborate against.
  */
 const CORROBORATION_DAYS = 7;
+
+/**
+ * How far back a PAR record has to show hours to count as a live employee.
+ *
+ * PAR records are rarely terminated when somebody leaves, so a store's roster
+ * accumulates years of people who simply stopped coming: 106 of 151 outstanding
+ * reviews had not worked a minute in four weeks, and 99 of those had no
+ * Workstream counterpart because there is nobody to have one.
+ *
+ * Thirty days, rolling rather than a fixed calendar month, so somebody who
+ * picks shifts up again reappears on their own — and so the rule does not
+ * empty the queue every first of the month.
+ */
+const ACTIVITY_DAYS = 30;
 
 // ── Workstream side ──────────────────────────────────────────────────────────
 
@@ -83,6 +97,30 @@ export async function workstreamRosterFor(storeId: string): Promise<WorkstreamPe
   return (await listStoredEmployeesForStore(storeId)).map(toPerson);
 }
 
+/**
+ * Active Workstream people who are *not* at this store, each labelled with
+ * where Workstream does have them.
+ *
+ * Matching store-by-store made anyone the two systems disagree about invisible.
+ * Amethyst Lindsey logged 107 hours at Springfield in PAR while her only live
+ * Workstream record sat at White House, so she reached the queue with no
+ * candidate at all and nothing to explain why. Eight more active records carry
+ * no store whatsoever and were unreachable from every store.
+ *
+ * Offered as candidates only on an exact name match, and never auto-linked —
+ * a cross-store hit means one of the two systems has the wrong store for that
+ * person, which is a judgement rather than a formality.
+ */
+async function activeElsewhere(storeId: string): Promise<WorkstreamPerson[]> {
+  const everyone = await listStoredEmployees();
+  return everyone
+    .filter((r) => r.status === "active" && !r.terminationDate && r.storeId !== storeId)
+    .map((r) => ({
+      ...toPerson(r),
+      atOtherStore: r.storeId ? (storeById(r.storeId)?.name ?? r.storeId) : "no store",
+    }));
+}
+
 // ── PAR side ─────────────────────────────────────────────────────────────────
 
 /**
@@ -113,7 +151,7 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
     }));
   }
 
-  const start = shiftDate(today, -CORROBORATION_DAYS);
+  const start = shiftDate(today, -ACTIVITY_DAYS);
   const dates = dateRange(start, today);
   const dayShifts = await Promise.all(
     dates.map((d) => getShifts(storeId, d).catch(() => [])),
@@ -121,10 +159,17 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
 
   // Walk oldest to newest so the last write wins and holds the latest rate.
   const recent = new Map<string, { payRate: number | null; jobId: string | null }>();
-  dayShifts.forEach((shifts) => {
+  // Minutes over the whole window, which is what decides whether a PAR record
+  // is a person or a leftover.
+  const worked = new Map<string, number>();
+  dayShifts.forEach((shifts, i) => {
+    const withinCorroboration = dates.length - i <= CORROBORATION_DAYS;
     for (const s of shifts) {
       if (!s.employeeId) continue;
-      recent.set(s.employeeId, { payRate: s.payRate, jobId: s.jobId });
+      worked.set(s.employeeId, (worked.get(s.employeeId) ?? 0) + s.minutesWorked);
+      // The rate shown to a reviewer stays the recent one: a rate from a month
+      // ago is not what to compare against Workstream's current figure.
+      if (withinCorroboration) recent.set(s.employeeId, { payRate: s.payRate, jobId: s.jobId });
     }
   });
 
@@ -139,6 +184,7 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
       jobName: job ? (jobName.get(job) ?? null) : null,
       payRate: seen?.payRate ?? null,
       terminated: e.terminated,
+      recentMinutes: worked.get(e.id) ?? 0,
     };
   });
 }
@@ -192,9 +238,10 @@ export async function getStoreLinkView(storeId: string, today: string): Promise<
   }
 
   try {
-    const [parEmployees, workstreamEmployees, decisions] = await Promise.all([
+    const [parEmployees, workstreamEmployees, elsewhere, decisions] = await Promise.all([
       parRosterFor(storeId, today),
       workstreamRosterFor(storeId),
+      activeElsewhere(storeId),
       listDecisions(storeId),
     ]);
 
@@ -202,6 +249,7 @@ export async function getStoreLinkView(storeId: string, today: string): Promise<
       parStoreId: storeId,
       parEmployees,
       workstreamEmployees,
+      elsewhere,
       decisions,
     });
 

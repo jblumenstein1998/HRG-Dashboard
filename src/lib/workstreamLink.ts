@@ -82,6 +82,14 @@ export type WorkstreamPerson = {
   terminationDate: string | null;
   title: string | null;
   hourlyRate: number | null;
+  /**
+   * The store Workstream has them at, when it is not the store being matched.
+   *
+   * Null for the store's own people. Set for the estate-wide fallback pool,
+   * so a candidate offered from another store can say so — that is a real
+   * disagreement between the two systems, not a detail to bury.
+   */
+  atOtherStore?: string | null;
 };
 
 /** Their full name, or null when Workstream has neither part. */
@@ -119,6 +127,14 @@ export type ParPerson = {
   jobName?: string | null;
   payRate?: number | null;
   terminated: boolean;
+  /**
+   * Minutes worked in the recent activity window, when the caller measured it.
+   *
+   * Undefined means nobody looked, and the rule below does not apply — the
+   * resolved-roster path skips the shift reads entirely, since a PAR record
+   * with no shifts cannot appear on a staffing screen anyway.
+   */
+  recentMinutes?: number;
 };
 
 /** What a stored decision says about one PAR employee. */
@@ -336,6 +352,9 @@ export type MatchCandidate = {
   name: string | null;
   /** What they go by, when it differs from the legal first name. */
   goesBy: string | null;
+  /** Set when Workstream has this person at a different store than the one
+   *  being matched — a disagreement worth a human deciding. */
+  atOtherStore?: string | null;
   title: string | null;
   hourlyRate: number | null;
   hiredDate: string | null;
@@ -423,8 +442,14 @@ function toCandidate(ws: WorkstreamPerson, score = 0, reasons: string[] = []): M
     hourlyRate: ws.hourlyRate,
     hiredDate: ws.hiredDate ?? ws.startDate ?? null,
     terminationDate: ws.terminationDate ?? null,
+    atOtherStore: ws.atOtherStore ?? null,
     score,
-    reasons,
+    // Where the record lives at another store, that leads the reasons: it is
+    // the first thing a reviewer needs to weigh, not a footnote. One of the two
+    // systems has the wrong store for this person.
+    reasons: ws.atOtherStore
+      ? [`Workstream has them at ${ws.atOtherStore}`, ...reasons]
+      : reasons,
   };
 }
 
@@ -446,9 +471,21 @@ export function proposeStoreLinks(input: {
   parStoreId: string;
   parEmployees: ParPerson[];
   workstreamEmployees: WorkstreamPerson[];
+  /**
+   * Active Workstream people who are NOT at this store, each carrying the
+   * store Workstream does have them at.
+   *
+   * Offered only on an exact first+last match, and never auto-linked. It exists
+   * because a transfer that one system knows about and the other does not made
+   * somebody invisible: Amethyst Lindsey logged 107 hours at Springfield in PAR
+   * while her only live Workstream record sat at White House, so she appeared
+   * in the queue with no candidate at all and no way to see why.
+   */
+  elsewhere?: WorkstreamPerson[];
   decisions: LinkDecision[];
 }): StoreLinkReport {
   const { parStoreId, parEmployees, workstreamEmployees } = input;
+  const elsewhere = input.elsewhere ?? [];
 
   const decisions = input.decisions.filter((d) => d.parStoreId === parStoreId);
   const confirmed = new Map<string, string>();
@@ -457,7 +494,7 @@ export function proposeStoreLinks(input: {
   for (const d of decisions) {
     if (d.status === "confirmed") confirmed.set(d.parEmployeeId, d.workstreamUuid);
     else if (d.status === "absent") absent.add(d.parEmployeeId);
-    else if (d.status === "rejected") rejected.add(`${d.parEmployeeId} ${d.workstreamUuid}`);
+    else if (d.status === "rejected") rejected.add(`${d.parEmployeeId} ${d.workstreamUuid}`);
   }
 
   // Every Workstream record, terminated included — a link confirmed while
@@ -502,8 +539,17 @@ export function proposeStoreLinks(input: {
       parTerminated: p.terminated,
     };
 
-    const ranked = matchable
-      .filter((w) => !rejected.has(`${p.id} ${w.uuid}`))
+    // This store's people, plus anyone elsewhere whose name matches exactly.
+    // The estate-wide pool is restricted to exact matches deliberately:
+    // fuzzy-scoring four hundred people from other stores would bury the real
+    // answer under near-namesakes who plainly work somewhere else.
+    const parKey = nameKey(p.firstName, p.lastName);
+    const crossStore = parKey
+      ? elsewhere.filter((w) => nameKey(w.firstName, w.lastName) === parKey)
+      : [];
+
+    const ranked = [...matchable, ...crossStore]
+      .filter((w) => !rejected.has(`${p.id} ${w.uuid}`))
       .map((w) => {
         const name = scoreNames(p, w);
         const extra = scoreCorroboration(p, w);
@@ -524,12 +570,23 @@ export function proposeStoreLinks(input: {
       continue;
     }
 
-    // Gone from PAR, and never linked by hand. Only people active in both
-    // systems are worth anyone's attention: this person's shifts are in the
-    // past, and no title or rate attached to them now would change a number
-    // anybody reads. Kept in the list rather than dropped so the store's
-    // counts still add up and so a confirmed link above still wins.
-    if (p.terminated) {
+    /*
+     * Out of scope: terminated in PAR, or not working any more.
+     *
+     * "Not working any more" is no recorded hours in the activity window.
+     * PAR records are rarely terminated when somebody leaves, so a roster
+     * carries years of people who simply stopped coming — 106 of 151
+     * outstanding reviews had not clocked a minute in four weeks, and 99 of
+     * those had no Workstream counterpart either, because there is nobody to
+     * have one. They are old records, not a backlog.
+     *
+     * A rolling window rather than a fixed month, so somebody who starts
+     * picking up shifts again reappears on their own.
+     *
+     * Kept in the list rather than dropped, so the store's counts still add up
+     * and a link confirmed earlier still resolves.
+     */
+    if (p.terminated || p.recentMinutes === 0) {
       proposals.push({ ...base, state: "ignored", workstreamUuid: null, candidates: [] });
       continue;
     }
@@ -568,7 +625,7 @@ export function proposeStoreLinks(input: {
     const unique =
       key.length > 0 &&
       exact.length === 1 &&
-      !rejected.has(`${p.id} ${exact[0].uuid}`);
+      !rejected.has(`${p.id} ${exact[0].uuid}`);
 
     if (unique) {
       resolved.add(exact[0].uuid);
