@@ -1616,7 +1616,17 @@ function StoreCard({ store }: { store: StoreRoster }) {
                   {section.people.map((p, i) => (
                     <li key={`${p.employeeId ?? "?"}-${i}`} className="px-2.5 py-1.5">
                       <div className="flex items-baseline gap-2">
-                        <span className="text-sm font-medium text-gray-900 truncate">{p.name}</span>
+                        {/* Name and position on one line. They were stacked,
+                            which cost a row per person across a whole roster
+                            for two facts that read perfectly well together. */}
+                        <span className="text-sm font-medium text-gray-900 truncate">
+                          {p.name}
+                          {cleanJobTitle(titleOf(p)) && (
+                            <span className="font-normal text-gray-500">
+                              {" — "}{cleanJobTitle(titleOf(p))}
+                            </span>
+                          )}
+                        </span>
                         {p.onBreak && (
                           <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
                         )}
@@ -1627,44 +1637,27 @@ function StoreCard({ store }: { store: StoreRoster }) {
                           {rateOf(p) === null ? "salaried" : `$${rateOf(p)!.toFixed(2)}`}
                         </span>
                       </div>
-                      <div className="text-[11px] text-gray-500 truncate">
-                        {cleanJobTitle(titleOf(p)) ?? "no position recorded"}
-                        {!p.workstream && (
-                          <span className="text-gray-400"> · not linked to Workstream</span>
-                        )}
-                      </div>
                       {/* Workstream's assigned location is the baseline for
                           where somebody belongs. Working elsewhere is either a
                           transfer Workstream has not caught up with, or cover
-                          being picked up away from their home store — and in
-                          the second case this store is carrying the labour. */}
+                          picked up away from home — and in the second case this
+                          store is carrying the labour. Kept on its own line
+                          because it is the one thing here worth interrupting
+                          for. */}
                       {p.workstream?.assignedElsewhere && (
                         <div className="text-[11px] text-amber-700 truncate">
                           assigned to {p.workstream.assignedElsewhere} in Workstream
                         </div>
                       )}
-                      {/* The job they clocked in as, when it differs from the job
-                          they hold. A Shift Lead on a Cook shift is a Tuesday,
-                          not an error — but it is worth being able to see. */}
-                      {p.workstream?.position && p.job && p.job !== p.workstream.position && (
-                        <div className="text-[11px] text-gray-400 truncate">clocked in as {cleanJobTitle(p.job)}</div>
-                      )}
-                      {/* Where the two rates disagree, say so rather than
-                          reconcile them: one of the two records is wrong. */}
-                      {p.workstream?.rateOfRecord != null
-                        && p.payRate != null
-                        && p.payRate > 0
-                        && Math.abs(p.payRate - p.workstream.rateOfRecord) > 0.005 && (
-                          <div className="text-[11px] text-amber-700 tabular-nums truncate">
-                            PAR has ${p.payRate.toFixed(2)} for this shift
-                          </div>
-                        )}
                       <div className="text-[11px] text-gray-500 tabular-nums">
                         {p.startLabel}–{p.endLabel}
                         {p.isOpen && <span className="ml-1 text-green-600">on now</span>}
                       </div>
+                      {/* Hours this payroll week, the shift in progress
+                          included — the figure you need to decide whether to
+                          send somebody home before they cross forty. */}
                       <div className="text-[11px] text-gray-400 tabular-nums">
-                        {hrs(p.minutesElapsedAtQuery)} elapsed · {hrs(p.trailing7Minutes)} in 7d
+                        {hrs(p.minutesElapsedAtQuery)} elapsed · {hrs(p.wtdMinutes)} WTD
                       </div>
                     </li>
                   ))}

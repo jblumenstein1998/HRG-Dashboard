@@ -67,10 +67,10 @@ export type StaffOnClock = {
    * minutesWorked, which is what PAR pays and has breaks taken out.
    */
   minutesElapsedAtQuery: number;
-  /** Total minutes worked across the seven business dates before this one. */
-  trailing7Minutes: number;
+  /** Minutes worked this payroll week so far, the shift in progress included. */
+  wtdMinutes: number;
   /** Shifts behind that total, so a bare number can be checked. */
-  trailing7Shifts: number;
+  wtdShifts: number;
   /**
    * What Workstream says about this person, where they have been joined to a
    * Workstream record. Null throughout when they haven't been — see
@@ -221,7 +221,19 @@ function onBreakAt(shift: PARShift, queryMinutes: number): boolean {
   return shift.breaks.some((b) => queryMinutes >= b.startMinutes && queryMinutes < b.endMinutes);
 }
 
-const TRAILING_DAYS = 7;
+/**
+ * Business dates from this week's Monday up to, but not including, `date`.
+ *
+ * The payroll week runs Monday to Sunday, the same as everywhere else on this
+ * screen, so week-to-date means the same thing here as it does in the hours
+ * table. Empty on a Monday, when the week has not started.
+ */
+function weekToDateBefore(date: string): string[] {
+  const monday = mondayOf(date);
+  const out: string[] = [];
+  for (let d = monday; d < date; d = shiftLocalDate(d, 1)) out.push(d);
+  return out;
+}
 
 async function rosterForStore(
   loc: (typeof PAR_LOCATIONS)[number],
@@ -241,16 +253,15 @@ async function rosterForStore(
   try {
     const previousDate = shiftLocalDate(localDate, -1);
 
-    // The seven business dates before today's, for the trailing total. Fetched
-    // alongside so one store is one round of parallel calls rather than two.
-    const trailingDates = Array.from({ length: TRAILING_DAYS }, (_, i) =>
-      shiftLocalDate(localDate, -(i + 1)),
-    );
+    // This week so far, Monday up to yesterday. Fetched alongside so one store
+    // is one round of parallel calls rather than two.
+    const trailingDates = weekToDateBefore(localDate);
 
-    // The two roster dates are read live; the trailing seven come from cache.
-    // A shift that is still open keeps changing, and the whole question this
-    // screen answers is "right now" — an hour-old snapshot answers a different
-    // one. Past business dates do not move, so caching them is free.
+    // The two roster dates are read live; the earlier days of the week come
+    // from cache. A shift that is still open keeps changing, and the whole
+    // question this screen answers is "right now" — an hour-old snapshot
+    // answers a different one. Past business dates do not move, so caching
+    // them is free.
     const [employees, jobs, linked, today, yesterday, ...trailing] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
@@ -265,8 +276,20 @@ async function rosterForStore(
     const nameById = new Map(employees.map((e) => [e.id, e]));
     const jobById = new Map(jobs.map((j) => [j.id, j]));
 
+    /*
+     * Week to date, including the shift being worked right now.
+     *
+     * Today's own shifts come from the live read rather than the cached week
+     * days, so the figure climbs through the day — which is the point. The
+     * question it answers is whether somebody should be sent home before they
+     * cross forty, and a total that stopped at midnight could not answer it.
+     *
+     * `trailing` holds Monday through yesterday and `today` holds today, so
+     * the two never overlap; yesterday's live read is deliberately not added,
+     * since that business date is already in `trailing`.
+     */
     const trailingByEmployee = new Map<string, { minutes: number; shifts: number }>();
-    for (const day of trailing) {
+    for (const day of [...trailing, today]) {
       for (const sh of day) {
         if (!sh.employeeId) continue;
         const acc = trailingByEmployee.get(sh.employeeId) ?? { minutes: 0, shifts: 0 };
@@ -313,8 +336,8 @@ async function rosterForStore(
         onBreak: onBreakAt(shift, queryMinutes),
         minutesWorked: shift.minutesWorked,
         minutesElapsedAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
-        trailing7Minutes: trailingAcc?.minutes ?? 0,
-        trailing7Shifts: trailingAcc?.shifts ?? 0,
+        wtdMinutes: trailingAcc?.minutes ?? 0,
+        wtdShifts: trailingAcc?.shifts ?? 0,
         workstream: ws
           ? {
               fullName: ws.name,
