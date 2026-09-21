@@ -66,11 +66,20 @@ async function createSchema(): Promise<void> {
       WHERE status <> 'rejected'
   `;
 
-  await sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS workstream_links_one_per_workstream_person
-      ON workstream_employee_links (par_store_id, workstream_uuid)
-      WHERE status = 'confirmed'
-  `;
+  /*
+   * Deliberately dropped: several PAR employees may point at one Workstream
+   * person.
+   *
+   * A store routinely carries the same human twice — an old clock number and a
+   * new one — and both are them. Linking both means their position and rate
+   * appear whichever number they punched in under. The index below used to
+   * forbid that, which silently unlinked the first record when the second was
+   * confirmed.
+   *
+   * Dropped rather than left unused, because an old database already has it and
+   * would reject the second link at write time.
+   */
+  await sql`DROP INDEX IF EXISTS workstream_links_one_per_workstream_person`;
 }
 
 type Row = {
@@ -134,11 +143,15 @@ export async function confirmLink(input: DecisionInput): Promise<void> {
   if (!uuid) throw new Error("confirmLink needs a workstream uuid");
   await ensureWorkstreamLinkSchema();
 
+  // Only this PAR employee's own previous answer is cleared. Other PAR records
+  // pointing at the same Workstream person are left alone — a store carrying
+  // one human under two clock numbers should have both linked, so confirming
+  // the second must not quietly unlink the first.
   await sql`
     DELETE FROM workstream_employee_links
     WHERE par_store_id = ${input.parStoreId}
       AND status <> 'rejected'
-      AND (par_employee_id = ${input.parEmployeeId} OR workstream_uuid = ${uuid})
+      AND par_employee_id = ${input.parEmployeeId}
   `;
 
   // A pair confirmed by hand is no longer rejected — the reviewer has just

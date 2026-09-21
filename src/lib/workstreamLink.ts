@@ -479,16 +479,6 @@ export function proposeStoreLinks(input: {
    */
   const matchable = workstreamEmployees.filter(isActiveEmployee);
 
-  // Uniqueness is counted over the whole roster, before anything is claimed —
-  // a name is ambiguous or not on its own terms, regardless of what got
-  // matched first. Leavers are excluded on both sides, so a name shared only
-  // with a former colleague is not ambiguous at all.
-  const parKeyCounts = new Map<string, number>();
-  for (const p of parEmployees) {
-    if (p.terminated) continue;
-    const k = nameKey(p.firstName, p.lastName);
-    if (k) parKeyCounts.set(k, (parKeyCounts.get(k) ?? 0) + 1);
-  }
   const wsByKey = new Map<string, WorkstreamPerson[]>();
   for (const w of matchable) {
     const k = nameKey(w.firstName, w.lastName);
@@ -498,9 +488,6 @@ export function proposeStoreLinks(input: {
     wsByKey.set(k, list);
   }
 
-  // A Workstream record already spoken for by a confirmed decision cannot be
-  // auto-matched to somebody else.
-  const claimed = new Set(confirmed.values());
 
   const proposals: LinkProposal[] = [];
   const resolved = new Set<string>();
@@ -561,11 +548,26 @@ export function proposeStoreLinks(input: {
 
     const key = nameKey(p.firstName, p.lastName);
     const exact = key ? (wsByKey.get(key) ?? []) : [];
+    /*
+     * One Workstream person of that name is the whole requirement.
+     *
+     * The Workstream side must be unique, or we do not know which human we are
+     * pointing at. The PAR side need not be: a store routinely carries the same
+     * person twice -- an old clock number and a new one -- and both are them.
+     * Linking both to the one Workstream record means the position and rate
+     * appear whichever number they punched in under, which is the outcome
+     * anybody actually wants.
+     *
+     * Requiring PAR to be unique as well held back 28 otherwise perfect matches
+     * across the estate, every one a store carrying two live records for the
+     * same name -- one working shifts, one never used.
+     *
+     * A rejection still blocks it: that is somebody saying "these two are not
+     * the same person", which outranks any amount of name agreement.
+     */
     const unique =
       key.length > 0 &&
       exact.length === 1 &&
-      (parKeyCounts.get(key) ?? 0) === 1 &&
-      !claimed.has(exact[0].uuid) &&
       !rejected.has(`${p.id} ${exact[0].uuid}`);
 
     if (unique) {
