@@ -290,6 +290,19 @@ export type LinkedPerson = {
   hiredDate: string | null;
   terminationDate: string | null;
   linkedBy: "auto" | "confirmed";
+  /**
+   * The store Workstream assigns them to, when it is **not** the store whose
+   * hours these are.
+   *
+   * Workstream's location is the baseline for where somebody belongs, so this
+   * being set means they are working a store they are not assigned to — worth
+   * flagging, because one of two things is true and both matter: either the
+   * assignment is stale after a transfer, or somebody is covering shifts away
+   * from their home store and the labour is landing on the wrong P&L.
+   *
+   * Null in the ordinary case, so a caller can treat it as "nothing to say".
+   */
+  assignedElsewhere: string | null;
 };
 
 /**
@@ -303,9 +316,10 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
   const out = new Map<string, LinkedPerson>();
   if (!storeById(storeId)?.workstreamLocationUuid) return out;
 
-  const [parEmployees, workstreamEmployees, decisions] = await Promise.all([
+  const [parEmployees, workstreamEmployees, elsewhere, decisions] = await Promise.all([
     parRosterFor(storeId, null),
     workstreamRosterFor(storeId),
+    activeElsewhere(storeId),
     listDecisions(storeId),
   ]);
 
@@ -313,9 +327,12 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
     parStoreId: storeId,
     parEmployees,
     workstreamEmployees,
+    elsewhere,
     decisions,
   });
-  const ws = new Map(workstreamEmployees.map((e) => [e.uuid, e]));
+  // Both pools, so a person assigned to another store still resolves — and
+  // carries where Workstream thinks they belong.
+  const ws = new Map([...workstreamEmployees, ...elsewhere].map((e) => [e.uuid, e]));
 
   for (const p of report.proposals) {
     if (p.state !== "auto" && p.state !== "confirmed") continue;
@@ -330,6 +347,7 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
       hiredDate: e.hiredDate ?? e.startDate ?? null,
       terminationDate: e.terminationDate,
       linkedBy: p.state,
+      assignedElsewhere: e.atOtherStore ?? null,
     });
   }
   return out;

@@ -604,7 +604,21 @@ export function proposeStoreLinks(input: {
     }
 
     const key = nameKey(p.firstName, p.lastName);
-    const exact = key ? (wsByKey.get(key) ?? []) : [];
+    /*
+     * Candidates of exactly this name, from this store and from every other.
+     *
+     * Workstream's assigned location is the baseline, not a condition of the
+     * match: a person working a store they are not assigned to is a fact to
+     * report, not a reason to leave them unlinked. So an exact name match
+     * elsewhere links like any other, and the mismatch is flagged downstream.
+     *
+     * Uniqueness is still judged over the combined pool. Two active Workstream
+     * people of the same name — wherever they are assigned — means we cannot
+     * say which human this is, and that still goes to a person.
+     */
+    const exact = key
+      ? [...(wsByKey.get(key) ?? []), ...crossStore]
+      : [];
     /*
      * One Workstream person of that name is the whole requirement.
      *

@@ -101,6 +101,15 @@ export type WorkstreamFacts = {
   terminationDate: string | null;
   /** How the two records were joined: a name match, or a person's decision. */
   linkedBy: "auto" | "confirmed";
+  /**
+   * The store Workstream assigns them to, when it is not this one.
+   *
+   * Workstream's location is the baseline for where somebody belongs, so a
+   * value here means they are working a store they are not assigned to. Either
+   * the assignment is stale after a transfer, or they are covering away from
+   * their home store and the labour is landing on another store's P&L.
+   */
+  assignedElsewhere: string | null;
 };
 
 export type StoreRoster = {
@@ -314,6 +323,7 @@ async function rosterForStore(
               hiredDate: ws.hiredDate,
               terminationDate: ws.terminationDate,
               linkedBy: ws.linkedBy,
+              assignedElsewhere: ws.assignedElsewhere,
             }
           : null,
       });
@@ -657,6 +667,7 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                         hiredDate: ws.hiredDate,
                         terminationDate: ws.terminationDate,
                         linkedBy: ws.linkedBy,
+                        assignedElsewhere: ws.assignedElsewhere,
                       }
                     : null,
                 };

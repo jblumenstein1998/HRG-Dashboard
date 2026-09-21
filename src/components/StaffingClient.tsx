@@ -1633,6 +1633,16 @@ function StoreCard({ store }: { store: StoreRoster }) {
                           <span className="text-gray-400"> · not linked to Workstream</span>
                         )}
                       </div>
+                      {/* Workstream's assigned location is the baseline for
+                          where somebody belongs. Working elsewhere is either a
+                          transfer Workstream has not caught up with, or cover
+                          being picked up away from their home store — and in
+                          the second case this store is carrying the labour. */}
+                      {p.workstream?.assignedElsewhere && (
+                        <div className="text-[11px] text-amber-700 truncate">
+                          assigned to {p.workstream.assignedElsewhere} in Workstream
+                        </div>
+                      )}
                       {/* The job they clocked in as, when it differs from the job
                           they hold. A Shift Lead on a Cook shift is a Tuesday,
                           not an error — but it is worth being able to see. */}
