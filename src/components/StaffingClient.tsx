@@ -149,6 +149,156 @@ function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** Minutes past midnight → "11:30 PM". */
+function timeLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const suffix = h < 12 ? "am" : "pm";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")}${suffix}`;
+}
+
+/** "YYYY-MM-DD" → "Sun Sep 20", read as a plain date rather than an instant. */
+function dayLabel(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function addDays(date: string, delta: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + delta);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+}
+
+/*
+ * The times of day worth jumping straight to.
+ *
+ * A native datetime field makes you spin through 1,440 minutes one at a time to
+ * answer a question that is nearly always one of five: how did we open, how did
+ * lunch look, the afternoon lull, the dinner rush, and who is left at the end.
+ * These are those five, and the slider covers everything in between.
+ */
+const TIME_PRESETS: { label: string; minutes: number }[] = [
+  { label: "Open", minutes: 6 * 60 + 30 },
+  { label: "Lunch", minutes: 12 * 60 },
+  { label: "Lull", minutes: 15 * 60 },
+  { label: "Dinner", minutes: 18 * 60 },
+  { label: "Close", minutes: 22 * 60 },
+];
+
+/**
+ * Pick the instant the roster is read at.
+ *
+ * Replaces `<input type="datetime-local">`, which is the wrong shape for this
+ * question. That control is built for entering an appointment — a date and a
+ * time typed once, to the minute — where this screen is *scrubbed*: you slide
+ * through a day watching the floor fill and empty, and the minute almost never
+ * matters. So the day is a stepper and the time is a slider, both of which
+ * answer a drag instead of six keystrokes, and the five times anyone actually
+ * asks about are one click away.
+ *
+ * "Now" stays a separate pill rather than a position on the slider, because
+ * following the clock is a different mode, not a time — a page left open on
+ * Now keeps telling the truth an hour later.
+ */
+function TimeScrubber({
+  when,
+  live,
+  onChange,
+  onNow,
+}: {
+  when: string;
+  live: boolean;
+  onChange: (value: string) => void;
+  onNow: () => void;
+}) {
+  const date = when.slice(0, 10);
+  const minutes = Number(when.slice(11, 13)) * 60 + Number(when.slice(14, 16));
+  const setDate = (d: string) => onChange(`${d}T${when.slice(11, 16)}`);
+  const setMinutes = (m: number) => {
+    const p = (n: number) => String(n).padStart(2, "0");
+    onChange(`${date}T${p(Math.floor(m / 60))}:${p(m % 60)}`);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={onNow}
+        className={`text-xs px-3 py-1.5 rounded-lg border transition ${
+          live
+            ? "bg-gray-900 text-white border-gray-900"
+            : "border-gray-200 text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        Now
+      </button>
+
+      {/* The day, as a stepper. Yesterday is one click, and the date itself is
+          still a date field for the rare jump to last month. */}
+      <div className={`flex items-center rounded-lg border border-gray-200 ${live ? "opacity-60" : ""}`}>
+        <button
+          onClick={() => setDate(addDays(date, -1))}
+          className="px-2 py-1.5 text-gray-500 hover:bg-gray-50 rounded-l-lg transition"
+          aria-label="previous day"
+        >
+          ‹
+        </button>
+        <label className="relative text-xs tabular-nums text-gray-700 px-1 cursor-pointer">
+          {dayLabel(date)}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => e.target.value && setDate(e.target.value)}
+            className="absolute inset-0 opacity-0 cursor-pointer"
+          />
+        </label>
+        <button
+          onClick={() => setDate(addDays(date, 1))}
+          className="px-2 py-1.5 text-gray-500 hover:bg-gray-50 rounded-r-lg transition"
+          aria-label="next day"
+        >
+          ›
+        </button>
+      </div>
+
+      {/* Quarter-hour steps: finer than that is a precision the question does
+          not have, and coarser would miss a shift change. */}
+      <input
+        type="range"
+        min={0}
+        max={1425}
+        step={15}
+        value={minutes}
+        onChange={(e) => setMinutes(Number(e.target.value))}
+        className={`w-32 sm:w-44 accent-gray-900 cursor-pointer ${live ? "opacity-60" : ""}`}
+        aria-label="time of day"
+      />
+      <span className="text-xs tabular-nums text-gray-900 w-16">{timeLabel(minutes)}</span>
+
+      <div className="hidden md:flex items-center gap-1">
+        {TIME_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            onClick={() => setMinutes(p.minutes)}
+            className={`text-[11px] px-1.5 py-1 rounded-md border transition ${
+              !live && minutes === p.minutes
+                ? "bg-gray-900 text-white border-gray-900"
+                : "border-gray-200 text-gray-500 hover:bg-gray-50"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function StaffingClient({
   tabs,
   isAdmin,
@@ -274,21 +424,12 @@ export default function StaffingClient({
               value={storeFilter.value}
               onChange={storeFilter.setValue}
             />
-            <input
-              type="datetime-local"
-              value={when}
-              onChange={(e) => { setWhen(e.target.value); setLive(false); }}
-              className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
+            <TimeScrubber
+              when={when}
+              live={live}
+              onChange={(v) => { setWhen(v); setLive(false); }}
+              onNow={setNow}
             />
-            <button
-              onClick={setNow}
-              className={`text-xs px-3 py-1.5 rounded-lg border transition ${
-                live ? "bg-gray-900 text-white border-gray-900" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              Now
-            </button>
-            {live && <span className="text-xs text-gray-400">following the clock</span>}
 
             {data && !loading && (
               <span className="text-xs text-gray-500">

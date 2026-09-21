@@ -154,6 +154,17 @@ export type LinkDecision = {
   status: LinkDecisionStatus;
   decidedBy: string;
   decidedAt: string;
+  /*
+   * Whose spelling of the name to show. Workstream unless somebody said
+   * otherwise, because it carries a full legal name where PAR has a first name
+   * and an initial.
+   *
+   * The exception this exists for is a name change. Natasha Wilson in PAR and
+   * Noah Starke in Workstream are one person, and the two records disagree
+   * about who they *are*, not how it is spelled — so the choice belongs to
+   * whoever knows them, not to a rule about record quality.
+   */
+  nameSource?: "workstream" | "par";
 };
 
 // ── Name normalisation ───────────────────────────────────────────────────────
@@ -391,6 +402,13 @@ export type LinkProposal = {
   workstreamUuid: string | null;
   /** Ranked alternatives, best first. Present even once linked, for changing it. */
   candidates: MatchCandidate[];
+  /**
+   * Whose spelling of the name this person goes by on the staffing screens.
+   *
+   * Only set once somebody has confirmed the link, since it is a choice between
+   * two records and there is only one until then.
+   */
+  nameSource?: "workstream" | "par";
 };
 
 export type StoreLinkReport = {
@@ -489,10 +507,14 @@ export function proposeStoreLinks(input: {
 
   const decisions = input.decisions.filter((d) => d.parStoreId === parStoreId);
   const confirmed = new Map<string, string>();
+  const nameSources = new Map<string, "workstream" | "par">();
   const absent = new Set<string>();
   const rejected = new Set<string>();
   for (const d of decisions) {
-    if (d.status === "confirmed") confirmed.set(d.parEmployeeId, d.workstreamUuid);
+    if (d.status === "confirmed") {
+      confirmed.set(d.parEmployeeId, d.workstreamUuid);
+      nameSources.set(d.parEmployeeId, d.nameSource === "par" ? "par" : "workstream");
+    }
     else if (d.status === "absent") absent.add(d.parEmployeeId);
     else if (d.status === "rejected") rejected.add(`${d.parEmployeeId} ${d.workstreamUuid}`);
   }
@@ -500,7 +522,13 @@ export function proposeStoreLinks(input: {
   // Every Workstream record, terminated included — a link confirmed while
   // somebody worked here has to keep resolving after they leave, or their past
   // hours would quietly lose the title and rate they were worked at.
-  const wsByUuid = new Map(workstreamEmployees.map((w) => [w.uuid, w]));
+  //
+  // People assigned to other stores are in here too, so a link somebody made
+  // by hand across a store boundary still resolves. It has to: the name search
+  // is estate-wide on purpose, and a transfer Workstream has not caught up with
+  // is one of the commonest reasons two records drifted apart. This store's own
+  // copy wins where a uuid appears in both.
+  const wsByUuid = new Map([...elsewhere, ...workstreamEmployees].map((w) => [w.uuid, w]));
 
   /**
    * Who is available to be matched: people Workstream currently calls active.
@@ -566,7 +594,26 @@ export function proposeStoreLinks(input: {
     const decided = confirmed.get(p.id);
     if (decided && wsByUuid.has(decided)) {
       resolved.add(decided);
-      proposals.push({ ...base, state: "confirmed", workstreamUuid: decided, candidates: ranked });
+      /*
+       * The confirmed person is always in the list, even when nothing about
+       * the two names would have suggested them.
+       *
+       * That is the name-change case: somebody searched Workstream by hand and
+       * linked a record the scorer never offered, so it is absent from
+       * `ranked` and the screen would have nothing to show but a uuid. Scored
+       * zero deliberately — a human decision does not need a number, and any
+       * number here would be a fiction.
+       */
+      const withDecided = ranked.some((c) => c.workstreamUuid === decided)
+        ? ranked
+        : [toCandidate(wsByUuid.get(decided)!, 0, ["linked by hand"]), ...ranked];
+      proposals.push({
+        ...base,
+        state: "confirmed",
+        workstreamUuid: decided,
+        candidates: withDecided,
+        nameSource: nameSources.get(p.id) ?? "workstream",
+      });
       continue;
     }
 

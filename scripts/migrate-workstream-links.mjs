@@ -22,8 +22,20 @@ await sql`
     decided_by      TEXT NOT NULL DEFAULT '',
     decided_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     note            TEXT NOT NULL DEFAULT '',
+    -- 'workstream' | 'par' -- whose spelling of the name the staffing screens
+    -- show. Workstream by default, since it holds full legal names. The reason
+    -- it is a choice at all is a name change: PAR's Natasha Wilson and
+    -- Workstream's Noah Starke are one person, and which name belongs on a
+    -- roster is a judgement, not a rule about record quality.
+    name_source     TEXT NOT NULL DEFAULT 'workstream',
     PRIMARY KEY (par_store_id, par_employee_id, workstream_uuid)
   )
+`;
+
+// Added after the table existed, so databases created before it need it too.
+await sql`
+  ALTER TABLE workstream_employee_links
+    ADD COLUMN IF NOT EXISTS name_source TEXT NOT NULL DEFAULT 'workstream'
 `;
 
 // One live decision per PAR employee; any number of rejections alongside it.

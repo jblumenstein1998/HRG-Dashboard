@@ -56,8 +56,25 @@ async function createSchema(): Promise<void> {
       decided_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
       -- Free text from the reviewer, e.g. "transferred from Hampton in March".
       note            TEXT NOT NULL DEFAULT '',
+      /*
+       * Which system's name to show for this person: 'workstream' or 'par'.
+       *
+       * Workstream wins by default — it holds full legal names where PAR
+       * truncates to a first name and an initial. But a name change makes the
+       * two records disagree about who somebody *is*, not just how their name
+       * is spelled: Natasha Wilson in PAR and Noah Starke in Workstream are one
+       * person, and which name belongs on a roster the shift leader reads is a
+       * judgement for a person, not a rule.
+       */
+      name_source     TEXT NOT NULL DEFAULT 'workstream',
       PRIMARY KEY (par_store_id, par_employee_id, workstream_uuid)
     )
+  `;
+
+  // Added after the table existed, so old databases need it too.
+  await sql`
+    ALTER TABLE workstream_employee_links
+      ADD COLUMN IF NOT EXISTS name_source TEXT NOT NULL DEFAULT 'workstream'
   `;
 
   await sql`
@@ -90,6 +107,7 @@ type Row = {
   decided_by: string;
   decided_at: string;
   note: string;
+  name_source: string;
 };
 
 function toDecision(r: Row): LinkDecision & { note: string } {
@@ -101,6 +119,7 @@ function toDecision(r: Row): LinkDecision & { note: string } {
     decidedBy: r.decided_by,
     decidedAt: new Date(r.decided_at).toISOString(),
     note: r.note,
+    nameSource: r.name_source === "par" ? "par" : "workstream",
   };
 }
 
@@ -127,6 +146,13 @@ export type DecisionInput = {
   workstreamUuid?: string;
   decidedBy: string;
   note?: string;
+  /**
+   * Which system's name to show for this person. Workstream by default.
+   *
+   * Only meaningful on a confirm, and only really needed when the two records
+   * carry genuinely different names — a name change rather than a spelling.
+   */
+  nameSource?: "workstream" | "par";
 };
 
 /**
@@ -167,9 +193,34 @@ export async function confirmLink(input: DecisionInput): Promise<void> {
 
   await sql`
     INSERT INTO workstream_employee_links
-      (par_store_id, par_employee_id, workstream_uuid, status, decided_by, note)
+      (par_store_id, par_employee_id, workstream_uuid, status, decided_by, note, name_source)
     VALUES
-      (${input.parStoreId}, ${input.parEmployeeId}, ${uuid}, 'confirmed', ${input.decidedBy}, ${input.note ?? ""})
+      (${input.parStoreId}, ${input.parEmployeeId}, ${uuid}, 'confirmed', ${input.decidedBy},
+       ${input.note ?? ""}, ${input.nameSource ?? "workstream"})
+  `;
+}
+
+/**
+ * Change which name a confirmed link displays, without re-deciding the link.
+ *
+ * Its own operation rather than a flag on confirm, because it answers a
+ * different question. Confirming says these two records are the same human;
+ * this says which of their two names the roster should carry. A person who has
+ * changed their name has both, and only somebody who knows them can say which
+ * one belongs on the screen their colleagues read.
+ */
+export async function setNameSource(
+  parStoreId: string,
+  parEmployeeId: string,
+  nameSource: "workstream" | "par",
+): Promise<void> {
+  await ensureWorkstreamLinkSchema();
+  await sql`
+    UPDATE workstream_employee_links
+       SET name_source = ${nameSource}
+     WHERE par_store_id = ${parStoreId}
+       AND par_employee_id = ${parEmployeeId}
+       AND status = 'confirmed'
   `;
 }
 

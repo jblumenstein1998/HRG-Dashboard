@@ -32,9 +32,21 @@ import type { BonusStore } from "@/lib/bonus/storeMap";
 import type { LinkProposal, MatchCandidate } from "@/lib/workstreamLink";
 import type { StoreLinkView } from "@/lib/workstreamRoster";
 
-type Action = "confirm" | "absent" | "reject" | "clear";
+type Action = "confirm" | "absent" | "reject" | "clear" | "name";
 
 const money = (n: number | null | undefined) => (n == null ? "—" : `$${n.toFixed(2)}`);
+
+/** One hit from /api/workstream/search. */
+type SearchHit = {
+  uuid: string;
+  name: string;
+  goesBy: string | null;
+  title: string | null;
+  hourlyRate: number | null;
+  hiredDate: string | null;
+  storeId: string | null;
+  storeName: string | null;
+};
 
 export default function ReconciliationSection({ stores }: { stores: BonusStore[] }) {
   const [storeId, setStoreId] = useState(stores[0]?.storeId ?? "");
@@ -103,14 +115,19 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
    * another, since a Workstream record can only be claimed once, and a local
    * edit would leave a stale candidate the next answer contradicts.
    */
-  async function decide(parEmployeeId: string, action: Action, workstreamUuid?: string) {
+  async function decide(
+    parEmployeeId: string,
+    action: Action,
+    workstreamUuid?: string,
+    nameSource?: "workstream" | "par",
+  ) {
     setBusy(`${parEmployeeId}:${workstreamUuid ?? action}`);
     setError(null);
     try {
       const res = await fetch("/api/workstream/links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId, parEmployeeId, action, workstreamUuid }),
+        body: JSON.stringify({ storeId, parEmployeeId, action, workstreamUuid, nameSource }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(String(json.error ?? res.status));
@@ -294,10 +311,32 @@ function PersonCard({
 }: {
   person: LinkProposal;
   busy: string | null;
-  onDecide: (parEmployeeId: string, action: Action, workstreamUuid?: string) => void;
+  onDecide: (
+    parEmployeeId: string,
+    action: Action,
+    workstreamUuid?: string,
+    nameSource?: "workstream" | "par",
+  ) => void;
 }) {
   const linked = person.candidates.find((c) => c.workstreamUuid === person.workstreamUuid);
   const others = person.candidates.filter((c) => c.workstreamUuid !== person.workstreamUuid);
+
+  /*
+   * Whether the two records disagree about the name badly enough to ask.
+   *
+   * "Rob Vance" against "Robert Vance" is a spelling and not worth a control;
+   * "Natasha Wilson" against "Noah Starke" is a name change, and then which
+   * name the roster shows is a real decision with a real wrong answer. The
+   * test is deliberately crude — share no word, so ask — because the cost of
+   * offering the choice once too often is one extra control on a maintenance
+   * screen, and the cost of not offering it is a shift leader reading a name
+   * nobody at that store recognises.
+   */
+  const parWords = new Set(person.parName.toLowerCase().split(/\s+/).filter(Boolean));
+  const wsWords = (linked?.name ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const namesDiffer =
+    !!linked?.name && wsWords.length > 0 && !wsWords.some((w) => parWords.has(w));
+  const showingPar = person.nameSource === "par";
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -316,19 +355,59 @@ function PersonCard({
       </div>
 
       {(person.state === "auto" || person.state === "confirmed") && (
-        <div className="px-3 py-2 bg-green-50/40 flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-gray-900 font-medium">
-            {linked?.name ?? person.workstreamUuid}
-          </span>
-          <span className="text-gray-600">{linked?.title ?? ""}</span>
-          <span className="text-gray-600 tabular-nums">{money(linked?.hourlyRate)}</span>
-          <button
-            onClick={() => onDecide(person.parEmployeeId, "clear")}
-            disabled={busy != null}
-            className="ml-auto text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-white text-gray-600 transition disabled:opacity-50"
-          >
-            {person.state === "auto" ? "Not them" : "Unlink"}
-          </button>
+        <div className="bg-green-50/40">
+          <div className="px-3 py-2 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-gray-900 font-medium">
+              {linked?.name ?? person.workstreamUuid}
+            </span>
+            <span className="text-gray-600">{linked?.title ?? ""}</span>
+            <span className="text-gray-600 tabular-nums">{money(linked?.hourlyRate)}</span>
+            {linked?.atOtherStore && (
+              <span className="text-xs text-amber-700">assigned to {linked.atOtherStore}</span>
+            )}
+            <button
+              onClick={() => onDecide(person.parEmployeeId, "clear")}
+              disabled={busy != null}
+              className="ml-auto text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-white text-gray-600 transition disabled:opacity-50"
+            >
+              {person.state === "auto" ? "Not them" : "Unlink"}
+            </button>
+          </div>
+
+          {/* Two names for one person, and somebody has to say which one the
+              staffing screens should use. Only shown when they genuinely
+              differ, and only once the link is confirmed — an automatic match
+              means the names already agreed. */}
+          {namesDiffer && person.state === "confirmed" && (
+            <div className="px-3 pb-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-gray-500">Show as</span>
+              <button
+                onClick={() => onDecide(person.parEmployeeId, "name", undefined, "workstream")}
+                disabled={busy != null}
+                className={`px-2 py-1 rounded-md border transition disabled:opacity-50 ${
+                  showingPar
+                    ? "border-gray-200 text-gray-600 hover:bg-white"
+                    : "bg-gray-900 text-white border-gray-900"
+                }`}
+              >
+                {linked?.name}
+              </button>
+              <button
+                onClick={() => onDecide(person.parEmployeeId, "name", undefined, "par")}
+                disabled={busy != null}
+                className={`px-2 py-1 rounded-md border transition disabled:opacity-50 ${
+                  showingPar
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "border-gray-200 text-gray-600 hover:bg-white"
+                }`}
+              >
+                {person.parName}
+              </button>
+              <span className="text-gray-400">
+                {showingPar ? "PAR's name" : "Workstream's name"}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -361,20 +440,151 @@ function PersonCard({
       )}
 
       {person.state === "review" && (
-        <div className="px-3 py-2 border-t border-gray-100 flex flex-wrap items-center gap-3">
-          {person.candidates.length === 0 && (
-            <span className="text-sm text-gray-600">
-              No current Workstream employee at this store resembles this name.
-            </span>
-          )}
-          <button
-            onClick={() => onDecide(person.parEmployeeId, "absent")}
+        <div className="border-t border-gray-100">
+          {/* Search the whole estate by hand.
+              The scorer offers people whose names look alike, which is the
+              right default and no help at all when somebody has changed their
+              name — no measure of string distance will ever put Natasha Wilson
+              and Noah Starke together. Only a person who knows can, so give
+              them a search box rather than a dead end. */}
+          <NameSearch
+            parName={person.parName}
             disabled={busy != null}
-            className="ml-auto text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-          >
-            No Workstream record
-          </button>
+            onPick={(uuid) => onDecide(person.parEmployeeId, "confirm", uuid)}
+          />
+          <div className="px-3 py-2 flex flex-wrap items-center gap-3">
+            {person.candidates.length === 0 && (
+              <span className="text-sm text-gray-600">
+                No current Workstream employee at this store resembles this name.
+              </span>
+            )}
+            <button
+              onClick={() => onDecide(person.parEmployeeId, "absent")}
+              disabled={busy != null}
+              className="ml-auto text-xs px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+            >
+              No Workstream record
+            </button>
+          </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Search Workstream by name and link whoever you find.
+ *
+ * The escape hatch from automatic matching. Everything else on this screen
+ * works by comparing the two names, which fails completely for the one case
+ * that most needs solving — a person whose name changed, whose two records now
+ * look like two different people to anything that reads text.
+ *
+ * Estate-wide rather than store-scoped, and the store is shown on each hit
+ * instead: a name change and a transfer often arrive together, and a search
+ * that quietly hid the right answer would be worse than no search.
+ */
+function NameSearch({
+  parName,
+  disabled,
+  onPick,
+}: {
+  parName: string;
+  disabled: boolean;
+  onPick: (uuid: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // Debounced, because this runs on every keystroke. It reads the local copy
+  // of the roster rather than the vendor, so the cost is a Postgres query and
+  // not a slice of the 1,000-call daily budget — but a request per character
+  // would still be a request per character.
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(`/api/workstream/search?q=${encodeURIComponent(term)}`);
+        const json = await res.json();
+        if (!cancelled) setResults(res.ok ? (json.people ?? []) : []);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [q]);
+
+  if (!open) {
+    return (
+      <div className="px-3 pt-2">
+        <button
+          onClick={() => setOpen(true)}
+          className="text-xs text-gray-500 hover:text-gray-900 underline decoration-dotted underline-offset-2 transition"
+        >
+          Search Workstream by name…
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-3 pt-2 pb-1">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Who is ${parName} in Workstream?`}
+          className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-gray-200"
+        />
+        <button
+          onClick={() => { setOpen(false); setQ(""); }}
+          className="text-xs px-2 py-1.5 text-gray-500 hover:text-gray-900 transition"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {q.trim().length >= 2 && (
+        <ul className="mt-1.5 divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+          {results.length === 0 && (
+            <li className="px-3 py-2 text-xs text-gray-500">
+              {searching ? "Searching…" : "Nobody active in Workstream matches that."}
+            </li>
+          )}
+          {results.map((r) => (
+            <li key={r.uuid} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-sm font-medium text-gray-900">{r.name}</span>
+              {r.goesBy && <span className="text-xs text-gray-500">goes by {r.goesBy}</span>}
+              <span className="text-xs text-gray-500">
+                {r.title ?? "no position"} · {money(r.hourlyRate)}
+              </span>
+              {/* The store is the thing to check before clicking: linking
+                  across one is legitimate, and also how a wrong link happens. */}
+              <span className="text-xs text-gray-500">{r.storeName ?? "no store"}</span>
+              <button
+                onClick={() => onPick(r.uuid)}
+                disabled={disabled}
+                className="ml-auto text-xs px-3 py-1 rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition disabled:opacity-50"
+              >
+                This is them
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

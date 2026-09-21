@@ -334,14 +334,38 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
   // carries where Workstream thinks they belong.
   const ws = new Map([...workstreamEmployees, ...elsewhere].map((e) => [e.uuid, e]));
 
+  /*
+   * Which name each linked person goes by, where a reviewer has said.
+   *
+   * Only ever "par" here — Workstream is the default and needs no row. Keyed by
+   * PAR employee id because that is what the roster is keyed by, and because
+   * the same Workstream person can be linked to two PAR records whose names
+   * disagree.
+   */
+  const preferPar = new Set(
+    decisions
+      .filter((d) => d.status === "confirmed" && d.nameSource === "par")
+      .map((d) => d.parEmployeeId),
+  );
+  const parNameById = new Map(
+    parEmployees.map((p) => [
+      p.id,
+      [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || p.displayName,
+    ]),
+  );
+
   for (const p of report.proposals) {
     if (p.state !== "auto" && p.state !== "confirmed") continue;
     const e = p.workstreamUuid ? ws.get(p.workstreamUuid) : null;
     if (!e) continue;
+    const workstreamName = [e.firstName, e.lastName].filter(Boolean).join(" ").trim() || null;
+    const parName = parNameById.get(p.parEmployeeId)?.trim() || null;
     out.set(p.parEmployeeId, {
       parEmployeeId: p.parEmployeeId,
       workstreamUuid: e.uuid,
-      name: [e.firstName, e.lastName].filter(Boolean).join(" ").trim() || null,
+      // The reviewer's choice wins, and only falls back when the record they
+      // chose has nothing to offer.
+      name: (preferPar.has(p.parEmployeeId) ? parName ?? workstreamName : workstreamName ?? parName),
       title: e.title,
       hourlyRate: e.hourlyRate,
       hiredDate: e.hiredDate ?? e.startDate ?? null,

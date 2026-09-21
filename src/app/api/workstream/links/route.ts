@@ -8,6 +8,7 @@ import {
   confirmLink,
   markAbsent,
   rejectPair,
+  setNameSource,
 } from "@/lib/workstreamLinkStore";
 
 /**
@@ -55,9 +56,9 @@ export async function GET(req: NextRequest) {
   }
 }
 
-type Action = "confirm" | "absent" | "reject" | "clear";
+type Action = "confirm" | "absent" | "reject" | "clear" | "name";
 
-const ACTIONS = new Set<Action>(["confirm", "absent", "reject", "clear"]);
+const ACTIONS = new Set<Action>(["confirm", "absent", "reject", "clear", "name"]);
 
 export async function POST(req: NextRequest) {
   const denied = await requireAdminApi();
@@ -72,9 +73,13 @@ export async function POST(req: NextRequest) {
     workstreamUuid?: string;
     action?: string;
     note?: string;
+    nameSource?: string;
   };
 
   const { storeId, parEmployeeId, workstreamUuid, note } = body;
+  // Anything but an explicit "par" is Workstream, which is the default
+  // everywhere else too.
+  const nameSource: "workstream" | "par" = body.nameSource === "par" ? "par" : "workstream";
   const action = body.action as Action | undefined;
 
   if (!storeId || !BONUS_STORE_IDS.includes(storeId)) {
@@ -97,10 +102,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const input = { parStoreId: storeId, parEmployeeId, workstreamUuid, decidedBy, note };
+    const input = { parStoreId: storeId, parEmployeeId, workstreamUuid, decidedBy, note, nameSource };
     if (action === "confirm") await confirmLink(input);
     else if (action === "absent") await markAbsent(input);
     else if (action === "reject") await rejectPair(input);
+    else if (action === "name") await setNameSource(storeId, parEmployeeId, nameSource);
     else await clearDecision(storeId, parEmployeeId, workstreamUuid);
 
     console.log(

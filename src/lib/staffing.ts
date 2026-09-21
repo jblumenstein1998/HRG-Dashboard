@@ -284,12 +284,21 @@ async function rosterForStore(
      * question it answers is whether somebody should be sent home before they
      * cross forty, and a total that stopped at midnight could not answer it.
      *
-     * `trailing` holds Monday through yesterday and `today` holds today, so
-     * the two never overlap; yesterday's live read is deliberately not added,
-     * since that business date is already in `trailing`.
+     * Yesterday is read twice — once cached as part of the week, once live for
+     * the roster — and the live copy wins. A shift that started at 6pm and is
+     * still running belongs to yesterday's business date, so the cached copy
+     * has it frozen at whatever it had accrued when the day was first read;
+     * taking the live one is what makes an overnight shift climb.
+     *
+     * On a Monday `trailingDates` is empty and yesterday is Sunday, which
+     * belongs to last week's payroll — so it is left out entirely, and
+     * somebody finishing an overnight Sunday shift correctly shows no hours
+     * against the week that just started.
      */
+    const weekDays = trailingDates.map((d, i) => (d === previousDate ? yesterday : trailing[i]));
+
     const trailingByEmployee = new Map<string, { minutes: number; shifts: number }>();
-    for (const day of [...trailing, today]) {
+    for (const day of [...weekDays, today]) {
       for (const sh of day) {
         if (!sh.employeeId) continue;
         const acc = trailingByEmployee.get(sh.employeeId) ?? { minutes: 0, shifts: 0 };
