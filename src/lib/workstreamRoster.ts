@@ -34,7 +34,11 @@ import {
   type WorkstreamPerson,
 } from "./workstreamLink";
 import { listDecisions } from "./workstreamLinkStore";
-import { listStoredEmployees, listStoredEmployeesForStore, type WorkstreamEmployeeRow } from "./workstreamStore";
+import {
+  listActiveStoredEmployees,
+  listStoredRosterForStore,
+  type WorkstreamRosterEntry,
+} from "./workstreamStore";
 
 /**
  * How many business dates back to look for a pay rate and a job name.
@@ -62,7 +66,7 @@ const ACTIVITY_DAYS = 30;
 // ── Workstream side ──────────────────────────────────────────────────────────
 
 /** A stored row, in the shape the matcher works on. */
-function toPerson(r: WorkstreamEmployeeRow): WorkstreamPerson {
+function toPerson(r: WorkstreamRosterEntry): WorkstreamPerson {
   return {
     uuid: r.uuid,
     firstName: r.firstName,
@@ -94,7 +98,7 @@ function toPerson(r: WorkstreamEmployeeRow): WorkstreamPerson {
  */
 export async function workstreamRosterFor(storeId: string): Promise<WorkstreamPerson[]> {
   if (!storeById(storeId)?.workstreamLocationUuid) return [];
-  return (await listStoredEmployeesForStore(storeId)).map(toPerson);
+  return (await listStoredRosterForStore(storeId)).map(toPerson);
 }
 
 /**
@@ -112,9 +116,11 @@ export async function workstreamRosterFor(storeId: string): Promise<WorkstreamPe
  * person, which is a judgement rather than a formality.
  */
 async function activeElsewhere(storeId: string): Promise<WorkstreamPerson[]> {
-  const everyone = await listStoredEmployees();
+  // Already filtered to current employees by the query itself, so all that is
+  // left to do here is drop this store's own people.
+  const everyone = await listActiveStoredEmployees();
   return everyone
-    .filter((r) => r.status === "active" && !r.terminationDate && r.storeId !== storeId)
+    .filter((r) => r.storeId !== storeId)
     .map((r) => ({
       ...toPerson(r),
       atOtherStore: r.storeId ? (storeById(r.storeId)?.name ?? r.storeId) : "no store",

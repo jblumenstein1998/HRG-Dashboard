@@ -123,20 +123,48 @@ function toDecision(r: Row): LinkDecision & { note: string } {
   };
 }
 
-/** Every decision, or every decision for one store. */
+/*
+ * The read in progress, shared by concurrent callers. See listDecisions.
+ */
+let decisionsInFlight: Promise<(LinkDecision & { note: string })[]> | null = null;
+
+function loadDecisions(): Promise<(LinkDecision & { note: string })[]> {
+  if (decisionsInFlight) return decisionsInFlight;
+
+  const read = (async () => {
+    await ensureWorkstreamLinkSchema();
+    const rows = (await sql`
+      SELECT * FROM workstream_employee_links
+      ORDER BY par_store_id, par_employee_id, status
+    `) as Row[];
+    return rows.map(toDecision);
+  })();
+
+  decisionsInFlight = read;
+  read.then(
+    () => { if (decisionsInFlight === read) decisionsInFlight = null; },
+    () => { if (decisionsInFlight === read) decisionsInFlight = null; },
+  );
+  return read;
+}
+
+/**
+ * Every decision, or every decision for one store.
+ *
+ * Always one query for the whole table, filtered in memory, however many stores
+ * ask. This table is tiny — tens of rows — so reading all of it costs nothing
+ * and the only thing being paid for is the round trip: twelve store-scoped
+ * reads of nineteen rows measured twenty seconds between them, because this
+ * database is reached over HTTP and every query is its own request.
+ *
+ * Concurrent callers share the read in flight and the slot is cleared as soon
+ * as it settles, so a decision written by the reviewer is visible to the very
+ * next request — which matters, because the screen that writes these rows
+ * re-reads them immediately to show the result.
+ */
 export async function listDecisions(storeId?: string): Promise<(LinkDecision & { note: string })[]> {
-  await ensureWorkstreamLinkSchema();
-  const rows = (storeId
-    ? await sql`
-        SELECT * FROM workstream_employee_links
-        WHERE par_store_id = ${storeId}
-        ORDER BY par_employee_id, status
-      `
-    : await sql`
-        SELECT * FROM workstream_employee_links
-        ORDER BY par_store_id, par_employee_id, status
-      `) as Row[];
-  return rows.map(toDecision);
+  const all = await loadDecisions();
+  return storeId ? all.filter((d) => d.parStoreId === storeId) : all;
 }
 
 export type DecisionInput = {

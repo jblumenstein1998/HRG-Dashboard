@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
-import { listStoredEmployees } from "@/lib/workstreamStore";
+import { listActiveStoredEmployees } from "@/lib/workstreamStore";
 import { storeById } from "@/lib/bonus/storeMap";
 
 /**
@@ -35,17 +35,16 @@ export async function GET(req: NextRequest) {
   if (q.length < 2) return NextResponse.json({ q, people: [] });
 
   try {
-    const all = await listStoredEmployees();
-
     /*
-     * Active only, same rule as the queue itself.
+     * Active only, same rule as the queue itself, and now applied by the query
+     * rather than here.
      *
      * Somebody who is onboarding has no hours to attribute yet, and somebody
      * offboarded should not be linked to a PAR record that is still clocking
      * in — if those two are genuinely one person, the Workstream record is the
      * thing that needs fixing, not this link.
      */
-    const active = all.filter((e) => e.status === "active" && !e.terminationDate);
+    const active = await listActiveStoredEmployees();
 
     // Every part of the name is searchable, preferred name included, because
     // the reviewer may only know one of them.
