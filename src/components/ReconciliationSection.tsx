@@ -261,23 +261,124 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
                 the queue is the pair somebody should look at. */}
             <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
               {view!.unlinkedWorkstream.map((c) => (
-                <div
+                <UnlinkedWorkstreamRow
                   key={c.workstreamUuid}
-                  className="px-3 py-1.5 flex flex-wrap items-baseline gap-x-3 text-sm"
-                >
-                  <span className="font-medium text-gray-900">{c.name ?? "(no name)"}</span>
-                  <span className="text-gray-500">{c.title ?? "no position"}</span>
-                  <span className="text-gray-500 tabular-nums">{money(c.hourlyRate)}</span>
-                  <span className="text-xs text-gray-400 ml-auto">
-                    {c.hiredDate ? `hired ${c.hiredDate}` : ""}
-                  </span>
-                </div>
+                  person={c}
+                  proposals={proposals}
+                  busy={busy != null}
+                  onPick={(parEmployeeId) =>
+                    decide(parEmployeeId, "confirm", c.workstreamUuid)}
+                />
               ))}
             </div>
           </div>
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * A Workstream employee with no counterpart here, and a way to go find one.
+ *
+ * The mirror of the search on a PAR card, and needed for a different reason.
+ * A PAR record reaches the review queue only if it has worked recently — which
+ * is right, since a store's roster carries years of people who simply stopped
+ * coming — but it means somebody hired last month whose PAR record has no hours
+ * yet is invisible from the PAR side. They show up here instead, with no
+ * candidates, and until now there was nothing to do about it.
+ *
+ * Five of Columbia's six unlinked people turned out to have an exact-name PAR
+ * record sitting in the dormant pile. The names were already on the page; there
+ * was just no way to reach them.
+ *
+ * Searches the proposals the store already loaded rather than asking the server,
+ * so it costs nothing and answers as you type. Every PAR record at the store is
+ * in there, dormant ones included — which is the whole point.
+ */
+function UnlinkedWorkstreamRow({
+  person,
+  proposals,
+  busy,
+  onPick,
+}: {
+  person: MatchCandidate;
+  proposals: LinkProposal[];
+  busy: boolean;
+  onPick: (parEmployeeId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Seeded with the surname, which is the query somebody was about to type.
+  const [q, setQ] = useState("");
+
+  const surname = (person.name ?? "").trim().split(/\s+/).slice(-1)[0] ?? "";
+  const term = (q || surname).trim().toLowerCase();
+  const hits = term.length < 2
+    ? []
+    : proposals.filter((p) => p.parName.toLowerCase().includes(term)).slice(0, 12);
+
+  return (
+    <div className="px-3 py-1.5 text-sm">
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="font-medium text-gray-900">{person.name ?? "(no name)"}</span>
+        <span className="text-gray-500">{person.title ?? "no position"}</span>
+        <span className="text-gray-500 tabular-nums">{money(person.hourlyRate)}</span>
+        <button
+          onClick={() => { setOpen((v) => !v); setQ(""); }}
+          className="text-xs text-gray-500 hover:text-gray-900 underline decoration-dotted underline-offset-2 transition"
+        >
+          {open ? "Cancel" : "Find in PAR"}
+        </button>
+        <span className="text-xs text-gray-400 ml-auto">
+          {person.hiredDate ? `hired ${person.hiredDate}` : ""}
+        </span>
+      </div>
+
+      {open && (
+        <div className="mt-1.5 mb-1">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={`Search PAR names — starting with "${surname}"`}
+            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-gray-200"
+          />
+          <ul className="mt-1.5 divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+            {hits.length === 0 && (
+              <li className="px-3 py-2 text-xs text-gray-500">
+                No PAR record at this store matches that.
+              </li>
+            )}
+            {hits.map((p) => (
+              <li key={p.parEmployeeId} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-sm text-gray-900">{p.parName}</span>
+                <span className="text-xs text-gray-500">PAR #{p.parEmployeeId}</span>
+                {/* The state is the warning. A dormant record is the expected
+                    answer here; one already linked to somebody else is a
+                    decision being overwritten, and that should be visible
+                    before the click, not after. */}
+                <span className="text-xs text-gray-500">
+                  {p.state === "ignored"
+                    ? "no recent hours"
+                    : p.state === "review"
+                      ? "awaiting review"
+                      : p.state === "absent"
+                        ? "marked as having no Workstream record"
+                        : `already linked — confirming moves it`}
+                </span>
+                <button
+                  onClick={() => onPick(p.parEmployeeId)}
+                  disabled={busy}
+                  className="ml-auto text-xs px-3 py-1 rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition disabled:opacity-50"
+                >
+                  This is them
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
