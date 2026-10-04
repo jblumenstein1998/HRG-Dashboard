@@ -17,7 +17,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { BonusStore } from "@/lib/bonus/storeMap";
-import type { AuditReport, AuditRow, AuditSeverity } from "@/lib/workstreamAudit";
+import {
+  auditToCsv,
+  countBySeverity,
+  type AuditReport,
+  type AuditRow,
+  type AuditSeverity,
+} from "@/lib/workstreamAuditFormat";
 
 const SEVERITIES: AuditSeverity[] = [
   "splitting-hours",
@@ -69,11 +75,21 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
   const [expanded, setExpanded] = useState<Set<AuditSeverity>>(new Set(OPEN_BY_DEFAULT));
   const [busy, setBusy] = useState<string | null>(null);
 
-  const load = useCallback(async (id: string) => {
+  /**
+   * Read the whole estate, once.
+   *
+   * Deliberately never per store. The audit is built by reading every store's
+   * roster and a month of shifts no matter what is asked for, so a request for
+   * one store costs exactly as much as a request for twelve — measured at 7.8s
+   * either way, to return 14KB instead of 368KB. Narrowing afterwards is the
+   * server throwing away work it had already done, and the viewer waiting for
+   * it to happen again.
+   */
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/workstream/audit${id ? `?store=${id}` : ""}`);
+      const res = await fetch("/api/workstream/audit");
       const json = await res.json();
       if (!res.ok) throw new Error(String(json.error ?? res.status));
       setData(json);
@@ -85,11 +101,35 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
     }
   }, []);
 
-  // Only loads once opened. It reads every store's roster and a month of
-  // shifts, which is not a cost to pay for a section nobody has looked at.
+  // Only loads once opened, and not again when the store changes — that is a
+  // filter over rows already in hand, not a new question.
   useEffect(() => {
-    if (open) void load(storeId);
-  }, [open, storeId, load]);
+    if (open && !data) void load();
+  }, [open, data, load]);
+
+  // The store picker is pure presentation: every row is already here.
+  const rows = storeId ? (data?.rows ?? []).filter((r) => r.storeId === storeId) : (data?.rows ?? []);
+  const counts = countBySeverity(rows);
+
+  /**
+   * Build the file in the browser from what is on screen.
+   *
+   * The server can still produce this at /api/workstream/audit?format=csv, and
+   * doing so costs another full read. The page is holding every row already, so
+   * it writes the file itself and the download is immediate.
+   */
+  function exportCsv() {
+    const stamp = (data?.today ?? "").replace(/-/g, "");
+    const scope = storeId ? `-${storeId}` : "";
+    const blob = new Blob([auditToCsv(rows)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `duplicate-audit${scope}-${stamp}.csv`;
+    a.click();
+    // Revoking immediately would race the download on some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
 
   /**
    * Link one PAR record to the cluster's Workstream person.
@@ -115,7 +155,7 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(String(json.error ?? res.status));
-      await load(storeId);
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -123,8 +163,7 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
     }
   }
 
-  const counts = data?.counts;
-  const urgent = (counts?.["splitting-hours"] ?? 0) + (counts?.["duplicate-workstream"] ?? 0);
+  const urgent = counts["splitting-hours"] + counts["duplicate-workstream"];
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -161,22 +200,23 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
             {urgent > 0 ? (
               <>
                 <strong className="text-red-700">{urgent}</strong> needing attention of{" "}
-                {data.rows.length} duplicates
+                {rows.length} duplicates
               </>
             ) : (
-              <>{data.rows.length} duplicates, none urgent</>
+              <>{rows.length} duplicates, none urgent</>
             )}
           </span>
         )}
         {loading && <span className="text-xs text-gray-400">reading every store…</span>}
 
         {open && (
-          <a
-            href={`/api/workstream/audit?format=csv${storeId ? `&store=${storeId}` : ""}`}
-            className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
+          <button
+            onClick={exportCsv}
+            disabled={!data || rows.length === 0}
+            className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
           >
             Export CSV
-          </a>
+          </button>
         )}
       </div>
 
@@ -188,13 +228,13 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
             </div>
           )}
 
-          {data && data.rows.length === 0 && !loading && (
+          {data && rows.length === 0 && !loading && (
             <p className="text-sm text-gray-500">No duplicates at this store.</p>
           )}
 
           {data && SEVERITIES.map((sev) => {
-            const rows = data.rows.filter((r) => r.severity === sev);
-            if (rows.length === 0) return null;
+            const tierRows = rows.filter((r) => r.severity === sev);
+            if (tierRows.length === 0) return null;
             const isOpen = expanded.has(sev);
             const head = HEADINGS[sev];
             return (
@@ -212,7 +252,7 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
                   <span className={`text-xs font-semibold uppercase tracking-wide ${head.tone}`}>
                     {head.title}
                   </span>
-                  <span className="text-xs text-gray-400">{rows.length}</span>
+                  <span className="text-xs text-gray-400">{tierRows.length}</span>
                   <span className="text-xs text-gray-400 group-hover:text-gray-600 ml-auto">
                     {isOpen ? "hide" : "show"}
                   </span>
@@ -221,7 +261,7 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
 
                 {isOpen && (
                   <div className="space-y-2">
-                    {rows.map((row) => (
+                    {tierRows.map((row) => (
                       <AuditCard
                         key={row.key}
                         row={row}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
-import { getDuplicateAudit, auditToCsv } from "@/lib/workstreamAudit";
+import { getDuplicateAudit, auditToCsv, countBySeverity } from "@/lib/workstreamAudit";
 
 /**
  * People who exist more than once, in either system.
@@ -39,16 +39,13 @@ export async function GET(req: NextRequest) {
     const filtered = {
       ...report,
       rows,
-      counts: rows.reduce(
-        (acc, r) => ({ ...acc, [r.severity]: acc[r.severity] + 1 }),
-        { "splitting-hours": 0, "duplicate-workstream": 0, "stray-copies": 0, dormant: 0 },
-      ),
+      counts: countBySeverity(rows),
     };
 
     if (format === "csv") {
       const stamp = today.replace(/-/g, "");
       const name = store ? `duplicate-audit-${store}-${stamp}.csv` : `duplicate-audit-${stamp}.csv`;
-      return new NextResponse(auditToCsv(filtered), {
+      return new NextResponse(auditToCsv(filtered.rows), {
         headers: {
           // text/csv with a filename, so the browser saves it instead of
           // rendering a wall of commas.
