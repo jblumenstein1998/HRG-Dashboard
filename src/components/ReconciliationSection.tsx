@@ -18,8 +18,9 @@
  * a task — but the **candidates** offered cover every Workstream status.
  * Linking to somebody who has left is how their past shifts keep the title and
  * rate they were worked at, and linking to somebody onboarding is how a new
- * hire resolves before their first shift. Anything other than a current
- * employee is chipped so it is never chosen by accident.
+ * hire resolves before their first shift. Every candidate carries its
+ * Workstream status — Active, Onboarding, Offboarded — so the choice is always
+ * made with the record's state in view.
  *
  * Three answers per person, and the last two matter most:
  *
@@ -61,23 +62,41 @@ function hiredOn(date: string | null | undefined): string | null {
 }
 
 /**
- * Workstream's lifecycle state, shown only when it is not the ordinary one.
+ * Workstream's lifecycle state, in Workstream's own words.
  *
- * Current employees get nothing — a chip on every row would be noise, and
- * "active" is what a reader already assumes. The point is that offboarded and
- * onboarding records are now matchable, and a leaver among the candidates must
- * look different from the person still working there.
+ * Every status is labelled, current employees included: now that all three can
+ * be matched against, the absence of a chip would be a thing the reader has to
+ * interpret rather than read. Saying "Active" costs a word and removes the
+ * question.
+ *
+ * The wording is Workstream's — Active, Onboarding, Offboarded — so that what
+ * this screen calls somebody is what the system of record calls them, and
+ * nobody has to translate between the two while deciding whether two records
+ * are one person.
  */
+const STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  onboarding: "Onboarding",
+  offboarded: "Offboarded",
+  hired: "Hired",
+};
+
+const STATUS_TONES: Record<string, string> = {
+  active: "bg-green-50 text-green-700 border-green-200",
+  onboarding: "bg-sky-50 text-sky-700 border-sky-200",
+  offboarded: "bg-gray-100 text-gray-600 border-gray-200",
+  hired: "bg-sky-50 text-sky-700 border-sky-200",
+};
+
 function StatusChip({ status }: { status?: string | null }) {
-  if (!status || status === "active") return null;
-  const label = status === "offboarded" ? "left" : status;
-  const tone =
-    status === "offboarded"
-      ? "bg-gray-100 text-gray-600 border-gray-200"
-      : "bg-sky-50 text-sky-700 border-sky-200";
+  if (!status) return null;
+  // An unrecognised status is shown as Workstream spelled it rather than
+  // hidden: a new lifecycle state should be visible, not silently dropped.
+  const label = STATUS_LABELS[status] ?? status;
+  const tone = STATUS_TONES[status] ?? "bg-gray-100 text-gray-600 border-gray-200";
   return (
     <span
-      className={`ml-1.5 align-middle text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border font-normal ${tone}`}
+      className={`ml-1.5 align-middle text-[10px] tracking-wide px-1.5 py-0.5 rounded border font-normal ${tone}`}
     >
       {label}
     </span>
@@ -761,9 +780,10 @@ function Candidate({
           {candidate.goesBy && (
             <span className="ml-1.5 font-normal text-gray-500">goes by {candidate.goesBy}</span>
           )}
-          {/* Anything but a current employee is called out. Linking to a leaver
-              is legitimate — it is how past shifts keep the title and rate they
-              were worked at — but it should never happen by accident. */}
+          {/* Every candidate says where it sits in Workstream's lifecycle.
+              Linking to a leaver is legitimate — it is how past shifts keep the
+              title and rate they were worked at — but it should never happen
+              without the reviewer seeing it. */}
           <StatusChip status={candidate.status} />
         </div>
         <div className="text-xs text-gray-500">
