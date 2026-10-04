@@ -1,14 +1,13 @@
 /**
- * The audit's shape and its CSV serialiser — pure, so the browser can use them.
+ * The audit's shape and the helpers over it — pure, so the browser can use them.
  *
  * Split out of workstreamAudit.ts for one reason: that module reaches the
  * database and PAR, so importing it into a client component would drag the
- * whole server into the bundle. Everything here is types and string building.
+ * whole server into the bundle. Everything here is types and plain arithmetic.
  *
- * Which matters because the screen already holds every row. Asking the server
- * to filter by store, or to rebuild a file the page could write itself, costs
- * a full re-read of twelve stores — measured at 7.8s whether the answer is
- * 368KB or 14KB.
+ * Which matters because the screen already holds every row, and narrowing to
+ * one store should not cost another read of all twelve — measured at 7.8s
+ * whether the answer is 368KB or 14KB.
  */
 
 /**
@@ -80,8 +79,8 @@ export type AuditRow = {
   par: AuditParRecord[];
   workstream: AuditWorkstreamRecord[];
   /**
-   * What to do about it, stated so the row can be forwarded without a covering
-   * note. A suggestion, not a decision anyone has recorded.
+   * What to do about it, in a sentence — which number to keep and which to
+   * retire. A suggestion, not a decision anyone has recorded.
    */
   recommendedAction: string;
 };
@@ -106,84 +105,4 @@ export function countBySeverity(rows: AuditRow[]): Record<AuditSeverity, number>
   const counts = { ...EMPTY_COUNTS };
   for (const r of rows) counts[r.severity] += 1;
   return counts;
-}
-
-// ── CSV ──────────────────────────────────────────────────────────────────────
-
-const CSV_COLUMNS = [
-  "store",
-  "person",
-  "severity",
-  "system",
-  "record_id",
-  "status",
-  "job_title",
-  "pay_rate",
-  "hired_date",
-  "last_worked",
-  "hours_last_30_days",
-  "linked_to",
-  "recommended_action",
-] as const;
-
-/** RFC 4180 quoting: wrap in quotes and double any quote inside. */
-function cell(value: string | number | null | undefined): string {
-  const s = value == null ? "" : String(value);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-/**
- * The audit as CSV, one row per **record** rather than per person.
- *
- * Per record because of who receives it. A cluster is the right unit for
- * understanding the problem and the wrong one for fixing it: the person doing
- * the cleanup has to go into PAR or Workstream and act on one specific employee
- * number, so that number needs its own line with its own recommended action.
- *
- * The person and the recommendation repeat down the rows of a cluster, which is
- * redundant to read and exactly right for sorting and filtering in a
- * spreadsheet — which is what actually happens to a file like this.
- */
-export function auditToCsv(rows: AuditRow[]): string {
-  const lines: string[] = [CSV_COLUMNS.join(",")];
-
-  for (const row of rows) {
-    for (const r of row.par) {
-      lines.push([
-        cell(row.storeName),
-        cell(row.name),
-        cell(SEVERITY_LABELS[row.severity]),
-        "PAR",
-        cell(r.employeeId),
-        cell(r.terminated ? "terminated" : r.state),
-        cell(r.job),
-        cell(r.payRate),
-        "",
-        cell(r.lastWorked),
-        cell((r.recentMinutes / 60).toFixed(1)),
-        cell(r.workstreamUuid),
-        cell(row.recommendedAction),
-      ].join(","));
-    }
-    for (const w of row.workstream) {
-      lines.push([
-        cell(row.storeName),
-        cell(row.name),
-        cell(SEVERITY_LABELS[row.severity]),
-        "Workstream",
-        cell(w.uuid),
-        cell(w.status),
-        cell(w.title),
-        cell(w.hourlyRate),
-        cell(w.hiredDate),
-        "",
-        "",
-        "",
-        cell(row.recommendedAction),
-      ].join(","));
-    }
-  }
-
-  // Trailing newline: some spreadsheet importers drop the final row without it.
-  return lines.join("\r\n") + "\r\n";
 }

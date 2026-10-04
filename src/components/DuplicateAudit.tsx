@@ -8,8 +8,8 @@
  * today. An alphabetical list puts those six somewhere in the middle.
  *
  * So the two urgent tiers are open on arrival and the two long ones are
- * collapsed counts. The whole thing exports either way — the person who can
- * actually fix a duplicate is a GM inside PAR, not whoever is reading this.
+ * collapsed counts, and the fix happens here: a cluster that has exactly one
+ * Workstream person can be linked in a click.
  *
  * See lib/workstreamAudit.ts for how a cluster is built and why hours are the
  * evidence on the row.
@@ -18,7 +18,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BonusStore } from "@/lib/bonus/storeMap";
 import {
-  auditToCsv,
   countBySeverity,
   type AuditReport,
   type AuditRow,
@@ -112,26 +111,6 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
   const counts = countBySeverity(rows);
 
   /**
-   * Build the file in the browser from what is on screen.
-   *
-   * The server can still produce this at /api/workstream/audit?format=csv, and
-   * doing so costs another full read. The page is holding every row already, so
-   * it writes the file itself and the download is immediate.
-   */
-  function exportCsv() {
-    const stamp = (data?.today ?? "").replace(/-/g, "");
-    const scope = storeId ? `-${storeId}` : "";
-    const blob = new Blob([auditToCsv(rows)], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `duplicate-audit${scope}-${stamp}.csv`;
-    a.click();
-    // Revoking immediately would race the download on some browsers.
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  }
-
-  /**
    * Link one PAR record to the cluster's Workstream person.
    *
    * The cluster already knows who they are — that is the point of grouping by
@@ -209,15 +188,6 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
         )}
         {loading && <span className="text-xs text-gray-400">reading every store…</span>}
 
-        {open && (
-          <button
-            onClick={exportCsv}
-            disabled={!data || rows.length === 0}
-            className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-          >
-            Export CSV
-          </button>
-        )}
       </div>
 
       {open && (
@@ -345,8 +315,10 @@ function AuditCard({
         ))}
       </ul>
 
-      {/* The sentence that gets forwarded. Same text as the CSV column, so the
-          screen and the file never tell a GM two different things. */}
+      {/* What to do about it, in a sentence. The row above states the problem;
+          somebody still has to be told which number to keep, and leaving that
+          as an inference from two hours figures is how the wrong one gets
+          retired. */}
       <div className="px-3 py-2 text-xs text-gray-600 bg-gray-50/60 border-t border-gray-100">
         {row.recommendedAction}
       </div>
