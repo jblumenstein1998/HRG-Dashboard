@@ -332,8 +332,6 @@ export default function StaffingClient({
   const [refreshKey, setRefreshKey] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const at = useMemo(() => (live ? null : new Date(when)), [live, when]);
-
   // Loading is derived from a request key rather than set inside the effect —
   // the React Compiler rejects a synchronous setState there, and keying the
   // response also drops answers that arrive out of order.
@@ -344,7 +342,18 @@ export default function StaffingClient({
 
   useEffect(() => {
     let cancelled = false;
-    const qs = at && !Number.isNaN(at.getTime()) ? `?at=${encodeURIComponent(at.toISOString())}` : "";
+    /*
+     * Live asks for an instant; the scrubber asks for a local time of day.
+     *
+     * The difference is the point. "Now" is genuinely one moment everywhere, so
+     * it stays an instant. A chosen time is a time *on each store's own clock* —
+     * six o'clock means six in Virginia and six in Tennessee, an hour apart —
+     * which is both what somebody means by "at dinner" and the only form whose
+     * answer does not depend on where the person asking is sitting.
+     */
+    const qs = live
+      ? ""
+      : `?date=${when.slice(0, 10)}&minutes=${Number(when.slice(11, 13)) * 60 + Number(when.slice(14, 16))}`;
     fetch(`/api/staffing${qs}`)
       .then(async (r) => {
         if (r.status === 401) { router.push("/login"); return null; }
@@ -355,10 +364,24 @@ export default function StaffingClient({
       .then((json) => { if (!cancelled && json) setState({ key: requestKey, data: json, error: null }); })
       .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [requestKey, at, router]);
+  }, [requestKey, live, when, router]);
 
   const loading = state.key !== requestKey;
   const data = state.data;
+
+  /*
+   * How to say, in the title, which moment is being shown.
+   *
+   * An instant is formatted in the reader's own zone, because that is what an
+   * instant means to them. A local time is printed as-is and labelled "local",
+   * because it is not one moment — each store is at that time on its own clock.
+   */
+  const momentLabel =
+    data?.moment?.kind === "instant" && data.at
+      ? new Date(data.at).toLocaleString()
+      : `${when.slice(0, 10)} ${timeLabel(
+          Number(when.slice(11, 13)) * 60 + Number(when.slice(14, 16)),
+        )} local`;
 
   const setNow = useCallback(() => {
     setWhen(toLocalInput(new Date()));
@@ -467,7 +490,7 @@ export default function StaffingClient({
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
-            title={`On the clock — ${shownStore?.storeName ?? "no store"} — ${data ? new Date(data.at).toLocaleString() : when.replace("T", " ")}`}
+            title={`On the clock — ${shownStore?.storeName ?? "no store"} — ${momentLabel}`}
             targetRef={cardRef}
             className="text-base font-semibold text-gray-900"
           />

@@ -140,8 +140,15 @@ export type StoreRoster = {
 };
 
 export type StaffingReport = {
-  /** The instant asked about, ISO. */
-  at: string;
+  /**
+   * The instant asked about, ISO — null when the question was a local time of
+   * day, because then there is no single instant to report. Six o'clock in
+   * Virginia and six o'clock in Tennessee are an hour apart, and picking either
+   * one to stand for both is how this went wrong in the first place.
+   */
+  at: string | null;
+  /** What was asked for, so the screen can say which of the two it is showing. */
+  moment: { kind: "instant" | "local"; label: string };
   stores: StoreRoster[];
   fetchedAt: number;
   /**
@@ -235,12 +242,35 @@ function weekToDateBefore(date: string): string[] {
   return out;
 }
 
+/**
+ * The moment to read a store at, in one of the two ways it can be asked for.
+ *
+ * `instant` is a single point in time, the same for every store — what "Now"
+ * means, and the only honest way to ask what is happening across the estate
+ * this second.
+ *
+ * `local` is a time of day, resolved separately inside each store's own zone.
+ * Six o'clock means six o'clock in Virginia *and* six o'clock in Tennessee,
+ * which are an hour apart and are deliberately two different instants. That is
+ * what somebody means by "how were we staffed at dinner" — and it makes the
+ * answer independent of where the person asking happens to be sitting, which
+ * the instant form is not: a bare `YYYY-MM-DDTHH:mm` is read in the *browser's*
+ * zone, so the same slider position queried a different moment depending on the
+ * viewer's laptop.
+ */
+export type StaffingMoment =
+  | { kind: "instant"; at: Date }
+  | { kind: "local"; date: string; minutes: number };
+
 async function rosterForStore(
   loc: (typeof PAR_LOCATIONS)[number],
-  at: Date,
+  moment: StaffingMoment,
 ): Promise<StoreRoster> {
   const timeZone = getStoreTimeZone(loc.storeId);
-  const { date: localDate, minutes: localMinutes } = zonedParts(at, timeZone);
+  const { date: localDate, minutes: localMinutes } =
+    moment.kind === "instant"
+      ? zonedParts(moment.at, timeZone)
+      : { date: moment.date, minutes: moment.minutes };
   const base: Omit<StoreRoster, "onClock" | "hourlyWageRunRate" | "salariedOnClock" | "error"> = {
     storeId: loc.storeId,
     storeName: loc.name,
@@ -388,15 +418,15 @@ async function rosterForStore(
 }
 
 /**
- * Every store's roster at one instant.
+ * Every store's roster, at one instant or at one local time of day.
  *
  * Stores run in parallel; par.ts's semaphore caps the actual SOAP concurrency
  * at five, and every call here is cached, so a repeat look at the same moment
  * costs nothing.
  */
-export async function getStaffingAt(at: Date): Promise<StaffingReport> {
+export async function getStaffingAt(moment: StaffingMoment): Promise<StaffingReport> {
   const [stores, status] = await Promise.all([
-    Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, at))),
+    Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, moment))),
     // Never a reason for the page to fail: if the roster table cannot be read,
     // say it has never synced and let the banner explain the blank columns.
     workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
@@ -409,7 +439,18 @@ export async function getStaffingAt(at: Date): Promise<StaffingReport> {
       : null,
   };
 
-  return { at: at.toISOString(), stores, fetchedAt: Date.now(), workstreamSync };
+  return {
+    at: moment.kind === "instant" ? moment.at.toISOString() : null,
+    moment:
+      moment.kind === "instant"
+        ? { kind: "instant", label: moment.at.toISOString() }
+        : // Said as "local" on purpose: every store on screen is at this time
+          // on its own clock, which is a different instant in each timezone.
+          { kind: "local", label: `${moment.date} ${clockLabel(moment.minutes)} local` },
+    stores,
+    fetchedAt: Date.now(),
+    workstreamSync,
+  };
 }
 
 // ── Hours by store by week ───────────────────────────────────────────────────
