@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { BonusStore } from "@/lib/bonus/storeMap";
 import {
   countBySeverity,
+  type AuditParRecord,
   type AuditReport,
   type AuditRow,
   type AuditSeverity,
@@ -121,8 +122,12 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
    * keep showing it.
    */
   const allowed = new Set(stores.map((s) => s.storeId));
-  const inScope = (data?.rows ?? []).filter((r) => allowed.has(r.storeId));
-  const rows = allowed.has(storeId) ? inScope.filter((r) => r.storeId === storeId) : inScope;
+  // A person belongs to a store if any of their PAR records is there, since a
+  // cluster now spans every store they hold a record at.
+  const inScope = (data?.rows ?? []).filter((r) => r.storeIds.some((id) => allowed.has(id)));
+  const rows = allowed.has(storeId)
+    ? inScope.filter((r) => r.storeIds.includes(storeId))
+    : inScope;
   const counts = countBySeverity(rows);
 
   /**
@@ -131,17 +136,20 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
    * The cluster already knows who they are — that is the point of grouping by
    * person — so this is the one-click version of what the reconciliation queue
    * asks three questions to reach.
+   *
+   * The store comes off the record rather than the row: a link is keyed by
+   * (store, employee id), and one person's records may sit at three stores.
    */
-  async function link(row: AuditRow, parEmployeeId: string, workstreamUuid: string) {
-    setBusy(`${row.key}:${parEmployeeId}`);
+  async function link(record: AuditParRecord, workstreamUuid: string) {
+    setBusy(`${record.storeId}:${record.employeeId}`);
     setError(null);
     try {
       const res = await fetch("/api/workstream/links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          storeId: row.storeId,
-          parEmployeeId,
+          storeId: record.storeId,
+          parEmployeeId: record.employeeId,
           action: "confirm",
           workstreamUuid,
           note: "linked from the duplicate audit",
@@ -253,7 +261,7 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
                         key={row.key}
                         row={row}
                         busy={busy}
-                        onLink={(parId, uuid) => link(row, parId, uuid)}
+                        onLink={link}
                       />
                     ))}
                   </div>
@@ -274,7 +282,7 @@ function AuditCard({
 }: {
   row: AuditRow;
   busy: string | null;
-  onLink: (parEmployeeId: string, workstreamUuid: string) => void;
+  onLink: (record: AuditParRecord, workstreamUuid: string) => void;
 }) {
   // One Workstream person in the cluster means linking is unambiguous, so the
   // button can act directly. Two means somebody has to choose first, and
@@ -285,7 +293,7 @@ function AuditCard({
     <div className="border border-gray-200 rounded-lg overflow-hidden">
       <div className="px-3 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 bg-gray-50/60 border-b border-gray-100">
         <span className="font-semibold text-gray-900">{row.name}</span>
-        <span className="text-xs text-gray-500">{row.storeName}</span>
+        <span className="text-xs text-gray-500">{row.storeNames.join(" · ")}</span>
         <span className="text-xs text-gray-500">
           PAR ×{row.par.length} · Workstream ×{row.workstream.length}
         </span>
@@ -296,9 +304,13 @@ function AuditCard({
 
       <ul className="divide-y divide-gray-100">
         {row.par.map((p) => (
-          <li key={p.employeeId} className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <li key={`${p.storeId}:${p.employeeId}`} className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
             <span className="text-gray-500 text-xs w-12">PAR</span>
             <span className="tabular-nums text-gray-900">#{p.employeeId}</span>
+            {/* The store is on every record now that a cluster spans them, and
+                it is the field that says whether two numbers are a duplicate or
+                one person working two restaurants. */}
+            <span className="text-xs text-gray-600">{p.storeName}</span>
             <span className="text-xs text-gray-500">{p.job ?? "no job"}</span>
             <span className="text-xs tabular-nums text-gray-600">
               {hrs(p.recentMinutes)} · last {shortDate(p.lastWorked)}
@@ -307,11 +319,11 @@ function AuditCard({
               <span className="text-xs text-green-700">linked</span>
             ) : target ? (
               <button
-                onClick={() => onLink(p.employeeId, target.uuid)}
+                onClick={() => onLink(p, target.uuid)}
                 disabled={busy != null}
                 className="text-xs px-2.5 py-1 rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition disabled:opacity-50"
               >
-                {busy === `${row.key}:${p.employeeId}` ? "Linking…" : `Link to ${target.name}`}
+                {busy === `${p.storeId}:${p.employeeId}` ? "Linking…" : `Link to ${target.name}`}
               </button>
             ) : (
               <span className="text-xs text-gray-400">not linked</span>
@@ -324,10 +336,7 @@ function AuditCard({
             <span className="text-gray-500 text-xs w-12">WS</span>
             <span className="text-gray-900">{w.name}</span>
             <span className="text-xs text-gray-500">{w.title ?? "no position"}</span>
-            <span className="text-xs text-gray-500">
-              {w.storeName ?? "no store assigned"}
-              {w.elsewhere && w.storeName ? " (another store)" : ""}
-            </span>
+            <span className="text-xs text-gray-500">{w.storeName ?? "no store assigned"}</span>
           </li>
         ))}
       </ul>

@@ -32,7 +32,9 @@ export async function GET(req: NextRequest) {
 
     // Counts describe what the caller is looking at, so they are recomputed
     // after the filter rather than carried over from the whole estate.
-    const rows = store ? report.rows.filter((r) => r.storeId === store) : report.rows;
+    // A person is in scope if any of their PAR records is at that store — a
+    // cluster now spans every store they hold a record at.
+    const rows = store ? report.rows.filter((r) => r.storeIds.includes(store)) : report.rows;
     return NextResponse.json({ ...report, rows, counts: countBySeverity(rows) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

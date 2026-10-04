@@ -44,6 +44,9 @@ export const SEVERITY_LABELS: Record<AuditSeverity, string> = {
 export type AuditParRecord = {
   employeeId: string;
   name: string;
+  /** The store this record belongs to. PAR ids are unique only within one. */
+  storeId: string;
+  storeName: string;
   job: string | null;
   payRate: number | null;
   state: "auto" | "confirmed" | "absent" | "ignored" | "review";
@@ -64,15 +67,14 @@ export type AuditWorkstreamRecord = {
   hiredDate: string | null;
   /** The store Workstream assigns them to, as a name. Null when unassigned. */
   storeName: string | null;
-  /** True when Workstream has them somewhere other than the cluster's store. */
-  elsewhere: boolean;
 };
 
 export type AuditRow = {
-  /** Stable id for the row: store plus the normalised name. */
+  /** Stable id for the row: the normalised name, which is the cluster. */
   key: string;
-  storeId: string;
-  storeName: string;
+  /** Every store this person holds a PAR record at. */
+  storeIds: string[];
+  storeNames: string[];
   /** The most readable spelling among the records in the cluster. */
   name: string;
   severity: AuditSeverity;
