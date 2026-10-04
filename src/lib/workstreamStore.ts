@@ -428,6 +428,17 @@ export async function listActiveStoredEmployees(): Promise<WorkstreamRosterEntry
 }
 
 /**
+ * Everybody Workstream holds, whatever their status.
+ *
+ * For the places that are deliberately matching against leavers and pending
+ * hires as well as current staff — the by-hand name search, and the candidate
+ * pool the review queue offers. Shares the one read with every other caller.
+ */
+export async function listStoredRoster(): Promise<WorkstreamRosterEntry[]> {
+  return loadRoster();
+}
+
+/**
  * One store's people, leavers included, derived from the shared read.
  *
  * Leavers matter here and nowhere else: a link confirmed while somebody worked

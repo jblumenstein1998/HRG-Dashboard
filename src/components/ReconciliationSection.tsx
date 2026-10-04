@@ -14,9 +14,12 @@
  * for a screen people mostly open to see who is on the clock — the store
  * selector is the filter, and every underlying fetch is cached.
  *
- * Only people **active in both systems** appear. Leavers on either side are not
- * a task: their shifts are in the past, and no title or rate attached to them
- * now would change a number anybody reads.
+ * The queue is people still working — a PAR record with no recent hours is not
+ * a task — but the **candidates** offered cover every Workstream status.
+ * Linking to somebody who has left is how their past shifts keep the title and
+ * rate they were worked at, and linking to somebody onboarding is how a new
+ * hire resolves before their first shift. Anything other than a current
+ * employee is chipped so it is never chosen by accident.
  *
  * Three answers per person, and the last two matter most:
  *
@@ -57,6 +60,30 @@ function hiredOn(date: string | null | undefined): string | null {
   });
 }
 
+/**
+ * Workstream's lifecycle state, shown only when it is not the ordinary one.
+ *
+ * Current employees get nothing — a chip on every row would be noise, and
+ * "active" is what a reader already assumes. The point is that offboarded and
+ * onboarding records are now matchable, and a leaver among the candidates must
+ * look different from the person still working there.
+ */
+function StatusChip({ status }: { status?: string | null }) {
+  if (!status || status === "active") return null;
+  const label = status === "offboarded" ? "left" : status;
+  const tone =
+    status === "offboarded"
+      ? "bg-gray-100 text-gray-600 border-gray-200"
+      : "bg-sky-50 text-sky-700 border-sky-200";
+  return (
+    <span
+      className={`ml-1.5 align-middle text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border font-normal ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 /** One hit from /api/workstream/search. */
 type SearchHit = {
   uuid: string;
@@ -67,6 +94,7 @@ type SearchHit = {
   hiredDate: string | null;
   storeId: string | null;
   storeName: string | null;
+  status?: string | null;
 };
 
 export default function ReconciliationSection({ stores }: { stores: BonusStore[] }) {
@@ -689,7 +717,7 @@ function NameSearch({
           )}
           {results.map((r) => (
             <li key={r.uuid} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="text-sm font-medium text-gray-900">{r.name}</span>
+              <span className="text-sm font-medium text-gray-900">{r.name}<StatusChip status={r.status} /></span>
               {r.goesBy && <span className="text-xs text-gray-500">goes by {r.goesBy}</span>}
               <span className="text-xs text-gray-500">
                 {r.title ?? "no position"} · {money(r.hourlyRate)}
@@ -733,6 +761,10 @@ function Candidate({
           {candidate.goesBy && (
             <span className="ml-1.5 font-normal text-gray-500">goes by {candidate.goesBy}</span>
           )}
+          {/* Anything but a current employee is called out. Linking to a leaver
+              is legitimate — it is how past shifts keep the title and rate they
+              were worked at — but it should never happen by accident. */}
+          <StatusChip status={candidate.status} />
         </div>
         <div className="text-xs text-gray-500">
           {candidate.title ?? "no position"} · {money(candidate.hourlyRate)}

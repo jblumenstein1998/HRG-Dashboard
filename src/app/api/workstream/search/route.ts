@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
-import { listActiveStoredEmployees } from "@/lib/workstreamStore";
+import { listStoredRoster } from "@/lib/workstreamStore";
 import { storeById } from "@/lib/bonus/storeMap";
 
 /**
@@ -36,15 +36,15 @@ export async function GET(req: NextRequest) {
 
   try {
     /*
-     * Active only, same rule as the queue itself, and now applied by the query
-     * rather than here.
+     * Every status, not just current employees.
      *
-     * Somebody who is onboarding has no hours to attribute yet, and somebody
-     * offboarded should not be linked to a PAR record that is still clocking
-     * in — if those two are genuinely one person, the Workstream record is the
-     * thing that needs fixing, not this link.
+     * This is the by-hand search, where the person typing has a specific record
+     * in mind — most often a leaver whose past shifts still need a title and a
+     * rate, or a new hire who has not finished onboarding. Filtering those out
+     * would hide exactly what somebody reaches for this box to find. Each hit
+     * reports its status so the choice is made knowingly.
      */
-    const active = await listActiveStoredEmployees();
+    const active = await listStoredRoster();
 
     // Every part of the name is searchable, preferred name included, because
     // the reviewer may only know one of them.
@@ -66,6 +66,7 @@ export async function GET(req: NextRequest) {
             hiredDate: e.hiredDate,
             storeId: e.storeId,
             storeName: e.storeId ? (storeById(e.storeId)?.name ?? null) : null,
+            status: e.status,
           },
         };
       })

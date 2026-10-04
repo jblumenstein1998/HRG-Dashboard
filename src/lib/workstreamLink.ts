@@ -363,6 +363,14 @@ export type MatchCandidate = {
   name: string | null;
   /** What they go by, when it differs from the legal first name. */
   goesBy: string | null;
+  /**
+   * Workstream's lifecycle state: active, onboarding, offboarded, hired.
+   *
+   * All of them can be linked to. Shown because "offboarded" changes what a
+   * confirmation means — it is a statement about whose past shifts these were,
+   * not about who is working tomorrow.
+   */
+  status?: string;
   /** Set when Workstream has this person at a different store than the one
    *  being matched — a disagreement worth a human deciding. */
   atOtherStore?: string | null;
@@ -426,23 +434,41 @@ export type StoreLinkReport = {
  * Is this someone who actually works here right now?
  *
  * Workstream's lifecycle is hired → onboarding → active → offboarded, and only
- * `active` counts. Stated as a positive test rather than "not offboarded"
- * because the two are not the same question, and the difference is a screen
- * full of people:
+ * `active` passes. Stated as a positive test rather than "not offboarded"
+ * because the two are not the same question.
  *
- *   offboarded   they have left — nothing to link, their shifts are past
- *   onboarding   paperwork in progress. Fifty-one records sit here, and they
- *                live in Workstream's hiring pipeline rather than its employee
- *                roster — so somebody looking one up on the employee screen
- *                does not find it and reasonably concludes the dashboard
- *                invented them
- *   hired        the same, one step earlier
+ * This no longer decides who can be *matched* — every status can be, since a
+ * leaver's past shifts still want the title and rate they were worked at, and
+ * a new hire needs linking before their first shift. It decides two narrower
+ * things:
+ *
+ *   automatic linking   an unambiguous name is the entire basis of an
+ *                       automatic match, and 897 of these 1,432 records are
+ *                       leavers. Judging uniqueness over all of them would
+ *                       make hundreds of good matches ambiguous overnight.
+ *
+ *   the unlinked list   "in Workstream, not linked to anyone here" is a list
+ *                       of loose ends. Former staff are not loose ends, and
+ *                       several hundred of them would bury the handful that
+ *                       are.
  *
  * The `termination_date` check stays as a second guard because the two fields
- * disagree: 731 records are offboarded and only 707 carry a date.
+ * disagree: 897 records are offboarded and only 874 carry a date.
  */
 export function isActiveEmployee(e: WorkstreamPerson): boolean {
   return e.status === "active" && !e.terminationDate;
+}
+
+/**
+ * Sort weight for a candidate's employment status: lower comes first.
+ *
+ * Used only to break ties between equally-good name matches, so that a live
+ * employee outranks a leaver of the same name.
+ */
+function rank(c: MatchCandidate): number {
+  if (c.status === "active") return 0;
+  if (c.status === "onboarding" || c.status === "hired") return 1;
+  return 2;
 }
 
 /** Candidates below this are noise and are not offered at all. */
@@ -456,6 +482,10 @@ function toCandidate(ws: WorkstreamPerson, score = 0, reasons: string[] = []): M
     workstreamUuid: ws.uuid,
     name: fullName(ws),
     goesBy: goesByName(ws),
+    // Carried so the screen can say so. Linking a PAR record to somebody who
+    // has left is legitimate — their past shifts still want a title and a rate
+    // — but it is never something to do without noticing.
+    status: ws.status,
     title: ws.title,
     hourlyRate: ws.hourlyRate,
     hiredDate: ws.hiredDate ?? ws.startDate ?? null,
@@ -542,10 +572,31 @@ export function proposeStoreLinks(input: {
    * leaver or a pending hire is not ambiguous, and treating it as ambiguous was
    * pushing people who should have linked automatically into the queue instead.
    */
-  const matchable = workstreamEmployees.filter(isActiveEmployee);
+  /*
+   * Everyone Workstream holds for this store is a possible answer, whatever
+   * their status. A PAR record can legitimately belong to somebody onboarding
+   * (hired, not yet clocked in) or offboarded (left, but their past shifts
+   * still want the title and rate they were worked at).
+   */
+  const matchable = workstreamEmployees;
+
+  /*
+   * ...but only people currently employed can be linked *automatically*.
+   *
+   * Uniqueness is the whole basis of the automatic match: one Workstream
+   * person of that name and we know who this is. Judge that over everybody and
+   * a single same-named leaver makes the name ambiguous again — which would
+   * silently un-link hundreds of people who match perfectly well today and
+   * dump them into the queue. Offboarded records are 897 of the 1,432 here, so
+   * that is not a rare collision.
+   *
+   * They are still offered as candidates below. The difference is that
+   * choosing one is a person's decision rather than the matcher's.
+   */
+  const currentStaff = workstreamEmployees.filter(isActiveEmployee);
 
   const wsByKey = new Map<string, WorkstreamPerson[]>();
-  for (const w of matchable) {
+  for (const w of currentStaff) {
     const k = nameKey(w.firstName, w.lastName);
     if (!k) continue;
     const list = wsByKey.get(k) ?? [];
@@ -588,7 +639,15 @@ export function proposeStoreLinks(input: {
         );
       })
       .filter((c) => c.score >= MIN_CANDIDATE_SCORE)
-      .sort((a, b) => b.score - a.score)
+      /*
+       * Score first, then current staff ahead of leavers.
+       *
+       * Two records of the same name score identically, and when one of them
+       * is a rehire the live record is nearly always the answer. Only a
+       * tie-break — it never promotes a worse name match — but it keeps the
+       * obvious candidate at the top now that leavers are in the list.
+       */
+      .sort((a, b) => b.score - a.score || rank(a) - rank(b))
       .slice(0, MAX_CANDIDATES);
 
     const decided = confirmed.get(p.id);
@@ -698,8 +757,10 @@ export function proposeStoreLinks(input: {
 
   // Leavers are not "unlinked", they are gone. Listing them here would bury the
   // one case this section exists to surface — a current employee Workstream
-  // knows about and PAR does not — under several hundred former staff.
-  const unlinkedWorkstream = matchable
+  // knows about and PAR does not — under several hundred former staff. So this
+  // stays on the current-staff pool even though leavers are now matchable:
+  // being available to link to is not the same as being a loose end.
+  const unlinkedWorkstream = currentStaff
     .filter((w) => !resolved.has(w.uuid))
     .map((w) => toCandidate(w));
 
