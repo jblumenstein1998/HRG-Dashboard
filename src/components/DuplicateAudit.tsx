@@ -106,8 +106,23 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
     if (open && !data) void load();
   }, [open, data, load]);
 
-  // The store picker is pure presentation: every row is already here.
-  const rows = storeId ? (data?.rows ?? []).filter((r) => r.storeId === storeId) : (data?.rows ?? []);
+  /*
+   * Two filters, and the outer one is not optional.
+   *
+   * The ribbon's above-store leader decides which stores exist as far as this
+   * viewer is concerned, so "All stores" has to mean all of *theirs*. The
+   * endpoint always returns the estate — it is one read for everybody and
+   * cheaper to narrow here — which made "All stores" quietly show twelve
+   * stores to somebody who runs four.
+   *
+   * The picker's own selection is checked against the same set rather than
+   * trusted, because it survives a change of leader: pick a store, narrow the
+   * ribbon to somebody who does not run it, and without this the section would
+   * keep showing it.
+   */
+  const allowed = new Set(stores.map((s) => s.storeId));
+  const inScope = (data?.rows ?? []).filter((r) => allowed.has(r.storeId));
+  const rows = allowed.has(storeId) ? inScope.filter((r) => r.storeId === storeId) : inScope;
   const counts = countBySeverity(rows);
 
   /**
@@ -163,7 +178,9 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
 
         {open && (
           <select
-            value={storeId}
+            // Falls back to "All stores" when the chosen one has dropped out of
+            // scope, so the control agrees with what is on screen.
+            value={allowed.has(storeId) ? storeId : ""}
             onChange={(e) => setStoreId(e.target.value)}
             className="text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200"
           >

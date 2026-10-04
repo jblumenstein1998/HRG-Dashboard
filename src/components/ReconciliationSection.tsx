@@ -117,7 +117,21 @@ type SearchHit = {
 };
 
 export default function ReconciliationSection({ stores }: { stores: BonusStore[] }) {
-  const [storeId, setStoreId] = useState(stores[0]?.storeId ?? "");
+  const [picked, setPicked] = useState(stores[0]?.storeId ?? "");
+
+  /*
+   * The chosen store, if the viewer may still see it.
+   *
+   * `picked` is seeded once and then belongs to the user, but the list it was
+   * chosen from can change underneath it: narrowing the ribbon to an
+   * above-store leader removes stores they do not run. Resolving this during
+   * render rather than correcting the state in an effect keeps the component
+   * pure and means there is never a frame showing a store out of scope.
+   */
+  const storeId = stores.some((s) => s.storeId === picked)
+    ? picked
+    : (stores[0]?.storeId ?? "");
+  const setStoreId = setPicked;
   const [view, setView] = useState<StoreLinkView | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
