@@ -168,11 +168,16 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
   // Minutes over the whole window, which is what decides whether a PAR record
   // is a person or a leftover.
   const worked = new Map<string, number>();
+  // The most recent business date each PAR record shows a shift on. The audit
+  // reads it to say which of a person's two clock numbers is the live one —
+  // "last worked Oct 3" against "last worked in March" settles which to keep.
+  const lastWorked = new Map<string, string>();
   dayShifts.forEach((shifts, i) => {
     const withinCorroboration = dates.length - i <= CORROBORATION_DAYS;
     for (const s of shifts) {
       if (!s.employeeId) continue;
       worked.set(s.employeeId, (worked.get(s.employeeId) ?? 0) + s.minutesWorked);
+      lastWorked.set(s.employeeId, dates[i]);
       // The rate shown to a reviewer stays the recent one: a rate from a month
       // ago is not what to compare against Workstream's current figure.
       if (withinCorroboration) recent.set(s.employeeId, { payRate: s.payRate, jobId: s.jobId });
@@ -191,6 +196,7 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
       payRate: seen?.payRate ?? null,
       terminated: e.terminated,
       recentMinutes: worked.get(e.id) ?? 0,
+      lastWorked: lastWorked.get(e.id) ?? null,
     };
   });
 }

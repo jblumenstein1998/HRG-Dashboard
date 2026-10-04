@@ -21,6 +21,7 @@ import { STORE_COLOR } from "@/lib/surveyMeta";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import ReconciliationSection from "@/components/ReconciliationSection";
+import DuplicateAudit from "@/components/DuplicateAudit";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFilter } from "@/components/StoreFilter";
@@ -534,6 +535,10 @@ export default function StaffingClient({
 
         {/* Admin-only: it shows everyone's pay rate side by side and its
             decisions determine whose hours are costed at whose rate. */}
+        {isAdmin && (
+          <DuplicateAudit stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />
+        )}
+
         {isAdmin && <ReconciliationSection stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />}
 
         <p className="text-[11px] text-gray-400">

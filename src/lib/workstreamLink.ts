@@ -135,6 +135,8 @@ export type ParPerson = {
    * with no shifts cannot appear on a staffing screen anyway.
    */
   recentMinutes?: number;
+  /** Business date of the most recent shift in that window, when measured. */
+  lastWorked?: string | null;
 };
 
 /** What a stored decision says about one PAR employee. */
@@ -405,6 +407,10 @@ export type LinkProposal = {
   parJob: string | null;
   parPayRate: number | null;
   parTerminated: boolean;
+  /** Minutes worked in the activity window, and the last date worked. The
+   *  audit uses these to tell a live clock number from an abandoned one. */
+  parRecentMinutes: number;
+  parLastWorked: string | null;
   state: LinkState;
   /** The resolved counterpart, when there is one. */
   workstreamUuid: string | null;
@@ -616,6 +622,8 @@ export function proposeStoreLinks(input: {
       parJob: p.jobName ?? null,
       parPayRate: p.payRate ?? null,
       parTerminated: p.terminated,
+      parRecentMinutes: p.recentMinutes ?? 0,
+      parLastWorked: p.lastWorked ?? null,
     };
 
     // This store's people, plus anyone elsewhere whose name matches exactly.
