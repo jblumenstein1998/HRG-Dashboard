@@ -126,7 +126,28 @@ type Row = {
   synced_at: string;
 };
 
-const iso = (d: string | null) => (d ? String(d).slice(0, 10) : null);
+/**
+ * A stored DATE as "YYYY-MM-DD".
+ *
+ * Written assuming the driver hands back an ISO string, which it does not: a
+ * DATE column arrives as a JavaScript Date, and `String(aDate).slice(0, 10)`
+ * yields "Mon Aug 04" — a weekday and a day, with the *year cut off*. Two of
+ * Columbia's unlinked people read "hired Mon Aug 04" on screen while actually
+ * having been hired in 2025, a year earlier than anybody looking would assume.
+ *
+ * Read off the Date's local components rather than `toISOString`, because the
+ * driver builds it at local midnight: in a zone behind UTC that survives the
+ * round trip, but in one ahead of UTC local midnight is the previous day in
+ * UTC, and the date would silently shift back by one.
+ */
+const iso = (d: string | Date | null): string | null => {
+  if (!d) return null;
+  if (d instanceof Date) {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  return String(d).slice(0, 10);
+};
 
 function toRow(r: Row): WorkstreamEmployeeRow {
   return {

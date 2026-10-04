@@ -36,6 +36,27 @@ type Action = "confirm" | "absent" | "reject" | "clear" | "name";
 
 const money = (n: number | null | undefined) => (n == null ? "—" : `$${n.toFixed(2)}`);
 
+/**
+ * A stored "YYYY-MM-DD" as "Aug 4, 2025".
+ *
+ * The year is the point. These dates decide whether somebody is a new hire or
+ * has been here a year, and the previous rendering dropped it — so a 2025 hire
+ * and a 2026 one were indistinguishable on screen.
+ *
+ * Split rather than passed to `new Date`, which would read a bare date as UTC
+ * midnight and show the day before to anybody west of Greenwich.
+ */
+function hiredOn(date: string | null | undefined): string | null {
+  if (!date) return null;
+  const [y, m, d] = date.split("-").map(Number);
+  if (!y || !m || !d) return date;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 /** One hit from /api/workstream/search. */
 type SearchHit = {
   uuid: string;
@@ -330,7 +351,7 @@ function UnlinkedWorkstreamRow({
           {open ? "Cancel" : "Find in PAR"}
         </button>
         <span className="text-xs text-gray-400 ml-auto">
-          {person.hiredDate ? `hired ${person.hiredDate}` : ""}
+          {person.hiredDate ? `hired ${hiredOn(person.hiredDate)}` : ""}
         </span>
       </div>
 
@@ -715,7 +736,7 @@ function Candidate({
         </div>
         <div className="text-xs text-gray-500">
           {candidate.title ?? "no position"} · {money(candidate.hourlyRate)}
-          {candidate.hiredDate ? ` · hired ${candidate.hiredDate}` : ""}
+          {candidate.hiredDate ? ` · hired ${hiredOn(candidate.hiredDate)}` : ""}
         </div>
       </div>
 
