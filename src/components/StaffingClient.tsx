@@ -536,7 +536,10 @@ export default function StaffingClient({
         {/* Admin-only: it shows everyone's pay rate side by side and its
             decisions determine whose hours are costed at whose rate. */}
         {isAdmin && (
-          <DuplicateAudit stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />
+          <DuplicateAudit
+            stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))}
+            scopeLabel={storeFilter.label}
+          />
         )}
 
         {isAdmin && <ReconciliationSection stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />}

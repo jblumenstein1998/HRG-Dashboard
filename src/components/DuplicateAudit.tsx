@@ -11,6 +11,10 @@
  * collapsed counts, and the fix happens here: a cluster that has exactly one
  * Workstream person can be linked in a click.
  *
+ * What cannot be fixed here is deactivating a PAR number, which only a GM can
+ * do — hence the printable report, addressed to whoever the ribbon is filtered
+ * to, so the list reaches the person who can act on it.
+ *
  * See lib/workstreamAudit.ts for how a cluster is built and why hours are the
  * evidence on the row.
  */
@@ -18,6 +22,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BonusStore } from "@/lib/bonus/storeMap";
 import {
+  auditToReportHtml,
   countBySeverity,
   type AuditParRecord,
   type AuditReport,
@@ -66,7 +71,14 @@ function shortDate(iso: string | null): string {
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
+export default function DuplicateAudit({
+  stores,
+  scopeLabel,
+}: {
+  stores: BonusStore[];
+  /** What the ribbon is filtered to — "Tommy Demorest", "VA", or null. */
+  scopeLabel: string | null;
+}) {
   const [storeId, setStoreId] = useState("");
   const [data, setData] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -167,6 +179,49 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
 
   const urgent = counts["splitting-hours"] + counts["duplicate-workstream"];
 
+  /*
+   * The name on the report, and the filename the browser will offer.
+   *
+   * Taken from the ribbon so the report is addressed to whoever the screen is
+   * currently about: narrow to an above-store leader and it becomes their
+   * report, naming only their stores.
+   */
+  const storeName = stores.find((st) => st.storeId === storeId)?.name ?? null;
+  const reportTitle = `${scopeLabel ?? storeName ?? "All stores"} - HR Cleanup Report`;
+
+  /**
+   * Hand the browser a printable copy of the report.
+   *
+   * An offscreen iframe rather than a new window: a popup is blocked by
+   * default and would make the button look broken. The frame's own document
+   * title is what the print dialog offers as the filename, which is the whole
+   * reason the title is built above rather than written into the page.
+   */
+  function printReport() {
+    if (!data) return;
+    const html = auditToReportHtml({
+      title: reportTitle,
+      scope: scopeLabel
+        ? `${scopeLabel} — ${stores.map((st) => st.name).join(", ")}`
+        : (storeName ?? "All stores"),
+      today: data.today,
+      rows,
+    });
+
+    const frame = document.createElement("iframe");
+    frame.setAttribute("aria-hidden", "true");
+    frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    frame.srcdoc = html;
+    frame.onload = () => {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      // Left in place briefly: removing it during the dialog cancels the job
+      // in some browsers.
+      setTimeout(() => frame.remove(), 60_000);
+    };
+    document.body.appendChild(frame);
+  }
+
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className={`px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2 ${open ? "border-b border-gray-100" : ""}`}>
@@ -213,6 +268,16 @@ export default function DuplicateAudit({ stores }: { stores: BonusStore[] }) {
         )}
         {loading && <span className="text-xs text-gray-400">reading every store…</span>}
 
+        {open && (
+          <button
+            onClick={printReport}
+            disabled={!data || rows.length === 0}
+            title={`${reportTitle}.pdf`}
+            className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+          >
+            Download PDF
+          </button>
+        )}
       </div>
 
       {open && (
