@@ -51,27 +51,47 @@
  *
  * ── Authentication ───────────────────────────────────────────────────────────
  *
- * Two supported paths, because they become available at different times:
+ * Every Workstream token expires seven days after it is issued and that
+ * lifetime is fixed platform-wide. There is no perpetual token to ask for. What
+ * never expires is the client id and secret, from the dashboard under
+ * Company → Integrations → Access Tokens, and those can renew a token forever.
  *
- *   WORKSTREAM_ACCESS_TOKEN                a token minted by hand in the
- *                                          Workstream dashboard. Valid seven
- *                                          days, so this is for getting started
- *                                          and for local scripts, not for the
- *                                          deployed app — it would expire in
- *                                          production every week.
+ *   WORKSTREAM_CLIENT_ID / _CLIENT_SECRET  the production path. Renews the
+ *                                          stored token through
+ *                                          POST /tokens/refresh_token, which
+ *                                          returns the same name and scopes
+ *                                          with a fresh seven days.
  *
- *   WORKSTREAM_CLIENT_ID / _CLIENT_SECRET  OAuth2 client_credentials against
- *                                          POST /tokens. Self-renewing, so this
- *                                          is the production path. Requires
- *                                          Workstream support to enable the
- *                                          "OAuth App" module on the company.
+ *   WORKSTREAM_ACCESS_TOKEN                a token pasted in by hand. Used only
+ *                                          when there is no pair to renew with,
+ *                                          and as the seed for the first
+ *                                          refresh, so turning self-renewal on
+ *                                          needs no trip to the dashboard.
  *
- * The client-credentials path wins when both are set. Tokens are cached in
- * module memory only — deliberately not in Postgres, to keep this module
- * DB-free like par.ts and netchef.ts. A cold serverless instance mints one
- * token and then reuses it for the life of the instance, which is a single
- * extra POST per cold start rather than per request.
+ * ── Why the token lives in Postgres ──────────────────────────────────────────
+ *
+ * This module was deliberately database-free, like par.ts, with the token held
+ * in module memory. That had to change, because a refresh **retires the
+ * previous token immediately** — verified against the live API, where the token
+ * in use returned 401 the moment its replacement was issued. Per-instance
+ * tokens would therefore be per-instance invalidations, each cold start cutting
+ * off the last.
+ *
+ * Minting instead of refreshing dodges that by creating an additional token
+ * every time, which on a serverless host means a new live credential per cold
+ * start accumulating in the company's dashboard. Neither is acceptable, so
+ * there is one row in workstream_token and every instance reads it. See
+ * workstreamToken.ts.
+ *
+ * ── The parameters go in the query string ────────────────────────────────────
+ *
+ * Not a JSON body. An earlier version of this file posted JSON, was rejected,
+ * and the rejection was recorded here as "requires Workstream support to enable
+ * the OAuth App module" — an entitlement problem that did not exist. The
+ * credentials had always worked; the request was malformed.
  */
+
+import { readStoredToken, writeStoredToken } from "./workstreamToken";
 
 const WS_BASE = "https://public-api.workstream.us";
 
@@ -146,7 +166,17 @@ let cached: CachedToken | null = null;
 /** In-flight mint, so a cold instance answering N requests mints once. */
 let minting: Promise<CachedToken> | null = null;
 
-async function mintToken(): Promise<CachedToken> {
+/**
+ * How long before expiry to renew.
+ *
+ * Two days of a seven-day life, so a daily job gets five chances to renew
+ * before anything lapses. A refresh works on an already-lapsed token too, so
+ * this is comfort rather than a cliff.
+ */
+const TOKEN_RENEW_AHEAD_MS = 2 * 24 * 60 * 60 * 1000;
+
+/** Credentials, or a clear error naming what is missing. */
+function credentials(): { clientId: string; clientSecret: string } {
   const clientId = process.env.WORKSTREAM_CLIENT_ID;
   const clientSecret = process.env.WORKSTREAM_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -154,38 +184,34 @@ async function mintToken(): Promise<CachedToken> {
       "Workstream: set WORKSTREAM_CLIENT_ID and WORKSTREAM_CLIENT_SECRET, or WORKSTREAM_ACCESS_TOKEN",
     );
   }
+  return { clientId, clientSecret };
+}
 
-  const res = await fetch(`${WS_BASE}/tokens`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret,
-      name: "HRG Dashboard",
-      scopes: SCOPES,
-    }),
-  });
-
-  const body = await res.text();
-  if (!res.ok) {
-    throw new Error(`Workstream token mint failed: ${res.status} ${body.slice(0, 300)}`);
-  }
-
+/**
+ * Read a token out of whatever shape the endpoint answered with.
+ *
+ * /tokens/refresh_token returns { name, token, expires_in, scopes } and the
+ * published examples for /tokens show `access_token`. Both are accepted
+ * because an auth path that breaks on a renamed field fails weekly, at a time
+ * nobody chose, and reads as an outage rather than a schema change.
+ */
+function readTokenBody(body: string): CachedToken & { name: string } {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(body) as Record<string, unknown>;
   } catch {
-    throw new Error(`Workstream token mint returned non-JSON: ${body.slice(0, 200)}`);
+    throw new Error(`Workstream token response was not JSON: ${body.slice(0, 200)}`);
   }
 
-  // The docs show `access_token`; the legacy docs show the same field nested
-  // under a data envelope. Accept either rather than break on a shape we have
-  // not yet seen in production.
   const envelope = (parsed.data ?? parsed) as Record<string, unknown>;
-  const token = typeof envelope.access_token === "string" ? envelope.access_token : null;
+  const token =
+    typeof envelope.token === "string"
+      ? envelope.token
+      : typeof envelope.access_token === "string"
+        ? envelope.access_token
+        : null;
   if (!token) {
-    throw new Error(`Workstream token mint returned no access_token: ${body.slice(0, 200)}`);
+    throw new Error(`Workstream token response carried no token: ${body.slice(0, 200)}`);
   }
 
   const expiresIn = Number(envelope.expires_in);
@@ -193,27 +219,120 @@ async function mintToken(): Promise<CachedToken> {
     ? expiresIn * 1000
     : TOKEN_DEFAULT_TTL_MS;
 
-  return { token, expiresAt: Date.now() + ttl - TOKEN_SKEW_MS };
+  return {
+    token,
+    expiresAt: Date.now() + ttl - TOKEN_SKEW_MS,
+    name: typeof envelope.name === "string" ? envelope.name : "",
+  };
+}
+
+/**
+ * Ask Workstream for a token.
+ *
+ * Parameters go in the query string, not a JSON body. That is what the docs
+ * specify and what the live API accepts; an earlier version of this function
+ * posted JSON, got rejected, and the failure was written off as a missing
+ * account entitlement.
+ *
+ * With a current token this *refreshes* — same name, same scopes, and the old
+ * token is retired the instant the new one is issued. Without one it mints,
+ * which creates an additional token rather than replacing anything, so it is
+ * only used to get started.
+ */
+async function requestToken(previous: string | null): Promise<CachedToken & { name: string }> {
+  const { clientId, clientSecret } = credentials();
+
+  const path = previous ? "/tokens/refresh_token" : "/tokens";
+  const params = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  if (previous) params.set("token", previous);
+  else {
+    params.set("name", "HRG Dashboard");
+    for (const scope of SCOPES) params.append("scopes[]", scope);
+  }
+
+  const res = await fetch(`${WS_BASE}${path}?${params}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  const body = await res.text();
+  if (!res.ok) {
+    throw new Error(`Workstream ${path} failed: ${res.status} ${body.slice(0, 300)}`);
+  }
+  return readTokenBody(body);
+}
+
+/**
+ * Renew the stored token and hand back the new one.
+ *
+ * Seeded from the environment's hand-minted token the first time, so switching
+ * a deployment onto self-renewal needs no manual trip to the dashboard — the
+ * token already in the config is refreshed into the database and from then on
+ * the pair of credentials carries it.
+ */
+async function renew(): Promise<CachedToken> {
+  const stored = await readStoredToken().catch(() => null);
+  const previous = stored?.token ?? process.env.WORKSTREAM_ACCESS_TOKEN ?? null;
+
+  const fresh = await requestToken(previous);
+  await writeStoredToken(
+    fresh.token,
+    new Date(fresh.expiresAt + TOKEN_SKEW_MS),
+    fresh.name,
+  ).catch((err) => {
+    // A token we cannot persist still works for this request, and failing the
+    // whole read because the write failed would turn a storage blip into an
+    // outage. The next caller refreshes again, which is wasteful rather than
+    // broken.
+    console.error("[workstream] token refreshed but could not be stored:", err);
+  });
+
+  // Held only until the renewal window opens, not until the token dies, so a
+  // process that stays alive for days still renews on time rather than
+  // waiting for a 401 to tell it.
+  cached = { token: fresh.token, expiresAt: fresh.expiresAt - TOKEN_RENEW_AHEAD_MS };
+  return cached;
 }
 
 async function accessToken(): Promise<string> {
-  const clientId = process.env.WORKSTREAM_CLIENT_ID;
-  const clientSecret = process.env.WORKSTREAM_CLIENT_SECRET;
-  const staticToken = process.env.WORKSTREAM_ACCESS_TOKEN;
-
-  // A hand-minted token cannot be renewed from here, so it is only used when
-  // there is no client-credentials pair to renew with.
-  if (!(clientId && clientSecret) && staticToken) return staticToken;
-
   if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  // Another instance may have renewed since this one last looked, which is the
+  // common case on serverless: one cold start renews, the rest read.
+  const stored = await readStoredToken().catch(() => null);
+  if (stored && stored.expiresAt.getTime() - TOKEN_RENEW_AHEAD_MS > Date.now()) {
+    cached = {
+      token: stored.token,
+      expiresAt: stored.expiresAt.getTime() - TOKEN_RENEW_AHEAD_MS,
+    };
+    return cached.token;
+  }
+
+  // No credentials to renew with — fall back to whatever was configured by
+  // hand, which is the local-script path.
+  if (!(process.env.WORKSTREAM_CLIENT_ID && process.env.WORKSTREAM_CLIENT_SECRET)) {
+    const staticToken = process.env.WORKSTREAM_ACCESS_TOKEN;
+    if (staticToken) return staticToken;
+  }
+
   if (!minting) {
-    minting = mintToken().finally(() => { minting = null; });
+    minting = renew().finally(() => { minting = null; });
   }
   cached = await minting;
   return cached.token;
 }
 
-/** Drops the cached token so the next call mints a fresh one. */
+/**
+ * Forget the cached token so the next call re-reads and, if needed, renews.
+ *
+ * Deliberately does not renew here. A 401 usually means another instance
+ * refreshed and retired this one's copy, in which case the answer is sitting
+ * in the database already and renewing again would retire *their* token and
+ * start the two of them trading invalidations.
+ */
 function invalidateToken(): void {
   cached = null;
 }
