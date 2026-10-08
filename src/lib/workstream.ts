@@ -250,7 +250,17 @@ async function requestToken(previous: string | null): Promise<CachedToken & { na
   });
   if (previous) params.set("token", previous);
   else {
-    params.set("name", "HRG Dashboard");
+    /*
+     * A minted token's name has to be unique, or Workstream answers
+     * 400 "A token with this name already exists" — and the account keeps the
+     * name of every token that has ever been created, so a fixed one works
+     * exactly once and then the recovery path is dead for good.
+     *
+     * Stamping it makes minting always possible, which is what the fallback
+     * depends on. The clutter prunes itself: an unused token expires in seven
+     * days like any other.
+     */
+    params.set("name", `HRG Dashboard ${new Date().toISOString().slice(0, 16)}`);
     for (const scope of SCOPES) params.append("scopes[]", scope);
   }
 
@@ -277,7 +287,36 @@ async function renew(): Promise<CachedToken> {
   const stored = await readStoredToken().catch(() => null);
   const previous = stored?.token ?? process.env.WORKSTREAM_ACCESS_TOKEN ?? null;
 
-  const fresh = await requestToken(previous);
+  let fresh: CachedToken & { name: string };
+  if (previous) {
+    try {
+      fresh = await requestToken(previous);
+    } catch (err) {
+      /*
+       * The stored token could not be refreshed, so mint a new one instead.
+       *
+       * This is the difference between an integration that heals itself and
+       * one that waits for somebody to paste a token in. A *retired* token
+       * cannot be refreshed — verified against the live API, which answers
+       * 401 "Access token not found" — and the database can end up holding one
+       * through several ordinary accidents: a refresh that succeeded while the
+       * write back failed, two instances renewing at once, or somebody
+       * rotating the token in Workstream's own dashboard.
+       *
+       * Without this, any of those is a dead integration until a human
+       * notices. Minting costs an extra live token that expires on its own in
+       * seven days, which is the cheaper of the two failures by a distance.
+       */
+      console.warn(
+        "[workstream] refresh failed, minting a replacement token instead:",
+        err instanceof Error ? err.message : String(err),
+      );
+      fresh = await requestToken(null);
+    }
+  } else {
+    fresh = await requestToken(null);
+  }
+
   await writeStoredToken(
     fresh.token,
     new Date(fresh.expiresAt + TOKEN_SKEW_MS),
@@ -285,8 +324,8 @@ async function renew(): Promise<CachedToken> {
   ).catch((err) => {
     // A token we cannot persist still works for this request, and failing the
     // whole read because the write failed would turn a storage blip into an
-    // outage. The next caller refreshes again, which is wasteful rather than
-    // broken.
+    // outage. The database is left holding a token that is now retired, which
+    // the mint fallback above recovers from on the next renewal.
     console.error("[workstream] token refreshed but could not be stored:", err);
   });
 
