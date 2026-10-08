@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { dateRange } from "@/lib/par";
 import { getMissedPunches, payPeriodFor, recentPayPeriods } from "@/lib/staffing";
 import { todayCentralISO } from "@/lib/parRollup";
@@ -21,6 +22,12 @@ export const maxDuration = 300;
 const MAX_DAYS = 35;
 
 export async function GET(req: NextRequest) {
+  // Admin-only, matching the page. These answer with every employee's name,
+  // hours and pay rate, so gating the screen while leaving the data open
+  // would be a lock on a door beside an open window.
+  const denied = await requireSuperAdminApi();
+  if (denied) return denied;
+
   const p = req.nextUrl.searchParams;
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
 

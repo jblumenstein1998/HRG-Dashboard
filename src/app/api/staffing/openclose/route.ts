@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { getOpenCloseReport } from "@/lib/staffing";
 import { todayCentralISO } from "@/lib/parRollup";
 
@@ -14,6 +15,12 @@ import { todayCentralISO } from "@/lib/parRollup";
 export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
+  // Admin-only, matching the page. These answer with every employee's name,
+  // hours and pay rate, so gating the screen while leaving the data open
+  // would be a lock on a door beside an open window.
+  const denied = await requireSuperAdminApi();
+  if (denied) return denied;
+
   const p = req.nextUrl.searchParams;
   const days = Math.min(14, Math.max(1, Number(p.get("days") ?? 5) || 5));
   const rawToday = p.get("today");

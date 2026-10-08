@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import {
   currentWeekDays,
   customSpans,
@@ -30,6 +31,12 @@ const MAX_WEEKS = 8;
 const MAX_DAYS = 21;
 
 export async function GET(req: NextRequest) {
+  // Admin-only, matching the page. These answer with every employee's name,
+  // hours and pay rate, so gating the screen while leaving the data open
+  // would be a lock on a door beside an open window.
+  const denied = await requireSuperAdminApi();
+  if (denied) return denied;
+
   const p = req.nextUrl.searchParams;
   const rawToday = p.get("today");
   const today = rawToday && /^\d{4}-\d{2}-\d{2}$/.test(rawToday)

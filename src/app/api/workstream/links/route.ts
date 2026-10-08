@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiViewer } from "@/lib/users/access";
-import { requireAdminApi } from "@/lib/users/adminGuard";
+import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { BONUS_STORE_IDS } from "@/lib/bonus/storeMap";
 import { getAllLinkViews, getStoreLinkView } from "@/lib/workstreamRoster";
 import {
@@ -31,7 +31,7 @@ import {
 export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
-  const denied = await requireAdminApi();
+  const denied = await requireSuperAdminApi();
   if (denied) return denied;
 
   const store = req.nextUrl.searchParams.get("store");
@@ -61,7 +61,7 @@ type Action = "confirm" | "absent" | "reject" | "clear" | "name";
 const ACTIONS = new Set<Action>(["confirm", "absent", "reject", "clear", "name"]);
 
 export async function POST(req: NextRequest) {
-  const denied = await requireAdminApi();
+  const denied = await requireSuperAdminApi();
   if (denied) return denied;
 
   const viewer = await apiViewer();

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { getStaffingAt, type StaffingMoment } from "@/lib/staffing";
 
 /**
@@ -24,11 +25,18 @@ import { getStaffingAt, type StaffingMoment } from "@/lib/staffing";
  * stores is a couple of minutes the first time and near-instant after, since
  * every underlying fetcher is cached and a past date never changes.
  *
- * Signing in is enforced by proxy.ts; the tab guard runs on the page.
+ * Admin-only, like the page. Signing in is enforced by proxy.ts, but that only
+ * establishes who somebody is — a store account is signed in too.
  */
 export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
+  // Admin-only, matching the page. These answer with every employee's name,
+  // hours and pay rate, so gating the screen while leaving the data open
+  // would be a lock on a door beside an open window.
+  const denied = await requireSuperAdminApi();
+  if (denied) return denied;
+
   const params = req.nextUrl.searchParams;
   const date = params.get("date");
   const minutesRaw = params.get("minutes");
