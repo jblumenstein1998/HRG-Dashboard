@@ -13,6 +13,7 @@ const PROD_LOCATIONS: PARLocation[] = [
   { storeId: "56301", name: "Brentwood",    state: "TN" },
   { storeId: "61401", name: "Spring Hill",  state: "TN" },
   { storeId: "28901", name: "Columbia",     state: "TN" },
+  { storeId: "75075", name: "Portland",     state: "TN" },
   { storeId: "57001", name: "College",      state: "VA" },
   { storeId: "57002", name: "Hampton",      state: "VA" },
   { storeId: "57003", name: "Oyster",       state: "VA" },
@@ -22,13 +23,24 @@ const PROD_LOCATIONS: PARLocation[] = [
   { storeId: "57007", name: "Beach",        state: "VA" },
 ];
 
+/**
+ * A store whose PAR_TOKEN_* isn't set is left out rather than listed and failed
+ * on every call. That is how a new store comes online: it sits in
+ * PROD_LOCATIONS from the day it opens, and appears on every PAR-backed tab the
+ * deploy after its location token is added in Vercel. Server-only — clients
+ * import the PARLocation type, never this list.
+ */
 export const PAR_LOCATIONS: PARLocation[] = PAR_IS_SANDBOX
   ? [{ storeId: "SANDBOX", name: "API Lab-01 (Sandbox)", state: "TN" }]
-  : PROD_LOCATIONS;
+  : PROD_LOCATIONS.filter((l) => process.env[`PAR_TOKEN_${l.storeId}`]);
 
 export function getLocationToken(storeId: string): string {
   if (PAR_IS_SANDBOX) return process.env.PAR_SANDBOX_LOCATION_TOKEN ?? "";
-  return process.env[`PAR_TOKEN_${storeId}`] ?? "";
+  const token = process.env[`PAR_TOKEN_${storeId}`];
+  // Stores reached by id rather than through PAR_LOCATIONS (bonus, Workstream)
+  // get a sentence naming the missing variable instead of a SOAP fault.
+  if (!token) throw new Error(`PAR_TOKEN_${storeId} is not set — store ${storeId} isn't connected to PAR yet`);
+  return token;
 }
 
 // ── Rate limiter (5 concurrent per PAR best-practice guide) ──────────────────

@@ -24,21 +24,23 @@ const UA =
 
 // ── Store naming ──────────────────────────────────────────────────────────────
 // Jolt calls the stores "HRG <name> LLC"; the rest of the dashboard calls them
-// "<name>". Portland is a Jolt-only location with no Net-Chef counterpart and is
-// deliberately left out.
+// "<name>". Portland (store 75075) was "Hwy 52 | HRG Portland LLC" before it
+// opened and is "HRG Portland LLC" now; both are kept so history still maps.
 
 const JOLT_TO_STORE: Record<string, string> = {
   "HRG Brentwood LLC": "Brentwood",
   "HRG College LLC": "College",
   "HRG Columbia LLC": "Columbia",
   "HRG Jefferson LLC": "Jefferson",
+  "HRG Portland LLC": "Portland",
+  "Hwy 52 | HRG Portland LLC": "Portland",
   "HRG Spring Hill LLC": "Spring Hill",
   "HRG Springfield LLC": "Springfield",
   "HRG White House LLC": "White House",
 };
 
 /** Jolt locations the dashboard has no store for. */
-const EXCLUDED_JOLT_LOCATIONS = ["Hwy 52 | HRG Portland LLC"];
+const EXCLUDED_JOLT_LOCATIONS: string[] = [];
 
 /** Dashboard stores Jolt is not deployed to — rendered as empty rows. */
 export const STORES_WITHOUT_JOLT = ["Chesapeake", "Hillcrest", "Hampton", "Oyster", "Beach"];
@@ -587,7 +589,7 @@ export async function fetchDueSoon(hours = 24, opts: { bust?: boolean } = {}): P
     if (node.completionTimestamp) continue;      // already done
     if (!node.location || !node.deadlineTimestamp) continue;
     const store = JOLT_TO_STORE[node.location.name];
-    if (!store) continue;                        // drops Portland
+    if (!store) continue;                        // unmapped location
     instances.push({
       id: node.id,
       store,
@@ -911,7 +913,7 @@ export async function fetchStoreLists(
   for (const node of nodes) {
     if (!node.location) continue;
     const store = JOLT_TO_STORE[node.location.name];
-    if (!store) continue; // drops Portland
+    if (!store) continue; // unmapped location
 
     let entry = byStore.get(store);
     if (!entry) {
@@ -1031,7 +1033,7 @@ export async function fetchToDo(opts: { bust?: boolean } = {}): Promise<ToDoRepo
     if (node.completionTimestamp) continue;
     if (!node.location || !node.deadlineTimestamp) continue;
     const store = JOLT_TO_STORE[node.location.name];
-    if (!store) continue; // drops Portland
+    if (!store) continue; // unmapped location
 
     rows.push({
       id: node.id,

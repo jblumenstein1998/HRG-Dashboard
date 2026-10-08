@@ -76,6 +76,10 @@ export const BONUS_STORES: BonusStore[] = [
   { storeId: "42601", name: "White House", state: "TN", berryFragment: "800 hwy. 76",             netchefLocationId: 1002, smgUnitKey: "42601", workstreamLocationUuid: "4a386af2-6f69-43ac-a8e0-cb89f61a8914" },
   { storeId: "56301", name: "Brentwood",   state: "TN", berryFragment: "471 old hickory",         netchefLocationId: 425,  smgUnitKey: "56301", workstreamLocationUuid: "9b60d4a8-1a7e-4762-946d-94d716a5cf05" },
   { storeId: "61401", name: "Spring Hill", state: "TN", berryFragment: "4882 port royal",         netchefLocationId: 632,  smgUnitKey: "61401", workstreamLocationUuid: "4f95fa9f-247c-4987-8f90-fa39f9eadf87" },
+  // Opened 2026. BerryAI has no branch for it yet (city as the fragment, see
+  // lib/stores.ts) and PAR calls fail with a named error until PAR_TOKEN_75075
+  // is set — both read as "no data", never as zero.
+  { storeId: "75075", name: "Portland",    state: "TN", berryFragment: "portland",                netchefLocationId: 1303, smgUnitKey: "75075", workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
   // Virginia
   { storeId: "57001", name: "College",     state: "VA", berryFragment: "6120 college",            netchefLocationId: 465,  smgUnitKey: "57001", workstreamLocationUuid: "741c82a9-3257-418b-a9e2-47549abba51f" },
   { storeId: "57002", name: "Hampton",     state: "VA", berryFragment: "2201 todds",              netchefLocationId: 901,  smgUnitKey: "57002", workstreamLocationUuid: "c27cebfa-4993-4305-8100-62eeb7911432" },
@@ -91,22 +95,13 @@ export const BONUS_STORES: BonusStore[] = [
 /**
  * Restaurants Workstream knows about that this dashboard has no store for.
  *
- * Portland is the thirteenth restaurant and is not in BONUS_STORES, because
- * every row there is keyed on a PAR store id and Portland has none — no
- * `PAR_TOKEN_*`, no Net-Chef location, and lib/jolt.ts already excludes it by
- * name for the same reason. Adding it above would not give it hours; it would
- * give twelve working stores and one that throws on every PAR call.
- *
- * So it is recorded here instead: known, named, and deliberately not pretended
- * to be a full store. The day Portland has a PAR store number and token, it
- * moves up into BONUS_STORES with this uuid and nothing else changes.
- *
- * Hohenwald and Lafayette are the same shape — real locations with managers
- * assigned (3 and 2) — and are listed so that a future reader knows they were
- * seen and left out on purpose rather than missed.
+ * Hohenwald and Lafayette are real locations with managers assigned (3 and 2)
+ * but no PAR store number, and are listed so that a future reader knows they
+ * were seen and left out on purpose rather than missed. Portland sat here until
+ * it opened as store 75075; a location that gets a store number moves up into
+ * BONUS_STORES with its uuid, the way Portland did.
  */
 export const WORKSTREAM_ONLY_LOCATIONS = [
-  { name: "Portland",  workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
   { name: "Hohenwald", workstreamLocationUuid: "19695db9-8a5c-47a0-b252-d15c155b3ea0" },
   { name: "Lafayette", workstreamLocationUuid: "308f84bb-b9ff-4f30-8d71-af9c0c1890a7" },
 ] as const;

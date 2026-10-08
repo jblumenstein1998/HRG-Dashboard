@@ -233,6 +233,7 @@ export const LOCATION_NAMES: Record<number, string> = {
   465:  "College",
   1137: "Beach",
   1002: "White House",
+  1303: "Portland",
 };
 
 // ── Report fetch ──────────────────────────────────────────────────────────────

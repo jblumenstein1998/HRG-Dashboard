@@ -11,7 +11,7 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
 
 const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
-const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
+const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 // Weekly sales are pulled live from PAR (see /api/par/weekly-sales, salesByLocationName)
