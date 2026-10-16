@@ -2,19 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { PARLocation } from "@/lib/par";
+import { businessDateISO } from "@/lib/businessDay";
 
 type HourBucket = { hour: number; label: string; netSales: number; orderCount: number; laborHours: number };
 
-function todayISO(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
+const todayISO = (): string => businessDateISO();
 
 const fmtDollars = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
