@@ -426,6 +426,24 @@ function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure 
   return { value, prior, compPct: derivedCompPct(compValue, prior) };
 }
 
+/**
+ * Says out loud what sumFigures does quietly. Without it a total row reading
+ * "$839,157 / $764,628 −7.0%" looks like arithmetic gone wrong. Rendered only
+ * while some store has nothing to comp against, and inside the card so a copied
+ * image of the table carries it too.
+ */
+function SameStoreNote({ names }: { names: string[] }) {
+  if (names.length === 0) return null;
+  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const verb = names.length === 1 ? "has" : "have";
+  return (
+    <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
+      Total Δ% is same-store: {who} {verb} no sales in last year&apos;s window, so {names.length === 1 ? "its" : "their"} sales
+      are included in the totals but left out of the Δ%.
+    </p>
+  );
+}
+
 function fmtCompPct(pct: number | null): string {
   if (pct == null) return "—";
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
@@ -544,6 +562,7 @@ function MetricCompTable({
           )}
         </tbody>
       </table>
+      <SameStoreNote names={hrgStores.filter(s => COMP_RANGE_COLS.some(c => s[c.field].prior === 0)).map(s => s.name)} />
     </div>
   );
 }
@@ -685,6 +704,7 @@ function AvgCheckCompTable({
           )}
         </tbody>
       </table>
+      <SameStoreNote names={hrgStores.filter(s => COMP_RANGE_COLS.some(c => s[c.field].txLY === 0)).map(s => s.name)} />
     </div>
   );
 }
@@ -977,6 +997,8 @@ function SnapshotVsLastYearTable({
           )}
         </tbody>
       </table>
+      {/* Not while loading: a store's row is all zeros until its numbers land. */}
+      {!loading && <SameStoreNote names={hrgStores.filter(s => s.txLY === 0).map(s => s.name)} />}
     </div>
   );
 }
