@@ -47,20 +47,25 @@ const isoOf = ({ y, m, d }: { y: number; m: number; d: number }) =>
   `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
 /**
- * The business day starts at 4 AM local, not midnight, so a store that stays
- * open past midnight keeps its late sales on the day they belong to — which is
- * also how PAR files them (an order rung at 1 AM carries the prior business
- * date). Everything below reads the clock shifted back by this much: the shifted
- * date is the business date, and the shifted time is minutes since 4 AM.
+ * The business day ends at 2:15 AM local, PAR's own end of day, not at
+ * midnight. PAR exposes no setting for it, but every store's data shows it:
+ * each business date carries a handful of tickets closed at exactly 2:15 AM
+ * local the next morning (PAR's end-of-day closing out whatever was left open),
+ * Central for TN and Eastern for VA alike — measured across five stores and six
+ * days in October 2026. So a store open past midnight keeps its late sales on
+ * the day PAR files them under.
+ *
+ * Everything below reads the clock shifted back by this much: the shifted date
+ * is the business date, and the shifted time is minutes since the day began.
  */
-const BUSINESS_DAY_START_MINUTES = 4 * 60;
+const BUSINESS_DAY_START_MINUTES = 2 * 60 + 15;
 
-/** The local clock, shifted so the day runs 4 AM to 4 AM. */
+/** The local clock, shifted so the day runs 2:15 AM to 2:15 AM. */
 function businessParts(timeZone: string) {
   return zonedParts(timeZone, new Date(Date.now() - BUSINESS_DAY_START_MINUTES * 60_000));
 }
 
-/** Minutes since local midnight → minutes since the 4 AM business-day start. */
+/** Minutes since local midnight → minutes since the 2:15 AM business-day start. */
 function businessMinutes(minutesOfDay: number): number {
   return (minutesOfDay - BUSINESS_DAY_START_MINUTES + 1440) % 1440;
 }
@@ -74,11 +79,11 @@ function todayISOCentral(): string {
 }
 
 /**
- * Where last year's same-weekday orders get cut off, in minutes since the 4 AM
+ * Where last year's same-weekday orders get cut off, in minutes since the 2:15 AM
  * business-day start — or null for the whole day.
  *
  * Null once a store's own business day has ended but the shared Central date
- * hasn't rolled: for the hour between 4 AM Eastern and 4 AM Central, a VA
+ * hasn't rolled: for the hour between 2:15 AM Eastern and 2:15 AM Central, a VA
  * store's day is over while "today" is still that day. Cutting by the clock
  * there would keep only last year's first few minutes and read $0 against a
  * full day, so the honest comparison is the whole of both days.
@@ -157,7 +162,7 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   let netSales = 0;
   let transactions = 0;
   for (const o of orders) {
-    // Both sides in minutes since 4 AM, so a 1 AM order sorts after 11 PM.
+    // Both sides in minutes since 2:15 AM, so a 1 AM order sorts after 11 PM.
     if (cutoffMinutes != null && (o.openedMinutes == null || businessMinutes(o.openedMinutes) > cutoffMinutes)) continue;
     netSales += o.netSales;
     if (o.isCountedOrder) transactions += 1;
