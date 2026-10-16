@@ -29,7 +29,7 @@ import { resolveDateBounds } from "@/lib/tools/dateRange";
 // original implementation) cut VA stores' last-year comparison off an hour
 // early: if it's 2pm Eastern at Hampton, Central "now" is only 1pm.
 
-function zonedParts(timeZone: string): { y: number; m: number; d: number; hh: number; mm: number } {
+function zonedParts(timeZone: string, at: Date = new Date()): { y: number; m: number; d: number; hh: number; mm: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
@@ -38,36 +38,54 @@ function zonedParts(timeZone: string): { y: number; m: number; d: number; hh: nu
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).formatToParts(new Date());
+  }).formatToParts(at);
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   return { y: get("year"), m: get("month"), d: get("day"), hh: get("hour"), mm: get("minute") };
 }
 
+const isoOf = ({ y, m, d }: { y: number; m: number; d: number }) =>
+  `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+
+/**
+ * The business day starts at 4 AM local, not midnight, so a store that stays
+ * open past midnight keeps its late sales on the day they belong to — which is
+ * also how PAR files them (an order rung at 1 AM carries the prior business
+ * date). Everything below reads the clock shifted back by this much: the shifted
+ * date is the business date, and the shifted time is minutes since 4 AM.
+ */
+const BUSINESS_DAY_START_MINUTES = 4 * 60;
+
+/** The local clock, shifted so the day runs 4 AM to 4 AM. */
+function businessParts(timeZone: string) {
+  return zonedParts(timeZone, new Date(Date.now() - BUSINESS_DAY_START_MINUTES * 60_000));
+}
+
+/** Minutes since local midnight → minutes since the 4 AM business-day start. */
+function businessMinutes(minutesOfDay: number): number {
+  return (minutesOfDay - BUSINESS_DAY_START_MINUTES + 1440) % 1440;
+}
+
 // The business-date boundary (which calendar day counts as "today") stays a
 // single Central reference, same convention as the rest of the app (e.g.
-// todayCentralISO in parRollup.ts) — only the intraday minute-of-day cutoff
-// used to slice last year's comparison needs to be state-aware.
+// todayCentralISO in parRollup.ts) — only the intraday cutoff used to slice
+// last year's comparison needs to be state-aware.
 function todayISOCentral(): string {
-  const { y, m, d } = zonedParts("America/Chicago");
-  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return isoOf(businessParts("America/Chicago"));
 }
 
 /**
- * Where last year's same-weekday orders get cut off: the store's local
- * minute-of-day, or null for the whole day.
+ * Where last year's same-weekday orders get cut off, in minutes since the 4 AM
+ * business-day start — or null for the whole day.
  *
- * Null once the store's own clock has passed midnight on a business date that
- * hasn't rolled yet. The date rolls at Central midnight, so for the hour
- * between midnight Eastern and midnight Central a VA store's clock reads
- * 12:xx AM while "today" is still the day that just ended there. A minute-of-day
- * cutoff then kept only last year's first few minutes, and every VA store read
- * $0 last year against a full day this year. The day is over locally, so the
- * honest comparison is the whole of both days.
+ * Null once a store's own business day has ended but the shared Central date
+ * hasn't rolled: for the hour between 4 AM Eastern and 4 AM Central, a VA
+ * store's day is over while "today" is still that day. Cutting by the clock
+ * there would keep only last year's first few minutes and read $0 against a
+ * full day, so the honest comparison is the whole of both days.
  */
 function lastYearCutoffMinutes(state: PARLocation["state"], businessDate: string): number | null {
-  const { y, m, d, hh, mm } = zonedParts(STATE_TIMEZONE[state]);
-  const localDate = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  return localDate > businessDate ? null : hh * 60 + mm;
+  const p = businessParts(STATE_TIMEZONE[state]);
+  return isoOf(p) > businessDate ? null : p.hh * 60 + p.mm;
 }
 
 function nowLabelForState(state: PARLocation["state"], businessDate: string): string {
@@ -139,7 +157,8 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   let netSales = 0;
   let transactions = 0;
   for (const o of orders) {
-    if (cutoffMinutes != null && (o.openedMinutes == null || o.openedMinutes > cutoffMinutes)) continue;
+    // Both sides in minutes since 4 AM, so a 1 AM order sorts after 11 PM.
+    if (cutoffMinutes != null && (o.openedMinutes == null || businessMinutes(o.openedMinutes) > cutoffMinutes)) continue;
     netSales += o.netSales;
     if (o.isCountedOrder) transactions += 1;
   }
