@@ -52,16 +52,30 @@ function todayISOCentral(): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-function nowMinutesForState(state: PARLocation["state"]): number {
-  const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
-  return hh * 60 + mm;
+/**
+ * Where last year's same-weekday orders get cut off: the store's local
+ * minute-of-day, or null for the whole day.
+ *
+ * Null once the store's own clock has passed midnight on a business date that
+ * hasn't rolled yet. The date rolls at Central midnight, so for the hour
+ * between midnight Eastern and midnight Central a VA store's clock reads
+ * 12:xx AM while "today" is still the day that just ended there. A minute-of-day
+ * cutoff then kept only last year's first few minutes, and every VA store read
+ * $0 last year against a full day this year. The day is over locally, so the
+ * honest comparison is the whole of both days.
+ */
+function lastYearCutoffMinutes(state: PARLocation["state"], businessDate: string): number | null {
+  const { y, m, d, hh, mm } = zonedParts(STATE_TIMEZONE[state]);
+  const localDate = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return localDate > businessDate ? null : hh * 60 + mm;
 }
 
-function nowLabelForState(state: PARLocation["state"]): string {
+function nowLabelForState(state: PARLocation["state"], businessDate: string): string {
+  const tzAbbr = state === "TN" ? "CT" : "ET";
+  if (lastYearCutoffMinutes(state, businessDate) === null) return `close ${tzAbbr}`;
   const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
   const period = hh < 12 ? "AM" : "PM";
   const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  const tzAbbr = state === "TN" ? "CT" : "ET";
   return `${h12}:${String(mm).padStart(2, "0")} ${period} ${tzAbbr}`;
 }
 
@@ -185,8 +199,8 @@ async function liveTodayStore(loc: PARLocation, todayDate: string, lastYearDate:
   const ty = summarize(todayOrders, null);
   // Cut last year's same-weekday orders off at the same time-of-day as
   // "now" — but "now" in this store's own local time, not blanket Central
-  // (see nowMinutesForState's doc comment above).
-  const ly = summarize(lastYearOrders, nowMinutesForState(loc.state));
+  // (see the timezone note above and lastYearCutoffMinutes).
+  const ly = summarize(lastYearOrders, lastYearCutoffMinutes(loc.state, todayDate));
   return {
     storeId: loc.storeId,
     name: loc.name,
@@ -251,8 +265,8 @@ export async function getSalesSnapshot(range: SnapshotRange = DEFAULT_SNAPSHOT_R
     priorStartDate: prior.start,
     priorEndDate: prior.end,
     live,
-    asOfLabelCT: live ? nowLabelForState("TN") : "",
-    asOfLabelET: live ? nowLabelForState("VA") : "",
+    asOfLabelCT: live ? nowLabelForState("TN", start) : "",
+    asOfLabelET: live ? nowLabelForState("VA", start) : "",
   };
 
   // WTD on a Monday: the window starts today and ends yesterday, i.e. it holds

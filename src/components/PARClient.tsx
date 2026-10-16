@@ -434,12 +434,9 @@ function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure 
  */
 function SameStoreNote({ names }: { names: string[] }) {
   if (names.length === 0) return null;
-  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  const verb = names.length === 1 ? "has" : "have";
   return (
     <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
-      Total Δ% is same-store: {who} {verb} no sales in last year&apos;s window, so {names.length === 1 ? "its" : "their"} sales
-      are included in the totals but left out of the Δ%.
+      % change based on same-store-sales; excludes new-builds
     </p>
   );
 }
