@@ -9,8 +9,11 @@ import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey 
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
+import { BONUS_STORES } from "@/lib/bonus/storeMap";
 
-const LOCATION_IDS = [425, 868, 869, 689, 901, 950, 886, 771, 632, 465, 1137, 1002];
+// Derived from the store map rather than typed out, so a new store's Net-Chef
+// location can't be left off this tab while every other tab picks it up.
+const LOCATION_IDS = BONUS_STORES.map((s) => s.netchefLocationId);
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
