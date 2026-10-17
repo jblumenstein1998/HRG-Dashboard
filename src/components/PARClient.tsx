@@ -9,6 +9,7 @@ import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFil
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
+import { businessDate } from "@/lib/businessDay";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -734,7 +735,24 @@ const QUICK_RANGES = [
   { key: "ytd", label: "YTD" },
 ] as const;
 
-type SnapshotRange = (typeof QUICK_RANGES)[number]["key"] | `p${number}`;
+// A custom window is keyed "<start>_<end>" (ISO dates) — the same string the
+// sales-snapshot route parses, so it travels as one `range` param.
+type SnapshotRange = (typeof QUICK_RANGES)[number]["key"] | `p${number}` | `${string}_${string}`;
+
+const CUSTOM_RANGE_RE = /^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/;
+
+function parseCustomRange(range: SnapshotRange): { start: string; end: string } | null {
+  const m = range.match(CUSTOM_RANGE_RE);
+  return m ? { start: m[1], end: m[2] } : null;
+}
+
+// Latest date a custom window may end on: yesterday's business date. Today is
+// the live "Today" range's job — the rollup has no time-of-day cutoff for it.
+function lastCompletedBusinessDate(): string {
+  const d = businessDate();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // Completed fiscal periods only, newest first — the current period is already
 // covered by PTD, and a future one has no data.
@@ -746,6 +764,8 @@ function completedPeriods(): FiscalPeriod[] {
 function snapshotRangeLabel(range: SnapshotRange): string {
   const quick = QUICK_RANGES.find(r => r.key === range);
   if (quick) return quick.label;
+  const custom = parseCustomRange(range);
+  if (custom) return custom.start === custom.end ? custom.start : `${fmtDate(custom.start)}–${fmtDate(custom.end)}`;
   return `P${range.slice(1)}`;
 }
 
@@ -842,6 +862,62 @@ function useSalesSnapshot(range: SnapshotRange) {
   return { stores, meta, loading, refetch };
 }
 
+// The From/To boxes are a draft — only Apply turns them into a custom range,
+// since refetching on every change would fire a request per digit typed.
+function CustomRangeForm({
+  initialStart, initialEnd, maxDate, current, disabled, onApply,
+}: {
+  initialStart: string;
+  initialEnd: string;
+  maxDate: string;
+  current: { start: string; end: string } | null;
+  disabled: boolean;
+  onApply: (start: string, end: string) => void;
+}) {
+  const [start, setStart] = useState(initialStart);
+  const [end, setEnd] = useState(initialEnd);
+  const valid = !!start && !!end && start <= end && end <= maxDate;
+  const isCurrent = current != null && current.start === start && current.end === end;
+  const inputClass = "text-xs rounded-lg border border-gray-200 bg-white px-2 py-1 text-gray-700 focus:outline-none focus:ring-1 focus:ring-red-700";
+
+  return (
+    <form
+      data-copy-image-ignore="true"
+      className="flex items-center gap-1"
+      onSubmit={e => {
+        e.preventDefault();
+        if (valid && !isCurrent) onApply(start, end);
+      }}
+    >
+      <input
+        type="date"
+        aria-label="From"
+        value={start}
+        max={end || maxDate}
+        onChange={e => setStart(e.target.value)}
+        className={inputClass}
+      />
+      <span className="text-xs text-gray-400">to</span>
+      <input
+        type="date"
+        aria-label="To"
+        value={end}
+        min={start || undefined}
+        max={maxDate}
+        onChange={e => setEnd(e.target.value)}
+        className={inputClass}
+      />
+      <button
+        type="submit"
+        disabled={!valid || isCurrent || disabled}
+        className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+      >
+        Apply
+      </button>
+    </form>
+  );
+}
+
 function SnapshotVsLastYearTable({
   stores, meta, loading, filter, range, onRangeChange,
 }: {
@@ -895,6 +971,16 @@ function SnapshotVsLastYearTable({
     : "";
 
   const selectClass = "text-xs rounded-lg border border-gray-200 bg-white px-2 py-1 text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-red-700";
+  const custom = parseCustomRange(range);
+  const maxDate = lastCompletedBusinessDate();
+  // The From/To boxes start on whatever window is on screen (so picking "PTD"
+  // shows PTD's dates, ready to nudge). "Today" ends past maxDate, so its
+  // dates are left out rather than prefilling a window Apply would refuse.
+  const shownStart = custom?.start ?? meta.startDate;
+  const shownEnd = custom?.end ?? meta.endDate;
+  const prefill = shownStart && shownEnd && shownStart <= shownEnd && shownEnd <= maxDate
+    ? { start: shownStart, end: shownEnd }
+    : { start: "", end: "" };
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -904,15 +990,27 @@ function SnapshotVsLastYearTable({
             title + date line above already record which range was captured. */}
         <select
           data-copy-image-ignore="true"
-          value={range}
+          value={custom ? "custom" : range}
           onChange={e => onRangeChange(e.target.value as SnapshotRange)}
           className={selectClass}
         >
+          {custom && <option value="custom" disabled>Custom range</option>}
           {QUICK_RANGES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           <optgroup label="Past periods">
             {periods.map(p => <option key={p.period} value={`p${p.period}`}>{periodLabel(p)}</option>)}
           </optgroup>
         </select>
+        {/* Keyed on the window shown, so it resets to that window whenever
+            the dropdown (or an Apply) changes it. */}
+        <CustomRangeForm
+          key={`${range}|${prefill.start}|${prefill.end}`}
+          initialStart={prefill.start}
+          initialEnd={prefill.end}
+          maxDate={maxDate}
+          current={custom}
+          disabled={loading}
+          onApply={(start, end) => onRangeChange(`${start}_${end}`)}
+        />
         <div className="ml-auto text-xs text-gray-500">
           {loading
             ? <span className="text-gray-400 animate-pulse">{meta.live || range === "today" ? "Loading (live PAR pull, may take a bit)…" : "Loading…"}</span>
