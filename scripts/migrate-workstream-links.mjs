@@ -1,0 +1,57 @@
+// Run with:  node --env-file=.env.local scripts/migrate-workstream-links.mjs
+// Creates the PAR ↔ Workstream employee link table in Neon. Safe to re-run.
+//
+// Mirrors ensureWorkstreamLinkSchema() in src/lib/workstreamLinkStore.ts, which
+// runs before every read and write — so strictly this isn't required. It exists
+// because the Workstream Links screen reads before anything has ever written,
+// and because the two partial unique indexes below are the part of the design
+// worth being able to inspect on a live database without reading the app.
+import { neon } from "@neondatabase/serverless";
+
+const sql = neon(process.env.DATABASE_URL);
+
+await sql`
+  CREATE TABLE IF NOT EXISTS workstream_employee_links (
+    par_store_id    TEXT NOT NULL,
+    par_employee_id TEXT NOT NULL,
+    -- Empty string for an 'absent' decision: there is no counterpart to name,
+    -- and NULL would defeat the primary key.
+    workstream_uuid TEXT NOT NULL DEFAULT '',
+    -- 'confirmed' | 'absent' | 'rejected'
+    status          TEXT NOT NULL,
+    decided_by      TEXT NOT NULL DEFAULT '',
+    decided_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note            TEXT NOT NULL DEFAULT '',
+    -- 'workstream' | 'par' -- whose spelling of the name the staffing screens
+    -- show. Workstream by default, since it holds full legal names. The reason
+    -- it is a choice at all is a name change: PAR's Natasha Wilson and
+    -- Workstream's Noah Starke are one person, and which name belongs on a
+    -- roster is a judgement, not a rule about record quality.
+    name_source     TEXT NOT NULL DEFAULT 'workstream',
+    PRIMARY KEY (par_store_id, par_employee_id, workstream_uuid)
+  )
+`;
+
+// Added after the table existed, so databases created before it need it too.
+await sql`
+  ALTER TABLE workstream_employee_links
+    ADD COLUMN IF NOT EXISTS name_source TEXT NOT NULL DEFAULT 'workstream'
+`;
+
+// One live decision per PAR employee; any number of rejections alongside it.
+await sql`
+  CREATE UNIQUE INDEX IF NOT EXISTS workstream_links_one_per_par_employee
+    ON workstream_employee_links (par_store_id, par_employee_id)
+    WHERE status <> 'rejected'
+`;
+
+// Several PAR employees may point at one Workstream person, so there is no
+// unique index on the Workstream side. A store routinely carries the same human
+// twice -- an old clock number and a new one -- and both are them; linking both
+// means their position and rate appear whichever number they punched in under.
+// Dropped rather than never created, because earlier databases have it and it
+// would reject the second link at write time.
+await sql`DROP INDEX IF EXISTS workstream_links_one_per_workstream_person`;
+
+const [{ count }] = await sql`SELECT count(*)::int AS count FROM workstream_employee_links`;
+console.log(`workstream_employee_links ready — ${count} decision${count === 1 ? "" : "s"} recorded.`);

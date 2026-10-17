@@ -16,6 +16,8 @@ export type Position = {
   label: string;
   tabs: Tab[];
   isAdmin: boolean;
+  /** A rank above admin, and always implying it. See users/schema.ts. */
+  isSuperAdmin: boolean;
 };
 
 export type User = {
@@ -67,7 +69,10 @@ const toPosition = (r: Record<string, unknown>): Position => ({
   id: String(r.id),
   label: String(r.label),
   tabs: ((r.tabs as string[]) ?? []).filter((t): t is Tab => (ALL_TABS as readonly string[]).includes(t)),
-  isAdmin: Boolean(r.is_admin),
+  // Super admin implies admin rather than sitting beside it, so a row that
+  // somehow carries only the higher flag still behaves as the lower one.
+  isAdmin: Boolean(r.is_admin) || Boolean(r.is_super_admin),
+  isSuperAdmin: Boolean(r.is_super_admin),
 });
 
 const toUser = (r: Record<string, unknown>): UserRow => ({

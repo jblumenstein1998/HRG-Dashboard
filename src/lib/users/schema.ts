@@ -70,8 +70,26 @@ async function createUserSchema(): Promise<void> {
       label      TEXT NOT NULL,
       tabs       TEXT[] NOT NULL DEFAULT '{}',
       is_admin   BOOLEAN NOT NULL DEFAULT FALSE,
+      /*
+       * A rank above admin, for screens that are not merely administrative.
+       *
+       * The distinction is about what is on the screen rather than who is
+       * trusted: an administrator manages users and links, while staffing puts
+       * every employee's pay rate next to their name across the whole estate.
+       * Those are different disclosures and deserve different doors.
+       *
+       * Implies is_admin everywhere it is checked — a super admin is an admin
+       * with more, never a parallel role that might be missing something.
+       */
+      is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+  `;
+
+  // Added after the table existed, so an older database needs it too.
+  await sql`
+    ALTER TABLE app_positions
+      ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT FALSE
   `;
 
   await sql`

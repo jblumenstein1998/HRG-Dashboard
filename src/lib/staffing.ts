@@ -38,6 +38,8 @@ import {
   getStoreTimeZone,
   type PARShift,
 } from "./par";
+import { linkedRosterOrEmpty } from "./workstreamRoster";
+import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
   employeeId: string | null;
@@ -63,10 +65,49 @@ export type StaffOnClock = {
    * minutesWorked, which is what PAR pays and has breaks taken out.
    */
   minutesElapsedAtQuery: number;
-  /** Total minutes worked across the seven business dates before this one. */
-  trailing7Minutes: number;
+  /** Minutes worked this payroll week so far, the shift in progress included. */
+  wtdMinutes: number;
   /** Shifts behind that total, so a bare number can be checked. */
-  trailing7Shifts: number;
+  wtdShifts: number;
+  /**
+   * What Workstream says about this person, where they have been joined to a
+   * Workstream record. Null throughout when they haven't been — see
+   * lib/workstreamLink.ts for why nothing is guessed here.
+   */
+  workstream: WorkstreamFacts | null;
+};
+
+/**
+ * Workstream's half of a person, hung off a PAR row.
+ *
+ * `position` is the title Workstream holds, which is what someone was hired as
+ * — not the same claim as PAR's `job`, which is what they clocked in as for
+ * this particular shift. A Shift Leader working a Cook shift is a normal
+ * Tuesday, and showing both is the point: one is the job, the other is the
+ * night.
+ *
+ * `rateOfRecord` is likewise not `payRate`. PAR's is what the shift was costed
+ * at; Workstream's is what the person is supposed to be paid. Where they
+ * disagree, somebody wants to know.
+ */
+export type WorkstreamFacts = {
+  /** Workstream's full name. PAR's DisplayName truncates the surname. */
+  fullName: string | null;
+  position: string | null;
+  rateOfRecord: number | null;
+  hiredDate: string | null;
+  terminationDate: string | null;
+  /** How the two records were joined: a name match, or a person's decision. */
+  linkedBy: "auto" | "confirmed";
+  /**
+   * The store Workstream assigns them to, when it is not this one.
+   *
+   * Workstream's location is the baseline for where somebody belongs, so a
+   * value here means they are working a store they are not assigned to. Either
+   * the assignment is stale after a transfer, or they are covering away from
+   * their home store and the labour is landing on another store's P&L.
+   */
+  assignedElsewhere: string | null;
 };
 
 export type StoreRoster = {
@@ -79,24 +120,51 @@ export type StoreRoster = {
   localDate: string;
   onClock: StaffOnClock[];
   /**
-   * Sum of the hourly rates on the clock. Salaried people are not in it — PAR
-   * records their rate as 0, and there is no hourly figure to add — so it is
+   * Sum of the hourly rates on the clock, taken from the same source each card
+   * shows: Workstream's rate of record where the person is linked, PAR's shift
+   * rate otherwise.
+   *
+   * Salaried people are not in it — Workstream states their pay annually and
+   * PAR records it as 0, and neither is an hourly figure to add — so it is
    * reported alongside a count of who was left out rather than suppressed. An
    * earlier version blanked the whole store if one salaried manager was on,
    * which hid the real wages of everyone else to avoid implying the manager
    * was free.
    */
   hourlyWageRunRate: number | null;
-  /** People on the clock whose rate PAR reports as 0, i.e. salaried. */
+  /** People on the clock with no hourly rate in either system, i.e. salaried. */
   salariedOnClock: number;
   error: string | null;
 };
 
 export type StaffingReport = {
-  /** The instant asked about, ISO. */
-  at: string;
+  /**
+   * The instant asked about, ISO — null when the question was a local time of
+   * day, because then there is no single instant to report. Six o'clock in
+   * Virginia and six o'clock in Tennessee are an hour apart, and picking either
+   * one to stand for both is how this went wrong in the first place.
+   */
+  at: string | null;
+  /** What was asked for, so the screen can say which of the two it is showing. */
+  moment: { kind: "instant" | "local"; label: string };
   stores: StoreRoster[];
   fetchedAt: number;
+  /**
+   * When the stored Workstream roster was last filled, and how big it is.
+   *
+   * On the report rather than left implicit because the failure it describes is
+   * invisible otherwise: with an empty or stale table every card reads "not
+   * linked to Workstream" and everybody lands under "Other", which looks like
+   * broken matching rather than absent data. An hour was already lost to
+   * exactly that confusion once.
+   */
+  workstreamSync: {
+    rows: number;
+    lastSyncedAt: string | null;
+    /** Hours since the last sync, or null if it has never run. Computed here
+     *  rather than in the component, which must stay pure. */
+    ageHours: number | null;
+  };
 };
 
 /**
@@ -158,14 +226,49 @@ function onBreakAt(shift: PARShift, queryMinutes: number): boolean {
   return shift.breaks.some((b) => queryMinutes >= b.startMinutes && queryMinutes < b.endMinutes);
 }
 
-const TRAILING_DAYS = 7;
+/**
+ * Business dates from this week's Monday up to, but not including, `date`.
+ *
+ * The payroll week runs Monday to Sunday, the same as everywhere else on this
+ * screen, so week-to-date means the same thing here as it does in the hours
+ * table. Empty on a Monday, when the week has not started.
+ */
+function weekToDateBefore(date: string): string[] {
+  const monday = mondayOf(date);
+  const out: string[] = [];
+  for (let d = monday; d < date; d = shiftLocalDate(d, 1)) out.push(d);
+  return out;
+}
+
+/**
+ * The moment to read a store at, in one of the two ways it can be asked for.
+ *
+ * `instant` is a single point in time, the same for every store — what "Now"
+ * means, and the only honest way to ask what is happening across the estate
+ * this second.
+ *
+ * `local` is a time of day, resolved separately inside each store's own zone.
+ * Six o'clock means six o'clock in Virginia *and* six o'clock in Tennessee,
+ * which are an hour apart and are deliberately two different instants. That is
+ * what somebody means by "how were we staffed at dinner" — and it makes the
+ * answer independent of where the person asking happens to be sitting, which
+ * the instant form is not: a bare `YYYY-MM-DDTHH:mm` is read in the *browser's*
+ * zone, so the same slider position queried a different moment depending on the
+ * viewer's laptop.
+ */
+export type StaffingMoment =
+  | { kind: "instant"; at: Date }
+  | { kind: "local"; date: string; minutes: number };
 
 async function rosterForStore(
   loc: (typeof PAR_LOCATIONS)[number],
-  at: Date,
+  moment: StaffingMoment,
 ): Promise<StoreRoster> {
   const timeZone = getStoreTimeZone(loc.storeId);
-  const { date: localDate, minutes: localMinutes } = zonedParts(at, timeZone);
+  const { date: localDate, minutes: localMinutes } =
+    moment.kind === "instant"
+      ? zonedParts(moment.at, timeZone)
+      : { date: moment.date, minutes: moment.minutes };
   const base: Omit<StoreRoster, "onClock" | "hourlyWageRunRate" | "salariedOnClock" | "error"> = {
     storeId: loc.storeId,
     storeName: loc.name,
@@ -178,19 +281,21 @@ async function rosterForStore(
   try {
     const previousDate = shiftLocalDate(localDate, -1);
 
-    // The seven business dates before today's, for the trailing total. Fetched
-    // alongside so one store is one round of parallel calls rather than two.
-    const trailingDates = Array.from({ length: TRAILING_DAYS }, (_, i) =>
-      shiftLocalDate(localDate, -(i + 1)),
-    );
+    // This week so far, Monday up to yesterday. Fetched alongside so one store
+    // is one round of parallel calls rather than two.
+    const trailingDates = weekToDateBefore(localDate);
 
-    // The two roster dates are read live; the trailing seven come from cache.
-    // A shift that is still open keeps changing, and the whole question this
-    // screen answers is "right now" — an hour-old snapshot answers a different
-    // one. Past business dates do not move, so caching them is free.
-    const [employees, jobs, today, yesterday, ...trailing] = await Promise.all([
+    // The two roster dates are read live; the earlier days of the week come
+    // from cache. A shift that is still open keeps changing, and the whole
+    // question this screen answers is "right now" — an hour-old snapshot
+    // answers a different one. Past business dates do not move, so caching
+    // them is free.
+    const [employees, jobs, linked, today, yesterday, ...trailing] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
+      // Never throws: an unreachable Workstream costs the position column, not
+      // the screen.
+      linkedRosterOrEmpty(loc.storeId),
       getShiftsLive(loc.storeId, localDate),
       getShiftsLive(loc.storeId, previousDate),
       ...trailingDates.map((d) => getShifts(loc.storeId, d)),
@@ -199,8 +304,29 @@ async function rosterForStore(
     const nameById = new Map(employees.map((e) => [e.id, e]));
     const jobById = new Map(jobs.map((j) => [j.id, j]));
 
+    /*
+     * Week to date, including the shift being worked right now.
+     *
+     * Today's own shifts come from the live read rather than the cached week
+     * days, so the figure climbs through the day — which is the point. The
+     * question it answers is whether somebody should be sent home before they
+     * cross forty, and a total that stopped at midnight could not answer it.
+     *
+     * Yesterday is read twice — once cached as part of the week, once live for
+     * the roster — and the live copy wins. A shift that started at 6pm and is
+     * still running belongs to yesterday's business date, so the cached copy
+     * has it frozen at whatever it had accrued when the day was first read;
+     * taking the live one is what makes an overnight shift climb.
+     *
+     * On a Monday `trailingDates` is empty and yesterday is Sunday, which
+     * belongs to last week's payroll — so it is left out entirely, and
+     * somebody finishing an overnight Sunday shift correctly shows no hours
+     * against the week that just started.
+     */
+    const weekDays = trailingDates.map((d, i) => (d === previousDate ? yesterday : trailing[i]));
+
     const trailingByEmployee = new Map<string, { minutes: number; shifts: number }>();
-    for (const day of trailing) {
+    for (const day of [...weekDays, today]) {
       for (const sh of day) {
         if (!sh.employeeId) continue;
         const acc = trailingByEmployee.get(sh.employeeId) ?? { minutes: 0, shifts: 0 };
@@ -226,10 +352,16 @@ async function rosterForStore(
       const job = shift.jobId ? jobById.get(shift.jobId) : undefined;
       const jobName = job?.name ?? null;
       const trailingAcc = shift.employeeId ? trailingByEmployee.get(shift.employeeId) : undefined;
+      const ws = shift.employeeId ? linked.get(shift.employeeId) : undefined;
 
       onClock.push({
         employeeId: shift.employeeId,
-        name: fullName(emp) ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
+        // Workstream's name wins where there is one: PAR's is a first name and
+        // a last initial, and a roster is read to find a person.
+        name:
+          ws?.name
+          ?? fullName(emp)
+          ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
         job: jobName,
         jobId: shift.jobId,
         payRate: shift.payRate,
@@ -241,14 +373,31 @@ async function rosterForStore(
         onBreak: onBreakAt(shift, queryMinutes),
         minutesWorked: shift.minutesWorked,
         minutesElapsedAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
-        trailing7Minutes: trailingAcc?.minutes ?? 0,
-        trailing7Shifts: trailingAcc?.shifts ?? 0,
+        wtdMinutes: trailingAcc?.minutes ?? 0,
+        wtdShifts: trailingAcc?.shifts ?? 0,
+        workstream: ws
+          ? {
+              fullName: ws.name,
+              position: ws.title,
+              rateOfRecord: ws.hourlyRate,
+              hiredDate: ws.hiredDate,
+              terminationDate: ws.terminationDate,
+              linkedBy: ws.linkedBy,
+              assignedElsewhere: ws.assignedElsewhere,
+            }
+          : null,
       });
     }
 
     onClock.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
 
-    const rates = onClock.map((p) => p.payRate).filter((r): r is number => r !== null && r > 0);
+    // Summed from the rate each card actually shows — Workstream's rate of
+    // record where the person is linked, PAR's shift rate otherwise. A run rate
+    // that totalled different numbers than the ones printed above it would be
+    // unarguable-with, which is the opposite of what a figure like this is for.
+    const rates = onClock
+      .map((p) => p.workstream?.rateOfRecord ?? p.payRate)
+      .filter((r): r is number => r !== null && r > 0);
     const hourlyWageRunRate = rates.length
       ? Math.round(rates.reduce((a, b) => a + b, 0) * 100) / 100
       : null;
@@ -267,15 +416,39 @@ async function rosterForStore(
 }
 
 /**
- * Every store's roster at one instant.
+ * Every store's roster, at one instant or at one local time of day.
  *
  * Stores run in parallel; par.ts's semaphore caps the actual SOAP concurrency
  * at five, and every call here is cached, so a repeat look at the same moment
  * costs nothing.
  */
-export async function getStaffingAt(at: Date): Promise<StaffingReport> {
-  const stores = await Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, at)));
-  return { at: at.toISOString(), stores, fetchedAt: Date.now() };
+export async function getStaffingAt(moment: StaffingMoment): Promise<StaffingReport> {
+  const [stores, status] = await Promise.all([
+    Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, moment))),
+    // Never a reason for the page to fail: if the roster table cannot be read,
+    // say it has never synced and let the banner explain the blank columns.
+    workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
+  ]);
+
+  const workstreamSync = {
+    ...status,
+    ageHours: status.lastSyncedAt
+      ? Math.round(((Date.now() - new Date(status.lastSyncedAt).getTime()) / 3_600_000) * 10) / 10
+      : null,
+  };
+
+  return {
+    at: moment.kind === "instant" ? moment.at.toISOString() : null,
+    moment:
+      moment.kind === "instant"
+        ? { kind: "instant", label: moment.at.toISOString() }
+        : // Said as "local" on purpose: every store on screen is at this time
+          // on its own clock, which is a different instant in each timezone.
+          { kind: "local", label: `${moment.date} ${clockLabel(moment.minutes)} local` },
+    stores,
+    fetchedAt: Date.now(),
+    workstreamSync,
+  };
 }
 
 // ── Hours by store by week ───────────────────────────────────────────────────
@@ -304,6 +477,12 @@ export type EmployeeWeekHours = {
   /** Minutes worked at a rate PAR reports as 0, i.e. salaried. Costed at nothing. */
   unratedMinutes: number;
   shifts: number;
+  /**
+   * Position and rate of record from Workstream, where this PAR employee has
+   * been joined to a Workstream one. Null when they haven't — the hours are
+   * still right, there is simply nobody to attribute them to on the other side.
+   */
+  workstream: WorkstreamFacts | null;
 };
 
 export type StoreWeekHours = {
@@ -376,6 +555,110 @@ export function recentCompleteWeeks(today: string, count: number): HoursSpan[] {
 }
 
 /**
+ * The last `count` completed business dates, oldest first.
+ *
+ * Today is left out for the same reason a running week is: a day still being
+ * worked reports less overtime than it will finish with, and a line that climbs
+ * through the afternoon reads as a store deteriorating when nothing has
+ * happened.
+ *
+ * Each span is a single date, which `getStoreHours` handles without knowing
+ * anything new — it already walks every date between start and end.
+ *
+ * Daily overtime is a different question from weekly. Overtime is a property of
+ * a payroll week, so a single day's "overtime minutes" is PAR's own attribution
+ * of that day's hours, not a day that broke forty on its own. It answers "which
+ * day did the week tip over", which is the useful version for a manager
+ * building next week's schedule.
+ */
+export function recentCompleteDays(today: string, count: number): HoursSpan[] {
+  const days: HoursSpan[] = [];
+  for (let i = count; i >= 1; i--) {
+    const date = shiftLocalDate(today, -i);
+    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
+  }
+  return days;
+}
+
+/**
+ * This week so far — Monday through yesterday.
+ *
+ * Null on a Monday, when there is no "so far" yet. Returning an empty span
+ * instead would plot a point at zero, which is a claim that nobody worked
+ * overtime rather than that the week has not started.
+ *
+ * Today is excluded, as everywhere else on this screen: a day still being
+ * worked reports less overtime than it will finish with.
+ *
+ * It sits alongside completed weeks knowing it is not their equal — a partial
+ * week is always lower than a full one, and the axis cannot say so. The label
+ * carries that warning, which is why it reads "WTD" rather than a date.
+ */
+export function weekToDateSpan(today: string): HoursSpan | null {
+  const monday = mondayOf(today);
+  const yesterday = shiftLocalDate(today, -1);
+  if (yesterday < monday) return null;
+  return { start: monday, end: yesterday, label: "WTD" };
+}
+
+/**
+ * Each day of the current week, Monday through yesterday.
+ *
+ * The breakdown behind the WTD point: same window, one column per day, for
+ * working out which shift put the week where it is.
+ */
+export function currentWeekDays(today: string): HoursSpan[] {
+  const monday = mondayOf(today);
+  const yesterday = shiftLocalDate(today, -1);
+  const days: HoursSpan[] = [];
+  for (const date of eachDate(monday, yesterday)) {
+    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
+  }
+  return days;
+}
+
+/**
+ * A chosen range, cut into days or into weeks.
+ *
+ * Weeks are Mon–Sun as everywhere else on this screen, and the first and last
+ * are **clipped to the range** rather than dropped. Dropping them would be
+ * tidier arithmetic and a worse answer: someone who picks the 3rd to the 17th
+ * means those dates, and silently returning only the whole weeks inside would
+ * answer a question they did not ask — sometimes with nothing at all.
+ *
+ * The cost is that an edge week can be short, and a short week carries less
+ * overtime for that reason alone. A clipped span is marked with a `~` in its
+ * label so the chart can say so rather than leaving it to be noticed.
+ */
+export function customSpans(from: string, to: string, grain: "day" | "week"): HoursSpan[] {
+  if (to < from) return [];
+
+  if (grain === "day") {
+    return eachDate(from, to).map((date) => ({
+      start: date,
+      end: date,
+      label: date.slice(5).replace("-", "/"),
+    }));
+  }
+
+  const spans: HoursSpan[] = [];
+  let cursor = mondayOf(from);
+  while (cursor <= to) {
+    const weekEnd = shiftLocalDate(cursor, 6);
+    const start = cursor < from ? from : cursor;
+    const end = weekEnd > to ? to : weekEnd;
+    const clipped = start !== cursor || end !== weekEnd;
+    spans.push({
+      start,
+      end,
+      label: `${clipped ? "~" : ""}${start.slice(5).replace("-", "/")}`,
+    });
+    cursor = shiftLocalDate(cursor, 7);
+  }
+  return spans;
+}
+
+/**
  * The last `count` completed pay periods.
  *
  * A pay period here is the fiscal period from lib/fiscal — four or five weeks,
@@ -398,9 +681,10 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
       try {
-        const [employees, jobs] = await Promise.all([
+        const [employees, jobs, linked] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
+          linkedRosterOrEmpty(loc.storeId),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
         const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
@@ -435,9 +719,10 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                 unratedMinutes += shiftUnrated;
 
                 if (!sh.employeeId) continue;
+                const ws = linked.get(sh.employeeId);
                 const row = byEmployee.get(sh.employeeId) ?? {
                   employeeId: sh.employeeId,
-                  name: fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
+                  name: ws?.name ?? fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
                   job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
                   regularMinutes: 0,
                   overtimeMinutes: 0,
@@ -445,6 +730,17 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                   overtimeCost: 0,
                   unratedMinutes: 0,
                   shifts: 0,
+                  workstream: ws
+                    ? {
+                        fullName: ws.name,
+                        position: ws.title,
+                        rateOfRecord: ws.hourlyRate,
+                        hiredDate: ws.hiredDate,
+                        terminationDate: ws.terminationDate,
+                        linkedBy: ws.linkedBy,
+                        assignedElsewhere: ws.assignedElsewhere,
+                      }
+                    : null,
                 };
                 row.regularMinutes += sh.regularMinutes;
                 row.overtimeMinutes += sh.overtimeMinutes;
@@ -508,6 +804,218 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
  * that runs past midnight is measured in its own frame rather than wrapping to
  * a negative span.
  */
+// ── Payroll calendar ─────────────────────────────────────────────────────────
+
+/**
+ * A known pay date, to count fortnights from. 2026-09-22 is a Tuesday, and
+ * 2026-09-08 — the one before it — confirms the fourteen-day step.
+ */
+const PAY_DATE_ANCHOR = "2026-09-22";
+
+/**
+ * How long after the work ends the money arrives.
+ *
+ * Nine days, which is stated by the estate and not inferred: pay date 9/22
+ * covers 8/31–9/13, and pay date 9/8 covers 8/17–8/30. Both are Mon–Sun
+ * fortnights ending nine days before the Tuesday they are paid on, so there is
+ * better than a week between the last shift and the money.
+ *
+ * That gap is the reason this screen is useful rather than a curiosity: when
+ * the next pay date comes into view its working period is already closed, so
+ * every timecard in it can be corrected before payroll runs rather than after.
+ *
+ * **If payroll moves its cut-off, this is the line to change and nothing
+ * else.** The selector, the ranges and the labels all come off it.
+ */
+const PAY_LAG_DAYS = 9;
+
+export type PayPeriod = {
+  /** The Tuesday the money lands. */
+  payDate: string;
+  /** First business date worked, a Monday. */
+  start: string;
+  /** Last business date worked, a Sunday. */
+  end: string;
+  /** Still being worked — the fortnight has not finished yet. */
+  inProgress: boolean;
+  label: string;
+};
+
+/**
+ * The pay period paid on `payDate`.
+ *
+ * `today` only decides whether the fortnight is still running. It matters on
+ * screen: a period in progress will always show fewer accumulated problems
+ * than a closed one, for no reason other than that fewer days have happened.
+ */
+export function payPeriodFor(payDate: string, today?: string): PayPeriod {
+  const end = shiftLocalDate(payDate, -PAY_LAG_DAYS);
+  const start = shiftLocalDate(end, -13);
+  return {
+    payDate,
+    start,
+    end,
+    inProgress: today ? end >= today : false,
+    label: `Paid ${payDate.slice(5).replace("-", "/")}`,
+  };
+}
+
+/**
+ * Pay dates, newest first, led by one whose fortnight is still being worked.
+ *
+ * Two future-facing entries rather than one, and they answer different
+ * questions:
+ *
+ *   the run being prepared   its working period closed days ago, thanks to the
+ *                            nine-day lag, so it is a complete fortnight to
+ *                            correct before the money goes out
+ *   the one after it         still being worked. Not actionable in the same
+ *                            way, but it shows what is piling up rather than
+ *                            waiting for it to arrive as a finished list
+ *
+ * The second is marked `inProgress`, because it will always show fewer
+ * problems than a closed period for no reason other than having had fewer days
+ * to collect them, and a count that means something different from the one
+ * above it should say so.
+ */
+export function recentPayPeriods(today: string, count = 6): PayPeriod[] {
+  // Step to the first pay date on or after today, from the anchor.
+  let date = PAY_DATE_ANCHOR;
+  while (date < today) date = shiftLocalDate(date, 14);
+  while (shiftLocalDate(date, -14) >= today) date = shiftLocalDate(date, -14);
+
+  // Then one beyond it: the fortnight currently being worked.
+  date = shiftLocalDate(date, 14);
+
+  const out: PayPeriod[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(payPeriodFor(date, today));
+    date = shiftLocalDate(date, -14);
+  }
+  return out;
+}
+
+// ── Missed punches ───────────────────────────────────────────────────────────
+
+/**
+ * Still on the clock at 2:13am: they forgot to punch out.
+ *
+ * The rule is the estate's, not an inference. Every store is long shut by then
+ * — the latest close plus cleanup is nowhere near two in the morning — so a
+ * shift still running at 2:13 is a timecard to fix, not a night worked.
+ *
+ * It has to be a time-of-day rule rather than "the shift never ended", because
+ * PAR does not leave these open: something closes them out, so `isOpen` is
+ * false by the time anybody looks and the only surviving evidence is an end
+ * time in the small hours. Checking `isOpen` alone found nothing across a whole
+ * pay period, which is what sent us looking for the real tell.
+ *
+ * `isOpen` is still checked, for the case where nothing has closed it yet.
+ *
+ * Minutes are counted from the business date's own midnight, so a shift that
+ * legitimately runs past twelve carries on past 1440 rather than wrapping — see
+ * lib/par.ts. 2:13am the following morning is therefore minute 1573.
+ *
+ * Missed *break* punches are the obvious companion and are deliberately not
+ * here yet: "didn't clock out for a break" splits into a break left open, a
+ * shift with no break at all, and a break shorter than policy, and the last two
+ * need a rule nobody has written down yet.
+ */
+const MISSED_CLOCKOUT_MINUTE = 24 * 60 + 2 * 60 + 13;
+
+export type MissedPunch = {
+  businessDate: string;
+  employeeId: string | null;
+  name: string;
+  job: string | null;
+  /** When the shift began, in the store's own clock. */
+  startLabel: string;
+  /** When PAR says it ended, or "still open" if nothing ever closed it. */
+  endLabel: string;
+  /** Nothing has closed this shift at all — the worse of the two cases. */
+  stillOpen: boolean;
+  /**
+   * Minutes PAR currently credits the shift. Not what anybody will be paid —
+   * shown so the size of the correction is visible, not as a fact.
+   */
+  minutesWorked: number;
+};
+
+export type StoreMissedPunches = {
+  storeId: string;
+  storeName: string;
+  state: "TN" | "VA";
+  rows: MissedPunch[];
+  error: string | null;
+};
+
+export type MissedPunchReport = {
+  /** Business dates examined, oldest first. */
+  dates: string[];
+  stores: StoreMissedPunches[];
+  fetchedAt: number;
+};
+
+/**
+ * Every missed punch across the estate, over the given business dates.
+ *
+ * Dates are taken rather than a count so one report serves both "yesterday" and
+ * a whole pay period without the caller having to know how either is built.
+ */
+export async function getMissedPunches(dates: string[]): Promise<MissedPunchReport> {
+  const stores = await Promise.all(
+    PAR_LOCATIONS.map(async (loc): Promise<StoreMissedPunches> => {
+      try {
+        const [employees, jobs, ...days] = await Promise.all([
+          getEmployees(loc.storeId),
+          getJobs(loc.storeId),
+          ...dates.map((d) => getShifts(loc.storeId, d)),
+        ]);
+        const empById = new Map(employees.map((e) => [e.id, e]));
+        const jobById = new Map(jobs.map((j) => [j.id, j]));
+
+        const rows: MissedPunch[] = [];
+        days.forEach((shifts, i) => {
+          const businessDate = dates[i];
+          for (const sh of shifts) {
+            // Still on the clock at 2:13am, or never closed at all.
+            if (!sh.isOpen && sh.endMinutes <= MISSED_CLOCKOUT_MINUTE) continue;
+            rows.push({
+              businessDate,
+              employeeId: sh.employeeId,
+              name: fullName(sh.employeeId ? empById.get(sh.employeeId) : undefined)
+                ?? (sh.employeeId ? `#${sh.employeeId}` : "unknown"),
+              job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
+              startLabel: clockLabel(sh.startMinutes),
+              endLabel: sh.isOpen ? "still open" : clockLabel(sh.endMinutes),
+              stillOpen: sh.isOpen,
+              minutesWorked: sh.minutesWorked,
+            });
+          }
+        });
+
+        // Oldest first, then by who started earliest — the order somebody would
+        // work down a list of corrections.
+        rows.sort(
+          (a, b) => a.businessDate.localeCompare(b.businessDate) || a.name.localeCompare(b.name),
+        );
+
+        return { storeId: loc.storeId, storeName: loc.name, state: loc.state, rows, error: null };
+      } catch (err) {
+        return {
+          storeId: loc.storeId,
+          storeName: loc.name,
+          state: loc.state,
+          rows: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }),
+  );
+
+  return { dates, stores, fetchedAt: Date.now() };
+}
+
 export type OpenCloseCell = {
   businessDate: string;
   /** Null when PAR has no hours for that day of week. */

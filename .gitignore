@@ -47,3 +47,6 @@ next-env.d.ts
 
 .vercel
 .env*.local
+
+# Local backups of reconciliation decisions, taken before a reset.
+links-backup-*.json

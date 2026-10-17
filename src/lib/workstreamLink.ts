@@ -1,0 +1,805 @@
+/**
+ * Joining a PAR employee to a Workstream employee.
+ *
+ * PAR knows hours. Workstream knows position and pay rate. Nothing joins them:
+ * PAR's employee record carries no external id, no email and no phone, and its
+ * ids are per store, so the same person working two restaurants is two PAR rows
+ * and one Workstream record. The only overlapping field is a name.
+ *
+ * ── Why this is a review queue and not a matcher ─────────────────────────────
+ *
+ * A name match is a guess. "M Johnson" is two people at Hampton; "Chris" is
+ * Christopher in one system and Christina in the other; a new hire exists in
+ * Workstream for a week before PAR has heard of them. Guessing wrong here does
+ * not produce a blank cell — it produces someone else's pay rate next to your
+ * hours, which is worse than having nothing.
+ *
+ * So this module never decides a doubtful match. It decides exactly one case
+ * automatically: the two names are character-for-character identical after
+ * normalisation, and that name is unique on both sides of the store. Everything
+ * else becomes a proposal with ranked candidates, and a person confirms it.
+ *
+ * ── Leavers are out of scope ─────────────────────────────────────────────────
+ *
+ * Only people **active in both systems** are matched. On Workstream's side that
+ * means `status === "active"` — not offboarded, and not still onboarding. On
+ * PAR's side it means not terminated.
+ *
+ * Anyone else is out of scope: a leaver's shifts are in the past, and a pending
+ * hire has no shifts yet. Neither can be usefully linked, and an onboarding
+ * record cannot even be found on Workstream's employee screen, because it lives
+ * in the hiring pipeline instead.
+ *
+ * Of 1,332 Workstream records, 471 are active. At one store, 129 of 165
+ * outstanding reviews were people who had already left.
+ *
+ * That exclusion does more than hide noise. A leaver sharing a name with a
+ * current employee made that name ambiguous, which pushed somebody who should
+ * have linked automatically into the queue — so dropping leavers both shortens
+ * the queue and resolves people already in it.
+ *
+ * A link already confirmed keeps resolving after that person leaves, which is
+ * why terminated records are still looked up by uuid. Otherwise a leaver's past
+ * hours would quietly lose the title and rate they were worked at.
+ *
+ * ── Why the decisions are stored and the matches are not ─────────────────────
+ *
+ * Only human decisions are persisted (workstreamLinkStore.ts). The automatic
+ * exact matches are recomputed on every read. That is what makes this survive
+ * hiring: a new employee whose name is unambiguous links the day both systems
+ * know them, with nobody involved; a new employee whose name is ambiguous shows
+ * up in the queue by itself, without an import step anyone has to remember to
+ * run. The queue is a standing surface, not a migration.
+ *
+ * A stored decision always beats a computed one, in both directions — a
+ * confirmed link overrides an exact-name match that disagrees with it, and a
+ * rejected pair stays rejected no matter how well the names read.
+ *
+ * Pure functions only: no database, no network. That keeps the ranking testable
+ * against a fixture and keeps the rules in one readable place.
+ */
+
+/**
+ * A person as Workstream knows them, flattened.
+ *
+ * Deliberately not the API's own shape. The roster is read from Postgres now
+ * (workstreamStore.ts), not from the vendor, and this module should not care
+ * which — it matches names, and a nested job assignment is somebody else's
+ * problem. It also keeps this file free of any import that reaches the
+ * database, which is what lets the matching rules be exercised against a
+ * fixture.
+ */
+export type WorkstreamPerson = {
+  uuid: string;
+  firstName: string | null;
+  lastName: string | null;
+  /** What they go by, when Workstream records one. */
+  preferredName: string | null;
+  /** "hired" | "onboarding" | "active" | "offboarded". */
+  status: string;
+  hiredDate: string | null;
+  startDate: string | null;
+  terminationDate: string | null;
+  title: string | null;
+  hourlyRate: number | null;
+  /**
+   * The store Workstream has them at, when it is not the store being matched.
+   *
+   * Null for the store's own people. Set for the estate-wide fallback pool,
+   * so a candidate offered from another store can say so — that is a real
+   * disagreement between the two systems, not a detail to bury.
+   */
+  atOtherStore?: string | null;
+};
+
+/** Their full name, or null when Workstream has neither part. */
+function fullName(p: WorkstreamPerson): string | null {
+  return [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || null;
+}
+
+/**
+ * What they go by, when it is not simply their first name again.
+ *
+ * "Amy Schutt (Amy)" is noise; "Robert Ellison (Trey)" is the whole reason PAR
+ * and Workstream disagree about who somebody is.
+ */
+function goesByName(p: WorkstreamPerson): string | null {
+  const pref = (p.preferredName ?? "").trim();
+  if (!pref) return null;
+  return pref.toLowerCase() === (p.firstName ?? "").trim().toLowerCase() ? null : pref;
+}
+
+// ── The two sides ────────────────────────────────────────────────────────────
+
+/**
+ * A person as PAR knows them.
+ *
+ * `payRate` and `jobName` are optional because PAR keeps neither on the
+ * employee record — they live on shifts. A caller that has recent shifts to
+ * hand should pass them: they are corroboration a human reviewer can use, not
+ * something this module matches on.
+ */
+export type ParPerson = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  jobName?: string | null;
+  payRate?: number | null;
+  terminated: boolean;
+  /**
+   * Minutes worked in the recent activity window, when the caller measured it.
+   *
+   * Undefined means nobody looked, and the rule below does not apply — the
+   * resolved-roster path skips the shift reads entirely, since a PAR record
+   * with no shifts cannot appear on a staffing screen anyway.
+   */
+  recentMinutes?: number;
+  /** Business date of the most recent shift in that window, when measured. */
+  lastWorked?: string | null;
+};
+
+/** What a stored decision says about one PAR employee. */
+export type LinkDecisionStatus =
+  /** This PAR employee is this Workstream employee. Set by a person. */
+  | "confirmed"
+  /** This PAR employee has no Workstream record, and that is expected. */
+  | "absent"
+  /** This specific pair is not the same person. Suppresses the candidate. */
+  | "rejected";
+
+export type LinkDecision = {
+  parStoreId: string;
+  parEmployeeId: string;
+  /** Empty string for "absent" — there is no counterpart to name. */
+  workstreamUuid: string;
+  status: LinkDecisionStatus;
+  decidedBy: string;
+  decidedAt: string;
+  /*
+   * Whose spelling of the name to show. Workstream unless somebody said
+   * otherwise, because it carries a full legal name where PAR has a first name
+   * and an initial.
+   *
+   * The exception this exists for is a name change. Natasha Wilson in PAR and
+   * Noah Starke in Workstream are one person, and the two records disagree
+   * about who they *are*, not how it is spelled — so the choice belongs to
+   * whoever knows them, not to a rule about record quality.
+   */
+  nameSource?: "workstream" | "par";
+};
+
+// ── Name normalisation ───────────────────────────────────────────────────────
+
+/** Suffixes that are not part of a name for matching purposes. */
+const SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv", "v"]);
+
+/**
+ * A name reduced to what two systems could plausibly agree on.
+ *
+ * Accents are folded, punctuation dropped (O'Brien, Smith-Jones), generational
+ * suffixes removed, and whitespace collapsed. Nothing here is clever — it is
+ * only meant to stop trivia like a middle initial or a hyphen from splitting
+ * one person into two.
+ */
+export function normalizeName(raw: string | null | undefined): string {
+  return (raw ?? "")
+    .normalize("NFKD")
+    // Combining marks left behind by NFKD, so José and Jose are one person.
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w && !SUFFIXES.has(w))
+    .join(" ")
+    .trim();
+}
+
+/**
+ * The key an automatic match is allowed to use: normalised first and last name
+ * only. Middle names are dropped because one system records them and the other
+ * does not, at random.
+ */
+export function nameKey(first: string | null | undefined, last: string | null | undefined): string {
+  const f = normalizeName(first).split(" ")[0] ?? "";
+  const parts = normalizeName(last).split(" ").filter(Boolean);
+  const l = parts[parts.length - 1] ?? "";
+  return f && l ? `${f} ${l}` : "";
+}
+
+/**
+ * Nicknames, for ranking candidates only.
+ *
+ * This table exists so a reviewer sees "Mike Alvarez" next to "Michael Alvarez"
+ * at the top of the list instead of hunting for it. It is never allowed to
+ * create an automatic link — a nickname is exactly the kind of near-miss that
+ * is right nine times and wrong the tenth, and the tenth is someone's pay rate.
+ */
+const NICKNAMES: Record<string, string> = {
+  al: "albert", alex: "alexander", andy: "andrew", ben: "benjamin", bill: "william",
+  bob: "robert", cathy: "catherine", charlie: "charles", chris: "christopher",
+  chuck: "charles", dan: "daniel", dave: "david", deb: "deborah", don: "donald",
+  ed: "edward", fred: "frederick", greg: "gregory", jake: "jacob", jen: "jennifer",
+  jim: "james", joe: "joseph", john: "jonathan", ken: "kenneth", kim: "kimberly",
+  liz: "elizabeth", matt: "matthew", meg: "margaret", mike: "michael", nick: "nicholas",
+  pat: "patricia", pete: "peter", phil: "phillip", rick: "richard", rob: "robert",
+  ron: "ronald", sam: "samuel", steve: "stephen", sue: "susan", tim: "timothy",
+  toby: "tobias", tom: "thomas", tony: "anthony", vicky: "victoria", will: "william",
+};
+
+/** Both names reduced to a canonical first name, where one is known. */
+function canonicalFirst(first: string): string {
+  return NICKNAMES[first] ?? first;
+}
+
+/**
+ * Dice coefficient over character bigrams, 0..1.
+ *
+ * A cheap similarity that handles the transpositions and dropped letters that
+ * typed names actually contain, without pulling in a dependency for it.
+ */
+function similarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const grams = (s: string) => {
+    const out = new Map<string, number>();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      out.set(g, (out.get(g) ?? 0) + 1);
+    }
+    return out;
+  };
+  const ga = grams(a);
+  const gb = grams(b);
+  let shared = 0;
+  for (const [g, n] of ga) shared += Math.min(n, gb.get(g) ?? 0);
+  const total = (a.length - 1) + (b.length - 1);
+  return total > 0 ? (2 * shared) / total : 0;
+}
+
+// ── Scoring ──────────────────────────────────────────────────────────────────
+
+/**
+ * How alike two names are, 0..100, with the reasons spelled out.
+ *
+ * The reasons matter more than the number: they are rendered next to the
+ * candidate so a reviewer can see *why* it was offered and disagree on the
+ * evidence rather than on a score they have no way to interpret.
+ */
+function scoreNames(par: ParPerson, ws: WorkstreamPerson): { score: number; reasons: string[] } {
+  const reasons: string[] = [];
+  const pFirst = normalizeName(par.firstName).split(" ")[0] ?? "";
+  const pLast = (normalizeName(par.lastName).split(" ").filter(Boolean).pop()) ?? "";
+  const wFirst = normalizeName(ws.firstName).split(" ")[0] ?? "";
+  const wLast = (normalizeName(ws.lastName).split(" ").filter(Boolean).pop()) ?? "";
+
+  if (!pLast || !wLast) {
+    // PAR sometimes carries only a DisplayName. Fall back to whole-string
+    // similarity so the person is still offered candidates rather than none.
+    const s = similarity(normalizeName(par.displayName), normalizeName(fullName(ws)));
+    if (s > 0) reasons.push(`names ${Math.round(s * 100)}% alike (no last name on the PAR record)`);
+    return { score: Math.round(s * 60), reasons };
+  }
+
+  const lastExact = pLast === wLast;
+  const lastLike = similarity(pLast, wLast);
+
+  // Workstream holds a preferred name, and it is often the only name the store
+  // uses — PAR will say "Trey Ellison" where Workstream's legal record says
+  // "Robert". Treated as an alternative first name for ranking only: a
+  // preferred name that matches is strong evidence for a human, and still not
+  // grounds for an automatic link.
+  const wPreferred = normalizeName(goesByName(ws)).split(" ")[0] ?? "";
+  if (lastExact && wPreferred && wPreferred === pFirst && pFirst !== wFirst) {
+    reasons.push(`last name matches; Workstream has them as "${ws.firstName}" but they go by "${ws.preferredName}"`);
+    return { score: 92, reasons };
+  }
+
+  let score: number;
+  if (lastExact && pFirst === wFirst) {
+    score = 100;
+    reasons.push("first and last name match exactly");
+  } else if (lastExact && canonicalFirst(pFirst) === canonicalFirst(wFirst)) {
+    score = 86;
+    reasons.push(`last name matches; "${pFirst}" and "${wFirst}" are the same name`);
+  } else if (lastExact && pFirst && wFirst && pFirst[0] === wFirst[0]) {
+    score = 78;
+    reasons.push("last name matches, first initial matches");
+  } else if (lastExact) {
+    score = 62;
+    reasons.push("last name matches, first name does not");
+  } else if (pFirst === wFirst && lastLike > 0.5) {
+    score = 68;
+    reasons.push("first name matches, last name is similar — a name change or a typo");
+  } else {
+    const whole = similarity(`${pFirst} ${pLast}`, `${wFirst} ${wLast}`);
+    score = Math.round(whole * 60);
+    if (whole > 0.4) reasons.push(`names ${Math.round(whole * 100)}% alike`);
+  }
+  return { score, reasons };
+}
+
+/** Corroborating evidence. Adjusts the ranking; never creates a match. */
+function scoreCorroboration(par: ParPerson, ws: WorkstreamPerson): { delta: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let delta = 0;
+
+  const wsRate = ws.hourlyRate;
+  if (par.payRate != null && par.payRate > 0 && wsRate != null) {
+    const gap = Math.abs(par.payRate - wsRate);
+    if (gap < 0.005) {
+      delta += 6;
+      reasons.push(`same pay rate ($${wsRate.toFixed(2)})`);
+    } else if (gap <= 0.25) {
+      delta += 3;
+      reasons.push(`pay rates within 25¢ ($${par.payRate.toFixed(2)} PAR / $${wsRate.toFixed(2)} Workstream)`);
+    } else {
+      delta -= 4;
+      reasons.push(`pay rates differ ($${par.payRate.toFixed(2)} PAR / $${wsRate.toFixed(2)} Workstream)`);
+    }
+  }
+
+  const title = ws.title;
+  if (par.jobName && title) {
+    const s = similarity(normalizeName(par.jobName), normalizeName(title));
+    if (s > 0.6) {
+      delta += 2;
+      reasons.push(`same job (${title})`);
+    }
+  }
+
+  // Someone PAR has terminated who is still active in Workstream, or the other
+  // way round, is common and normal during the week either system lags. Worth
+  // saying out loud, not worth penalising.
+  if (par.terminated && !ws.terminationDate) {
+    reasons.push("terminated in PAR, still active in Workstream");
+  }
+
+  return { delta, reasons };
+}
+
+// ── Proposals ────────────────────────────────────────────────────────────────
+
+export type MatchCandidate = {
+  workstreamUuid: string;
+  name: string | null;
+  /** What they go by, when it differs from the legal first name. */
+  goesBy: string | null;
+  /**
+   * Workstream's lifecycle state: active, onboarding, offboarded, hired.
+   *
+   * All of them can be linked to. Shown because "offboarded" changes what a
+   * confirmation means — it is a statement about whose past shifts these were,
+   * not about who is working tomorrow.
+   */
+  status?: string;
+  /** Set when Workstream has this person at a different store than the one
+   *  being matched — a disagreement worth a human deciding. */
+  atOtherStore?: string | null;
+  title: string | null;
+  hourlyRate: number | null;
+  hiredDate: string | null;
+  terminationDate: string | null;
+  /** 0..100. A ranking aid for a human, not a threshold anything acts on. */
+  score: number;
+  reasons: string[];
+};
+
+export type LinkState =
+  /** Linked by an exact, unique name match. Nobody had to look at it. */
+  | "auto"
+  /** Linked because a person said so. */
+  | "confirmed"
+  /** A person recorded that there is no Workstream record for them. */
+  | "absent"
+  /**
+   * Terminated in PAR and never linked by hand — out of scope, not a task.
+   * Only people active in both systems are worth matching.
+   */
+  | "ignored"
+  /** Nobody has decided, and this module will not decide for them. */
+  | "review";
+
+export type LinkProposal = {
+  parStoreId: string;
+  parEmployeeId: string;
+  parName: string;
+  parJob: string | null;
+  parPayRate: number | null;
+  parTerminated: boolean;
+  /** Minutes worked in the activity window, and the last date worked. The
+   *  audit uses these to tell a live clock number from an abandoned one. */
+  parRecentMinutes: number;
+  parLastWorked: string | null;
+  state: LinkState;
+  /** The resolved counterpart, when there is one. */
+  workstreamUuid: string | null;
+  /** Ranked alternatives, best first. Present even once linked, for changing it. */
+  candidates: MatchCandidate[];
+  /**
+   * Whose spelling of the name this person goes by on the staffing screens.
+   *
+   * Only set once somebody has confirmed the link, since it is a choice between
+   * two records and there is only one until then.
+   */
+  nameSource?: "workstream" | "par";
+};
+
+export type StoreLinkReport = {
+  parStoreId: string;
+  proposals: LinkProposal[];
+  /**
+   * Workstream people at this location that no PAR employee resolved to.
+   * Usually a new hire PAR has not been told about, or an office role that
+   * never clocks in — but a long-lived entry here means a link is missing.
+   */
+  unlinkedWorkstream: MatchCandidate[];
+};
+
+/**
+ * Is this someone who actually works here right now?
+ *
+ * Workstream's lifecycle is hired → onboarding → active → offboarded, and only
+ * `active` passes. Stated as a positive test rather than "not offboarded"
+ * because the two are not the same question.
+ *
+ * This no longer decides who can be *matched* — every status can be, since a
+ * leaver's past shifts still want the title and rate they were worked at, and
+ * a new hire needs linking before their first shift. It decides two narrower
+ * things:
+ *
+ *   automatic linking   an unambiguous name is the entire basis of an
+ *                       automatic match, and 897 of these 1,432 records are
+ *                       leavers. Judging uniqueness over all of them would
+ *                       make hundreds of good matches ambiguous overnight.
+ *
+ *   the unlinked list   "in Workstream, not linked to anyone here" is a list
+ *                       of loose ends. Former staff are not loose ends, and
+ *                       several hundred of them would bury the handful that
+ *                       are.
+ *
+ * The `termination_date` check stays as a second guard because the two fields
+ * disagree: 897 records are offboarded and only 874 carry a date.
+ */
+export function isActiveEmployee(e: WorkstreamPerson): boolean {
+  return e.status === "active" && !e.terminationDate;
+}
+
+/**
+ * Sort weight for a candidate's employment status: lower comes first.
+ *
+ * Used only to break ties between equally-good name matches, so that a live
+ * employee outranks a leaver of the same name.
+ */
+function rank(c: MatchCandidate): number {
+  if (c.status === "active") return 0;
+  if (c.status === "onboarding" || c.status === "hired") return 1;
+  return 2;
+}
+
+/** Candidates below this are noise and are not offered at all. */
+const MIN_CANDIDATE_SCORE = 40;
+
+/** How many alternatives a reviewer is shown. */
+const MAX_CANDIDATES = 5;
+
+function toCandidate(ws: WorkstreamPerson, score = 0, reasons: string[] = []): MatchCandidate {
+  return {
+    workstreamUuid: ws.uuid,
+    name: fullName(ws),
+    goesBy: goesByName(ws),
+    // Carried so the screen can say so. Linking a PAR record to somebody who
+    // has left is legitimate — their past shifts still want a title and a rate
+    // — but it is never something to do without noticing.
+    status: ws.status,
+    title: ws.title,
+    hourlyRate: ws.hourlyRate,
+    hiredDate: ws.hiredDate ?? ws.startDate ?? null,
+    terminationDate: ws.terminationDate ?? null,
+    atOtherStore: ws.atOtherStore ?? null,
+    score,
+    // Where the record lives at another store, that leads the reasons: it is
+    // the first thing a reviewer needs to weigh, not a footnote. One of the two
+    // systems has the wrong store for this person.
+    reasons: ws.atOtherStore
+      ? [`Workstream has them at ${ws.atOtherStore}`, ...reasons]
+      : reasons,
+  };
+}
+
+/**
+ * Resolve one store's PAR roster against its Workstream roster.
+ *
+ * The order of precedence is the whole design:
+ *
+ *   1. a human decision, if there is one
+ *   2. an exact, unique name match on both sides
+ *   3. nothing — it goes to review with candidates
+ *
+ * Rule 2 is deliberately strict about *unique*. Two people called Chris Miller
+ * at the same store means neither is auto-linked, even though both names match
+ * exactly, because "matches exactly" and "identifies a person" are not the same
+ * claim. That case is exactly the one a reviewer needs to see.
+ */
+export function proposeStoreLinks(input: {
+  parStoreId: string;
+  parEmployees: ParPerson[];
+  workstreamEmployees: WorkstreamPerson[];
+  /**
+   * Active Workstream people who are NOT at this store, each carrying the
+   * store Workstream does have them at.
+   *
+   * Offered only on an exact first+last match, and never auto-linked. It exists
+   * because a transfer that one system knows about and the other does not made
+   * somebody invisible: Amethyst Lindsey logged 107 hours at Springfield in PAR
+   * while her only live Workstream record sat at White House, so she appeared
+   * in the queue with no candidate at all and no way to see why.
+   */
+  elsewhere?: WorkstreamPerson[];
+  decisions: LinkDecision[];
+}): StoreLinkReport {
+  const { parStoreId, parEmployees, workstreamEmployees } = input;
+  const elsewhere = input.elsewhere ?? [];
+
+  const decisions = input.decisions.filter((d) => d.parStoreId === parStoreId);
+  const confirmed = new Map<string, string>();
+  const nameSources = new Map<string, "workstream" | "par">();
+  const absent = new Set<string>();
+  const rejected = new Set<string>();
+  for (const d of decisions) {
+    if (d.status === "confirmed") {
+      confirmed.set(d.parEmployeeId, d.workstreamUuid);
+      nameSources.set(d.parEmployeeId, d.nameSource === "par" ? "par" : "workstream");
+    }
+    else if (d.status === "absent") absent.add(d.parEmployeeId);
+    else if (d.status === "rejected") rejected.add(`${d.parEmployeeId} ${d.workstreamUuid}`);
+  }
+
+  // Every Workstream record, terminated included — a link confirmed while
+  // somebody worked here has to keep resolving after they leave, or their past
+  // hours would quietly lose the title and rate they were worked at.
+  //
+  // People assigned to other stores are in here too, so a link somebody made
+  // by hand across a store boundary still resolves. It has to: the name search
+  // is estate-wide on purpose, and a transfer Workstream has not caught up with
+  // is one of the commonest reasons two records drifted apart. This store's own
+  // copy wins where a uuid appears in both.
+  const wsByUuid = new Map([...elsewhere, ...workstreamEmployees].map((w) => [w.uuid, w]));
+
+  /**
+   * Who is available to be matched: people Workstream currently calls active.
+   *
+   * Of 1,332 records, 471 are active — the rest have left, or are still being
+   * onboarded. Including the leavers buried every real candidate under years of
+   * former staff; including the onboarding ones put people in the list who
+   * cannot be found on Workstream's employee screen at all.
+   *
+   * Restricting the pool does more than hide noise. A name shared only with a
+   * leaver or a pending hire is not ambiguous, and treating it as ambiguous was
+   * pushing people who should have linked automatically into the queue instead.
+   */
+  /*
+   * Everyone Workstream holds for this store is a possible answer, whatever
+   * their status. A PAR record can legitimately belong to somebody onboarding
+   * (hired, not yet clocked in) or offboarded (left, but their past shifts
+   * still want the title and rate they were worked at).
+   */
+  const matchable = workstreamEmployees;
+
+  /*
+   * ...but only people currently employed can be linked *automatically*.
+   *
+   * Uniqueness is the whole basis of the automatic match: one Workstream
+   * person of that name and we know who this is. Judge that over everybody and
+   * a single same-named leaver makes the name ambiguous again — which would
+   * silently un-link hundreds of people who match perfectly well today and
+   * dump them into the queue. Offboarded records are 897 of the 1,432 here, so
+   * that is not a rare collision.
+   *
+   * They are still offered as candidates below. The difference is that
+   * choosing one is a person's decision rather than the matcher's.
+   */
+  const currentStaff = workstreamEmployees.filter(isActiveEmployee);
+
+  const wsByKey = new Map<string, WorkstreamPerson[]>();
+  for (const w of currentStaff) {
+    const k = nameKey(w.firstName, w.lastName);
+    if (!k) continue;
+    const list = wsByKey.get(k) ?? [];
+    list.push(w);
+    wsByKey.set(k, list);
+  }
+
+
+  const proposals: LinkProposal[] = [];
+  const resolved = new Set<string>();
+
+  for (const p of parEmployees) {
+    const base = {
+      parStoreId,
+      parEmployeeId: p.id,
+      parName: [p.firstName, p.lastName].filter(Boolean).join(" ").trim() || p.displayName,
+      parJob: p.jobName ?? null,
+      parPayRate: p.payRate ?? null,
+      parTerminated: p.terminated,
+      parRecentMinutes: p.recentMinutes ?? 0,
+      parLastWorked: p.lastWorked ?? null,
+    };
+
+    // This store's people, plus anyone elsewhere whose name matches exactly.
+    // The estate-wide pool is restricted to exact matches deliberately:
+    // fuzzy-scoring four hundred people from other stores would bury the real
+    // answer under near-namesakes who plainly work somewhere else.
+    const parKey = nameKey(p.firstName, p.lastName);
+    const crossStore = parKey
+      ? elsewhere.filter((w) => nameKey(w.firstName, w.lastName) === parKey)
+      : [];
+
+    const ranked = [...matchable, ...crossStore]
+      .filter((w) => !rejected.has(`${p.id} ${w.uuid}`))
+      .map((w) => {
+        const name = scoreNames(p, w);
+        const extra = scoreCorroboration(p, w);
+        return toCandidate(
+          w,
+          Math.max(0, Math.min(100, name.score + extra.delta)),
+          [...name.reasons, ...extra.reasons],
+        );
+      })
+      .filter((c) => c.score >= MIN_CANDIDATE_SCORE)
+      /*
+       * Score first, then current staff ahead of leavers.
+       *
+       * Two records of the same name score identically, and when one of them
+       * is a rehire the live record is nearly always the answer. Only a
+       * tie-break — it never promotes a worse name match — but it keeps the
+       * obvious candidate at the top now that leavers are in the list.
+       */
+      .sort((a, b) => b.score - a.score || rank(a) - rank(b))
+      .slice(0, MAX_CANDIDATES);
+
+    const decided = confirmed.get(p.id);
+    if (decided && wsByUuid.has(decided)) {
+      resolved.add(decided);
+      /*
+       * The confirmed person is always in the list, even when nothing about
+       * the two names would have suggested them.
+       *
+       * That is the name-change case: somebody searched Workstream by hand and
+       * linked a record the scorer never offered, so it is absent from
+       * `ranked` and the screen would have nothing to show but a uuid. Scored
+       * zero deliberately — a human decision does not need a number, and any
+       * number here would be a fiction.
+       */
+      const withDecided = ranked.some((c) => c.workstreamUuid === decided)
+        ? ranked
+        : [toCandidate(wsByUuid.get(decided)!, 0, ["linked by hand"]), ...ranked];
+      proposals.push({
+        ...base,
+        state: "confirmed",
+        workstreamUuid: decided,
+        candidates: withDecided,
+        nameSource: nameSources.get(p.id) ?? "workstream",
+      });
+      continue;
+    }
+
+    /*
+     * Out of scope: terminated in PAR, or not working any more.
+     *
+     * "Not working any more" is no recorded hours in the activity window.
+     * PAR records are rarely terminated when somebody leaves, so a roster
+     * carries years of people who simply stopped coming — 106 of 151
+     * outstanding reviews had not clocked a minute in four weeks, and 99 of
+     * those had no Workstream counterpart either, because there is nobody to
+     * have one. They are old records, not a backlog.
+     *
+     * A rolling window rather than a fixed month, so somebody who starts
+     * picking up shifts again reappears on their own.
+     *
+     * Kept in the list rather than dropped, so the store's counts still add up
+     * and a link confirmed earlier still resolves.
+     */
+    if (p.terminated || p.recentMinutes === 0) {
+      proposals.push({ ...base, state: "ignored", workstreamUuid: null, candidates: [] });
+      continue;
+    }
+
+    if (decided) {
+      // Confirmed against somebody who is no longer in this location's roster —
+      // a transfer, or a record Workstream deleted. Say so rather than quietly
+      // dropping the link.
+      proposals.push({ ...base, state: "review", workstreamUuid: null, candidates: ranked });
+      continue;
+    }
+    if (absent.has(p.id)) {
+      proposals.push({ ...base, state: "absent", workstreamUuid: null, candidates: ranked });
+      continue;
+    }
+
+    const key = nameKey(p.firstName, p.lastName);
+    /*
+     * Candidates of exactly this name, from this store and from every other.
+     *
+     * Workstream's assigned location is the baseline, not a condition of the
+     * match: a person working a store they are not assigned to is a fact to
+     * report, not a reason to leave them unlinked. So an exact name match
+     * elsewhere links like any other, and the mismatch is flagged downstream.
+     *
+     * Uniqueness is still judged over the combined pool. Two active Workstream
+     * people of the same name — wherever they are assigned — means we cannot
+     * say which human this is, and that still goes to a person.
+     */
+    const exact = key
+      ? [...(wsByKey.get(key) ?? []), ...crossStore]
+      : [];
+    /*
+     * One Workstream person of that name is the whole requirement.
+     *
+     * The Workstream side must be unique, or we do not know which human we are
+     * pointing at. The PAR side need not be: a store routinely carries the same
+     * person twice -- an old clock number and a new one -- and both are them.
+     * Linking both to the one Workstream record means the position and rate
+     * appear whichever number they punched in under, which is the outcome
+     * anybody actually wants.
+     *
+     * Requiring PAR to be unique as well held back 28 otherwise perfect matches
+     * across the estate, every one a store carrying two live records for the
+     * same name -- one working shifts, one never used.
+     *
+     * A rejection still blocks it: that is somebody saying "these two are not
+     * the same person", which outranks any amount of name agreement.
+     */
+    const unique =
+      key.length > 0 &&
+      exact.length === 1 &&
+      !rejected.has(`${p.id} ${exact[0].uuid}`);
+
+    if (unique) {
+      resolved.add(exact[0].uuid);
+      proposals.push({ ...base, state: "auto", workstreamUuid: exact[0].uuid, candidates: ranked });
+    } else {
+      proposals.push({ ...base, state: "review", workstreamUuid: null, candidates: ranked });
+    }
+  }
+
+  // Leavers are not "unlinked", they are gone. Listing them here would bury the
+  // one case this section exists to surface — a current employee Workstream
+  // knows about and PAR does not — under several hundred former staff. So this
+  // stays on the current-staff pool even though leavers are now matchable:
+  // being available to link to is not the same as being a loose end.
+  const unlinkedWorkstream = currentStaff
+    .filter((w) => !resolved.has(w.uuid))
+    .map((w) => toCandidate(w));
+
+  return { parStoreId, proposals, unlinkedWorkstream };
+}
+
+/**
+ * How much of a store is joined, for a banner that says whether to trust a
+ * column.
+ *
+ * Counted over people who are active in both systems — `total` deliberately
+ * excludes the ignored leavers, because a coverage figure of "34 of 199" when
+ * 129 of those 199 left the company reads as a broken integration rather than
+ * a nearly-finished one.
+ */
+export function linkCoverage(report: StoreLinkReport): {
+  total: number;
+  linked: number;
+  review: number;
+  absent: number;
+  ignored: number;
+} {
+  let linked = 0;
+  let review = 0;
+  let absent = 0;
+  let ignored = 0;
+  for (const p of report.proposals) {
+    if (p.state === "auto" || p.state === "confirmed") linked++;
+    else if (p.state === "absent") absent++;
+    else if (p.state === "ignored") ignored++;
+    else review++;
+  }
+  return { total: linked + review + absent, linked, review, absent, ignored };
+}

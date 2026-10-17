@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/workstream-sync",
+      "schedule": "0 11 * * *"
+    },
+    {
       "path": "/api/cron/par-rollup",
       "schedule": "0 12 * * *"
     },

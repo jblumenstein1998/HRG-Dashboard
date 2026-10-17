@@ -86,6 +86,20 @@ export async function requireAdmin(): Promise<Viewer> {
   return viewer;
 }
 
+/**
+ * Guard for the screens above admin.
+ *
+ * Staffing is the one today: it shows every employee's pay rate against their
+ * name across the whole estate, which is a different disclosure from the user
+ * register an administrator already manages.
+ */
+export async function requireSuperAdmin(): Promise<Viewer> {
+  const viewer = await getViewer();
+  if (!viewer) redirect("/login");
+  if (!viewer.position.isSuperAdmin) redirect(landingTab(viewer.position.tabs));
+  return viewer;
+}
+
 /** For API routes: the viewer, or null — no redirect, so callers can 401. */
 export async function apiViewer(): Promise<Viewer | null> {
   return getViewer();
