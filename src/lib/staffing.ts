@@ -30,7 +30,6 @@ import { PERIODS } from "./fiscal";
 import { shiftWorkedMinutesInWindow } from "./parRollup";
 import {
   PAR_LOCATIONS,
-  getShifts,
   getShiftsLive,
   getShiftsRecent,
   getBusinessHours,
@@ -42,6 +41,7 @@ import {
   type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
+import { getShiftsHistory } from "./parShiftStore";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -300,7 +300,7 @@ async function rosterForStore(
     const settledBefore = shiftLocalDate(zonedParts(new Date(), timeZone).date, -1);
     const readShifts = (d: string) =>
       d < settledBefore
-        ? getShifts(loc.storeId, d)
+        ? getShiftsHistory(loc.storeId, d)
         : moment.kind === "instant" || fresh
           ? getShiftsLive(loc.storeId, d)
           : getShiftsRecent(loc.storeId, d);
@@ -317,7 +317,7 @@ async function rosterForStore(
       linkedRosterOrEmpty(loc.storeId),
       readShifts(localDate),
       readShifts(previousDate),
-      ...otherWeekDays.map((d) => getShifts(loc.storeId, d)),
+      ...otherWeekDays.map((d) => getShiftsHistory(loc.storeId, d)),
     ]);
     const trailingByDate = new Map(otherWeekDays.map((d, i) => [d, trailing[i]]));
 
@@ -718,7 +718,7 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
         const weekRows = await Promise.all(
           weeks.map(async (w): Promise<StoreWeekHours> => {
             const days = await Promise.all(
-              eachDate(w.start, w.end).map((d) => getShifts(loc.storeId, d)),
+              eachDate(w.start, w.end).map((d) => getShiftsHistory(loc.storeId, d)),
             );
 
             const byEmployee = new Map<string, EmployeeWeekHours>();
@@ -995,7 +995,7 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
         const [employees, jobs, ...days] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
-          ...dates.map((d) => getShifts(loc.storeId, d)),
+          ...dates.map((d) => getShiftsHistory(loc.storeId, d)),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
         const jobById = new Map(jobs.map((j) => [j.id, j]));
@@ -1085,7 +1085,7 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
       try {
         const [hours, ...days] = await Promise.all([
           getBusinessHours(loc.storeId),
-          ...dates.map((d) => getShifts(loc.storeId, d)),
+          ...dates.map((d) => getShiftsHistory(loc.storeId, d)),
         ]);
         const hoursByDay = new Map(hours.map((h) => [h.dayOfWeek, h]));
 

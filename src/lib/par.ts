@@ -300,57 +300,121 @@ function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
   });
 }
 
-function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
+/**
+ * A shift exactly as PAR records it — every field GetShifts returns, with
+ * times left as PAR's UTC instants.
+ *
+ * This is what parShiftStore.ts saves, so nothing the response carries is lost
+ * to the conversion into PARShift. Parsing goes response → record → PARShift
+ * whether the response came from PAR a moment ago or from the database, which
+ * is what keeps the two sources from ever disagreeing about a shift.
+ */
+export type PARShiftRecord = {
+  /** PAR's own shift id (a GUID) — stable across edits. */
+  id: string;
+  number: number | null;
+  businessDate: string | null;
+  clockOutBusinessDate: string | null;
+  employeeId: string | null;
+  jobId: string | null;
+  startAt: string | null;
+  /** Null while still clocked in (PAR's EndTime is the 0001-01-01 sentinel). */
+  endAt: string | null;
+  minutesWorked: number;
+  regularMinutes: number;
+  overtimeMinutes: number;
+  extendedMinutes: number;
+  payRate: number | null;
+  declaredTips: number | null;
+  modifiedAt: string | null;
+  breaks: { number: number | null; startAt: string | null; endAt: string | null; minutes: number | null; isPaid: boolean | null }[];
+};
+
+const num = (v: string | null): number | null => {
+  const n = Number.parseFloat(v ?? "");
+  return Number.isFinite(n) ? n : null;
+};
+const dateTimeOf = (xml: string, tag: string): string | null => tagVal(tagVal(xml, tag) ?? "", "DateTime");
+const dateOnly = (v: string | null): string | null => (v ? v.slice(0, 10) : null);
+
+export function parseShiftRecords(xml: string): PARShiftRecord[] {
   return allTags(xml, "Shift").map(s => {
     // Break StartTime/EndTime must be read from the raw (unstripped) shift —
     // stripTag below removes this block before extracting the shift's own
     // scalar fields, same nested-array reasoning as Order.Entries above.
     const breaksXml = tagVal(s, "Breaks") ?? "";
-
     const top = stripTag(s, "Breaks"); // breaks carry their own StartTime/EndTime
-    const jobId = tagVal(top, "JobId");
-    const employeeId = tagVal(top, "EmployeeId");
-    const rawRate = Number.parseFloat(tagVal(top, "PayRate") ?? "");
-    const payRate = Number.isFinite(rawRate) ? rawRate : null;
-    const regularMinutes = parseInt(tagVal(top, "RegularMinutesWorked") ?? "0") || 0;
-    const overtimeMinutes = parseInt(tagVal(top, "OvertimeMinutesWorked") ?? "0") || 0;
-    const minutesWorked = parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0;
-    const startDt = tagVal(tagVal(top, "StartTime") ?? "", "DateTime");
-    const endDt   = tagVal(tagVal(top, "EndTime")   ?? "", "DateTime");
-    // Sentinel "no value" date PAR uses for an EndTime that hasn't happened yet.
-    const isOpen  = !endDt || endDt.startsWith("0001-01-01");
 
-    const startDate = startDt ? new Date(startDt) : null;
-    const startMinutes = startDate ? zonedMinutesOfDay(startDate, timeZone) : 0;
-
-    // Every other minute-of-day value on this shift (break times, end time) is
-    // derived as startMinutes + elapsed real minutes since start, NOT by
-    // independently re-deriving wall-clock hour/minute from each timestamp.
-    // A closing shift routinely ends after midnight (e.g. clocks out 2:15 AM
-    // the next calendar day) — re-parsing that end timestamp's hour/minute in
-    // isolation gives "2:15" = 135 minutes, which is *less* than a startMinutes
-    // like 785 (1:05 PM), silently producing a negative/zero overlap against
-    // every hour bucket for the rest of that shift. Anchoring everything to
-    // elapsed time from the (correctly zoned) start avoids that entirely —
-    // the result can legitimately exceed 1440 for a post-midnight end/break,
-    // which shiftWorkedMinutesInWindow (parRollup.ts) accounts for.
-    const elapsedMinutesSinceStart = (dt: string | null): number | null => {
-      if (!dt || !startDate) return null;
-      return startMinutes + (new Date(dt).getTime() - startDate.getTime()) / 60000;
-    };
-
-    const breaks = allTags(breaksXml, "Break").flatMap(b => {
-      const bStart = elapsedMinutesSinceStart(tagVal(tagVal(b, "StartTime") ?? "", "DateTime"));
-      const bEnd = elapsedMinutesSinceStart(tagVal(tagVal(b, "EndTime") ?? "", "DateTime"));
-      return bStart != null && bEnd != null ? [{ startMinutes: bStart, endMinutes: bEnd }] : [];
-    });
-
-    const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
+    const endDt = dateTimeOf(top, "EndTime");
+    const paid = (b: string) => tagVal(b, "IsPaid");
     return {
-      startMinutes, endMinutes, minutesWorked, jobId, employeeId, payRate,
-      regularMinutes, overtimeMinutes, isOpen, breaks,
+      id: tagVal(top, "Id") ?? "",
+      number: num(tagVal(top, "Number")),
+      businessDate: dateOnly(tagVal(top, "BusinessDate")),
+      clockOutBusinessDate: dateOnly(tagVal(top, "ClockOutBusinessDate")),
+      employeeId: tagVal(top, "EmployeeId"),
+      jobId: tagVal(top, "JobId"),
+      startAt: dateTimeOf(top, "StartTime"),
+      // Sentinel "no value" date PAR uses for an EndTime that hasn't happened yet.
+      endAt: !endDt || endDt.startsWith("0001-01-01") ? null : endDt,
+      minutesWorked: parseInt(tagVal(top, "MinutesWorked") ?? "0") || 0,
+      regularMinutes: parseInt(tagVal(top, "RegularMinutesWorked") ?? "0") || 0,
+      overtimeMinutes: parseInt(tagVal(top, "OvertimeMinutesWorked") ?? "0") || 0,
+      extendedMinutes: parseInt(tagVal(top, "ExtendedMinutesWorked") ?? "0") || 0,
+      payRate: num(tagVal(top, "PayRate")),
+      declaredTips: num(tagVal(top, "DeclaredTips")),
+      modifiedAt: dateTimeOf(top, "ModifiedTime"),
+      breaks: allTags(breaksXml, "Break").map(b => ({
+        number: num(tagVal(b, "Number")),
+        startAt: dateTimeOf(b, "StartTime"),
+        endAt: dateTimeOf(b, "EndTime"),
+        minutes: num(tagVal(b, "Minutes")),
+        isPaid: paid(b) == null ? null : paid(b) === "true",
+      })),
     };
   });
+}
+
+function parseShiftsXml(xml: string, timeZone: string): PARShift[] {
+  return parseShiftRecords(xml).map(r => shiftFromRecord(r, timeZone));
+}
+
+/** A stored or freshly parsed record, as the app reads shifts. */
+export function shiftFromRecord(r: PARShiftRecord, timeZone: string): PARShift {
+  const { jobId, employeeId, payRate, regularMinutes, overtimeMinutes, minutesWorked } = r;
+  const endDt = r.endAt;
+  const isOpen = endDt === null;
+
+  const startDate = r.startAt ? new Date(r.startAt) : null;
+  const startMinutes = startDate ? zonedMinutesOfDay(startDate, timeZone) : 0;
+
+  // Every other minute-of-day value on this shift (break times, end time) is
+  // derived as startMinutes + elapsed real minutes since start, NOT by
+  // independently re-deriving wall-clock hour/minute from each timestamp.
+  // A closing shift routinely ends after midnight (e.g. clocks out 2:15 AM
+  // the next calendar day) — re-parsing that end timestamp's hour/minute in
+  // isolation gives "2:15" = 135 minutes, which is *less* than a startMinutes
+  // like 785 (1:05 PM), silently producing a negative/zero overlap against
+  // every hour bucket for the rest of that shift. Anchoring everything to
+  // elapsed time from the (correctly zoned) start avoids that entirely —
+  // the result can legitimately exceed 1440 for a post-midnight end/break,
+  // which shiftWorkedMinutesInWindow (parRollup.ts) accounts for.
+  const elapsedMinutesSinceStart = (dt: string | null): number | null => {
+    if (!dt || !startDate) return null;
+    return startMinutes + (new Date(dt).getTime() - startDate.getTime()) / 60000;
+  };
+
+  const breaks = r.breaks.flatMap(b => {
+    const bStart = elapsedMinutesSinceStart(b.startAt);
+    const bEnd = elapsedMinutesSinceStart(b.endAt);
+    return bStart != null && bEnd != null ? [{ startMinutes: bStart, endMinutes: bEnd }] : [];
+  });
+
+  const endMinutes = isOpen ? startMinutes + minutesWorked : (elapsedMinutesSinceStart(endDt) ?? startMinutes + minutesWorked);
+  return {
+    startMinutes, endMinutes, minutesWorked, jobId, employeeId, payRate,
+    regularMinutes, overtimeMinutes, isOpen, breaks,
+  };
 }
 
 // ── Fetch functions ───────────────────────────────────────────────────────────
@@ -507,7 +571,7 @@ export const getJobs = unstable_cache(
   { revalidate: 60 * 60 * 24, tags: ["par-data"] },
 );
 
-async function nonLaborJobIds(storeId: string): Promise<Set<string>> {
+export async function nonLaborJobIds(storeId: string): Promise<Set<string>> {
   try {
     const jobs = await getJobs(storeId);
     // An empty or unparseable response would exclude nothing and quietly
@@ -521,8 +585,24 @@ async function nonLaborJobIds(storeId: string): Promise<Set<string>> {
 }
 
 /** Drops the shifts PAR itself leaves out of Labor Hours. */
-function withoutNonLaborJobs(shifts: PARShift[], excluded: Set<string>): PARShift[] {
+export function withoutNonLaborJobs(shifts: PARShift[], excluded: Set<string>): PARShift[] {
   return shifts.filter(s => !s.jobId || !excluded.has(s.jobId));
+}
+
+/**
+ * PAR's whole GetShifts response for one store-day, uncached and unfiltered.
+ *
+ * For parShiftStore.ts, which saves every shift — non-labor jobs included,
+ * since that filter is applied on read and a job's report flag can change — and
+ * keeps the response itself as insurance against fields nobody parses yet.
+ */
+export async function getShiftsXml(storeId: string, businessDate: string): Promise<string> {
+  return soapPost(
+    "Labor2.svc",
+    "http://www.brinksoftware.com/webservices/labor/v2/ILaborWebService2/GetShifts",
+    `<GetShifts xmlns="http://www.brinksoftware.com/webservices/labor/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetShifts>`,
+    getLocationToken(storeId),
+  );
 }
 
 export const getShifts = unstable_cache(
