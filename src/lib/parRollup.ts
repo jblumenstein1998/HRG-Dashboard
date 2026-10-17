@@ -1,5 +1,6 @@
 import { sql } from "@/lib/db";
 import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange, type PARShift } from "@/lib/par";
+import { businessDateISO } from "@/lib/businessDay";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
 // Used both to write the rollup (backfillStoreDay, always cached — a settled
@@ -271,15 +272,9 @@ export async function rerollRange(start: string, end: string, dryRun = false): P
 // totals for every prior day in range — so historical days stay instant and
 // only today ever costs a live call.
 
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
 export function todayCentralISO(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
+  return businessDateISO();
 }
 
 function dayBefore(iso: string): string {

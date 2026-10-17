@@ -73,6 +73,7 @@ const NAMES = {
   "36001": "Springfield", "42601": "White House", "56301": "Brentwood", "61401": "Spring Hill",
   "28901": "Columbia", "57001": "College", "57002": "Hampton", "57003": "Oyster",
   "57004": "Chesapeake", "57005": "Jefferson", "57006": "Hillcrest", "57007": "Beach",
+  "75075": "Portland",
 };
 
 const files = fs.readdirSync(dir).filter(f => /\.pdf$/i.test(f) && /sales summary/i.test(f));

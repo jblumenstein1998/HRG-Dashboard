@@ -2,6 +2,7 @@ import { PAR_LOCATIONS, getOrders, getOrdersLive, getShiftsLive, STATE_TIMEZONE,
 import { getPriorYearRange, PERIODS, type RangeKey } from "@/lib/fiscal";
 import { getTotalsForRange } from "@/lib/parRollup";
 import { resolveDateBounds } from "@/lib/tools/dateRange";
+import { businessDateISO, businessMinutes, businessParts, isoOf, zonedParts } from "@/lib/businessDay";
 
 // One store-level sales snapshot (net sales / transactions / average check /
 // labor) for a selectable range, each figure paired with the same range shifted
@@ -29,39 +30,33 @@ import { resolveDateBounds } from "@/lib/tools/dateRange";
 // original implementation) cut VA stores' last-year comparison off an hour
 // early: if it's 2pm Eastern at Hampton, Central "now" is only 1pm.
 
-function zonedParts(timeZone: string): { y: number; m: number; d: number; hh: number; mm: number } {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return { y: get("year"), m: get("month"), d: get("day"), hh: get("hour"), mm: get("minute") };
+// Which business day it is — and the 2:15 AM boundary behind it — comes from
+// lib/businessDay.ts, shared with every other tab. The date is one Central
+// reference; only the intraday cutoff used to slice last year's comparison
+// needs to be state-aware.
+const todayISOCentral = () => businessDateISO();
+
+/**
+ * Where last year's same-weekday orders get cut off, in minutes since the 2:15 AM
+ * business-day start — or null for the whole day.
+ *
+ * Null once a store's own business day has ended but the shared Central date
+ * hasn't rolled: for the hour between 2:15 AM Eastern and 2:15 AM Central, a VA
+ * store's day is over while "today" is still that day. Cutting by the clock
+ * there would keep only last year's first few minutes and read $0 against a
+ * full day, so the honest comparison is the whole of both days.
+ */
+function lastYearCutoffMinutes(state: PARLocation["state"], businessDate: string): number | null {
+  const p = businessParts(STATE_TIMEZONE[state]);
+  return isoOf(p) > businessDate ? null : p.hh * 60 + p.mm;
 }
 
-// The business-date boundary (which calendar day counts as "today") stays a
-// single Central reference, same convention as the rest of the app (e.g.
-// todayCentralISO in parRollup.ts) — only the intraday minute-of-day cutoff
-// used to slice last year's comparison needs to be state-aware.
-function todayISOCentral(): string {
-  const { y, m, d } = zonedParts("America/Chicago");
-  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-}
-
-function nowMinutesForState(state: PARLocation["state"]): number {
-  const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
-  return hh * 60 + mm;
-}
-
-function nowLabelForState(state: PARLocation["state"]): string {
+function nowLabelForState(state: PARLocation["state"], businessDate: string): string {
+  const tzAbbr = state === "TN" ? "CT" : "ET";
+  if (lastYearCutoffMinutes(state, businessDate) === null) return `close ${tzAbbr}`;
   const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
   const period = hh < 12 ? "AM" : "PM";
   const h12 = hh % 12 === 0 ? 12 : hh % 12;
-  const tzAbbr = state === "TN" ? "CT" : "ET";
   return `${h12}:${String(mm).padStart(2, "0")} ${period} ${tzAbbr}`;
 }
 
@@ -125,7 +120,8 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   let netSales = 0;
   let transactions = 0;
   for (const o of orders) {
-    if (cutoffMinutes != null && (o.openedMinutes == null || o.openedMinutes > cutoffMinutes)) continue;
+    // Both sides in minutes since 2:15 AM, so a 1 AM order sorts after 11 PM.
+    if (cutoffMinutes != null && (o.openedMinutes == null || businessMinutes(o.openedMinutes) > cutoffMinutes)) continue;
     netSales += o.netSales;
     if (o.isCountedOrder) transactions += 1;
   }
@@ -185,8 +181,8 @@ async function liveTodayStore(loc: PARLocation, todayDate: string, lastYearDate:
   const ty = summarize(todayOrders, null);
   // Cut last year's same-weekday orders off at the same time-of-day as
   // "now" — but "now" in this store's own local time, not blanket Central
-  // (see nowMinutesForState's doc comment above).
-  const ly = summarize(lastYearOrders, nowMinutesForState(loc.state));
+  // (see the timezone note above and lastYearCutoffMinutes).
+  const ly = summarize(lastYearOrders, lastYearCutoffMinutes(loc.state, todayDate));
   return {
     storeId: loc.storeId,
     name: loc.name,
@@ -251,8 +247,8 @@ export async function getSalesSnapshot(range: SnapshotRange = DEFAULT_SNAPSHOT_R
     priorStartDate: prior.start,
     priorEndDate: prior.end,
     live,
-    asOfLabelCT: live ? nowLabelForState("TN") : "",
-    asOfLabelET: live ? nowLabelForState("VA") : "",
+    asOfLabelCT: live ? nowLabelForState("TN", start) : "",
+    asOfLabelET: live ? nowLabelForState("VA", start) : "",
   };
 
   // WTD on a Monday: the window starts today and ends yesterday, i.e. it holds

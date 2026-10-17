@@ -14,7 +14,7 @@ export const COMBINED_KEY = "COMBINED";
 /** Higher is better for every metric except this one. */
 export const LOWER_IS_BETTER = /experienced problem/i;
 
-export const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia"];
+export const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
 export const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 export const STORE_LABELS: Record<string, string> = {
@@ -23,6 +23,7 @@ export const STORE_LABELS: Record<string, string> = {
   "42601": "White House",
   "56301": "Brentwood",
   "61401": "Spring Hill",
+  "75075": "Portland",
   "57001": "College",
   "57002": "Hampton",
   "57003": "Oyster",
@@ -41,6 +42,7 @@ export const STORE_COLOR: Record<string, string> = {
   "White House":    "#16a34a",
   "Brentwood":      "#d97706",
   "Spring Hill":    "#7c3aed",
+  "Portland":       "#be123c",
   "Jefferson":      "#0891b2",
   "Oyster":         "#db2777",
   "Hampton":        "#65a30d",

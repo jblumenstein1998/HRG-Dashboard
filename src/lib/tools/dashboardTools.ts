@@ -29,7 +29,7 @@ const rangeKeyDescription =
   "(a specific full fiscal period, e.g. \"p4\" for Period 4). Omit if using startDate/endDate instead.";
 
 const storeNameSchema = z.string().describe(
-  "Store name, e.g. \"Hillcrest\", \"Brentwood\". Matches HRG's 12 Zaxby's locations across TN and VA."
+  "Store name, e.g. \"Hillcrest\", \"Brentwood\". Matches HRG's Zaxby's locations across TN and VA."
 );
 const dateRangeSchema = {
   rangeKey: z.string().optional().describe(rangeKeyDescription),
@@ -222,7 +222,7 @@ export const queryMetrics = tool({
       "Which metrics to return, in the order they should appear as columns."
     ),
     stores: z.array(storeNameSchema).optional().describe(
-      "Limit to these stores. Omit for all 12."
+      "Limit to these stores. Omit for all stores."
     ),
     groupBy: z.enum(["store", "state", "day", "week", "total"]).optional().describe(
       "One row per store (default), per state, per day, per Monday-start week, or a single combined row."

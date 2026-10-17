@@ -1,14 +1,9 @@
 import { resolveRange, type RangeKey } from "@/lib/fiscal";
+import { businessDateISO } from "@/lib/businessDay";
 
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
 export function todayCentralISO(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
+  return businessDateISO();
 }
 
 function dayBefore(iso: string): string {

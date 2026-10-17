@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { fetchPeriodHistory, fetchAvailableDates } from "@/lib/netchef";
 import { PERIODS } from "@/lib/fiscal";
+import { businessDateISO } from "@/lib/businessDay";
 
 // FY2025 fiscal periods (4-4-5 calendar, starts Dec 30 2024)
 const FY2025_PERIODS = [
@@ -31,14 +32,8 @@ function periodWeekLabel(weekStartISO: string): string {
   return `P${period.period}-W${weekNum}`;
 }
 
-function todayCST(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date());
-  const g = (t: string) => String(parts.find(p => p.type === t)?.value ?? "");
-  return `${g("year")}-${g("month")}-${g("day")}`;
-}
+// Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts).
+const todayCST = (): string => businessDateISO();
 
 export async function GET() {
   try {

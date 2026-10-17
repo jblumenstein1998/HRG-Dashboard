@@ -9,9 +9,9 @@ import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 
 // Store order matches lib/stores.ts, so this tab reads in the same sequence as
-// the rest of the dashboard. Jolt runs at seven of the twelve stores; the other
+// the rest of the dashboard. Jolt runs at eight of the thirteen stores; the other
 // five still get a section, so the page is a roster of HRG rather than of Jolt.
-const TN_STORES = ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield"];
+const TN_STORES = ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield", "Portland"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 // Jolt has no URL for a single list instance — /review/review/review?id=… just
@@ -21,7 +21,7 @@ const JOLT_BROWSE_LISTS = "https://app.joltup.com/review/review/listResultsRepor
 
 /** Stores keep their own clock: TN is Central, VA is Eastern. */
 const STORE_TZ: Record<string, string> = {};
-for (const s of ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield"]) {
+for (const s of ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield", "Portland"]) {
   STORE_TZ[s] = "America/Chicago";
 }
 for (const s of ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"]) {

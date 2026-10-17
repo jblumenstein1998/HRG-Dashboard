@@ -16,6 +16,7 @@ import { SUPERSET_BASE, SUPERSET_DASHBOARD_ID, DaypartRow, StoreRow, parseMMSS }
 import { FISCAL_YEAR_START, PERIODS, currentPeriod } from "./fiscal";
 import { ensureSession, invalidateSession } from "./supersetSession";
 import { sql } from "./db";
+import { businessDate } from "./businessDay";
 
 const CHART_ID = 93;
 const DATASOURCE_ID = 18;
@@ -98,17 +99,8 @@ function fmt(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Today in America/Chicago — Vercel runs UTC, so the server clock can't be trusted. */
-function todayCentral(): Date {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
-  return new Date(get("year"), get("month") - 1, get("day"));
-}
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
+const todayCentral = (): Date => businessDate();
 
 function yesterdayCentral(): Date {
   const t = todayCentral();

@@ -14,6 +14,10 @@ const STORE_CONFIG: {
   { fragment: "471 old hickory",          label: "Brentwood",   section: "Tennessee", order: 2 },
   { fragment: "800 hwy. 76",               label: "White House", section: "Tennessee", order: 3 },
   { fragment: "3509 tom austin",          label: "Springfield", section: "Tennessee", order: 4 },
+  // BerryAI has no Portland branch yet, so the city stands in for a street
+  // address not yet seen in Berry's format. No other store is in Portland, so
+  // the card appears on its own once Berry onboards the store.
+  { fragment: "portland",                 label: "Portland",    section: "Tennessee", order: 5 },
   // Virginia — in display order
   { fragment: "12834 jefferson",          label: "Jefferson",   section: "Virginia",  order: 0 },
   { fragment: "531 oyster point",         label: "Oyster",      section: "Virginia",  order: 1 },

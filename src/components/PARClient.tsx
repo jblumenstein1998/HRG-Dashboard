@@ -415,10 +415,30 @@ function derivedCompPct(value: number, prior: number): number | null {
   return prior === 0 ? null : ((value - prior) / prior) * 100;
 }
 
+// Group comp % is same-store. A store with nothing a year ago — one that opened
+// inside the window, as Portland did on 2026-10-05 — still adds to the group's
+// figure, but comparing its sales against $0 would read as growth, so the comp %
+// is taken over the stores that traded in both windows only.
 function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure {
   const value = stores.reduce((s, r) => s + r[field].value, 0);
   const prior = stores.reduce((s, r) => s + r[field].prior, 0);
-  return { value, prior, compPct: derivedCompPct(value, prior) };
+  const compValue = stores.filter(r => r[field].prior > 0).reduce((s, r) => s + r[field].value, 0);
+  return { value, prior, compPct: derivedCompPct(compValue, prior) };
+}
+
+/**
+ * Says out loud what sumFigures does quietly. Without it a total row reading
+ * "$839,157 / $764,628 −7.0%" looks like arithmetic gone wrong. Rendered only
+ * while some store has nothing to comp against, and inside the card so a copied
+ * image of the table carries it too.
+ */
+function SameStoreNote({ names }: { names: string[] }) {
+  if (names.length === 0) return null;
+  return (
+    <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
+      % change based on same-store-sales; excludes new-builds
+    </p>
+  );
 }
 
 function fmtCompPct(pct: number | null): string {
@@ -539,6 +559,7 @@ function MetricCompTable({
           )}
         </tbody>
       </table>
+      <SameStoreNote names={hrgStores.filter(s => COMP_RANGE_COLS.some(c => s[c.field].prior === 0)).map(s => s.name)} />
     </div>
   );
 }
@@ -550,21 +571,37 @@ function MetricCompTable({
 // and transaction components and derives a correctly-weighted average check at
 // whatever grouping level is being rendered (store, state, or company-wide).
 
-type AvgCheckRaw = { netSalesTY: number; netSalesLY: number; txTY: number; txLY: number };
+/**
+ * `comp*` are this-year figures over the stores that also traded in the prior
+ * window — set only on a group sum, so the group's comp % stays same-store (see
+ * sumFigures). A single store's row leaves them unset and comps against itself.
+ */
+type AvgCheckRaw = {
+  netSalesTY: number; netSalesLY: number; txTY: number; txLY: number;
+  compNetSalesTY?: number; compTxTY?: number;
+};
 type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, AvgCheckRaw>;
 
+function avgCheck(netSales: number, tx: number): number {
+  return tx > 0 ? netSales / tx : 0;
+}
+
 function deriveAvgCheckFigure(raw: AvgCheckRaw): MetricFigure {
-  const value = raw.txTY > 0 ? raw.netSalesTY / raw.txTY : 0;
-  const prior = raw.txLY > 0 ? raw.netSalesLY / raw.txLY : 0;
-  return { value, prior, compPct: derivedCompPct(value, prior) };
+  const value = avgCheck(raw.netSalesTY, raw.txTY);
+  const prior = avgCheck(raw.netSalesLY, raw.txLY);
+  const compValue = avgCheck(raw.compNetSalesTY ?? raw.netSalesTY, raw.compTxTY ?? raw.txTY);
+  return { value, prior, compPct: derivedCompPct(compValue, prior) };
 }
 
 function sumAvgCheckRaw(stores: StoreAvgCheckRaw[], field: RangeField): AvgCheckRaw {
+  const comparable = stores.filter(r => r[field].txLY > 0);
   return {
     netSalesTY: stores.reduce((s, r) => s + r[field].netSalesTY, 0),
     netSalesLY: stores.reduce((s, r) => s + r[field].netSalesLY, 0),
     txTY: stores.reduce((s, r) => s + r[field].txTY, 0),
     txLY: stores.reduce((s, r) => s + r[field].txLY, 0),
+    compNetSalesTY: comparable.reduce((s, r) => s + r[field].netSalesTY, 0),
+    compTxTY: comparable.reduce((s, r) => s + r[field].txTY, 0),
   };
 }
 
@@ -664,6 +701,7 @@ function AvgCheckCompTable({
           )}
         </tbody>
       </table>
+      <SameStoreNote names={hrgStores.filter(s => COMP_RANGE_COLS.some(c => s[c.field].txLY === 0)).map(s => s.name)} />
     </div>
   );
 }
@@ -683,6 +721,8 @@ type SnapshotRaw = {
   netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number;
   // Only the live "Today" range reports who's on the clock right now.
   clockedInTY: number | null;
+  // Same-store this-year figures, set on a group sum only — see AvgCheckRaw.
+  compNetSalesTY?: number; compTxTY?: number;
 };
 
 const QUICK_RANGES = [
@@ -710,15 +750,13 @@ function snapshotRangeLabel(range: SnapshotRange): string {
 }
 
 function deriveNetSalesFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.netSalesTY, r.netSalesLY) };
+  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.compNetSalesTY ?? r.netSalesTY, r.netSalesLY) };
 }
 function deriveTxFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.txTY, r.txLY) };
+  return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.compTxTY ?? r.txTY, r.txLY) };
 }
 function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
-  const value = r.txTY > 0 ? r.netSalesTY / r.txTY : 0;
-  const prior = r.txLY > 0 ? r.netSalesLY / r.txLY : 0;
-  return { value, prior, compPct: derivedCompPct(value, prior) };
+  return deriveAvgCheckFigure(r);
 }
 // Productivity ($/labor hour) and TPLH (transactions/labor hour) are
 // this-year-only — the snapshot carries no prior-year labor hours.
@@ -730,7 +768,10 @@ function deriveSnapshotTplh(r: SnapshotRaw): number | null {
 }
 function sumSnapshotRaw(stores: SnapshotRaw[]): SnapshotRaw {
   const clockedIn = stores.filter(r => r.clockedInTY != null);
+  const comparable = stores.filter(r => r.txLY > 0);
   return {
+    compNetSalesTY: comparable.reduce((s, r) => s + r.netSalesTY, 0),
+    compTxTY: comparable.reduce((s, r) => s + r.txTY, 0),
     storeId: "", name: "", state: "TN",
     netSalesTY: stores.reduce((s, r) => s + r.netSalesTY, 0),
     netSalesLY: stores.reduce((s, r) => s + r.netSalesLY, 0),
@@ -953,6 +994,8 @@ function SnapshotVsLastYearTable({
           )}
         </tbody>
       </table>
+      {/* Not while loading: a store's row is all zeros until its numbers land. */}
+      {!loading && <SameStoreNote names={hrgStores.filter(s => s.txLY === 0).map(s => s.name)} />}
     </div>
   );
 }

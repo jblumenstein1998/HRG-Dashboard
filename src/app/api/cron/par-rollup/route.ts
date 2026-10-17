@@ -1,34 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PAR_LOCATIONS } from "@/lib/par";
 import { rerollRange, REROLL_WINDOW_DAYS } from "@/lib/parRollup";
+import { businessDateISO } from "@/lib/businessDay";
 
-// 12 stores × 14 days × 2 SOAP calls each, throttled to 5 concurrent by par.ts's
+// 13 stores × 14 days × 2 SOAP calls each, throttled to 5 concurrent by par.ts's
 // semaphore. Measured around 100s; 300 leaves room for a slow PAR morning.
 export const maxDuration = 300;
-
-// Yesterday's business date in Central time (HRG's operating timezone — see
-// the same convention in fiscal.ts's today()), since "today" isn't a closed
-// business date yet when this runs.
-function yesterdayCentral(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
-  const d = new Date(get("year"), get("month") - 1, get("day") - 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 function daysBefore(iso: string, n: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, d - n);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
+
+// Yesterday's business date (lib/businessDay.ts: Central, rolling at 2:15 AM),
+// since "today" isn't a closed business date yet when this runs.
+const yesterdayCentral = (): string => daysBefore(businessDateISO(), 1);
 
 // Vercel Cron hits this daily (see vercel.json). Re-rolls a trailing window
 // rather than yesterday alone: a day written the morning after it closed misses

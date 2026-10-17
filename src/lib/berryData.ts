@@ -2,6 +2,7 @@ import { SUPERSET_BASE, SUPERSET_DASHBOARD_ID, DaypartRow, StoreRow, DaypartMetr
 import { ensureSession, invalidateSession } from "@/lib/supersetSession";
 import { sql } from "@/lib/db";
 import { resolveRange, type RangeKey } from "@/lib/fiscal";
+import { businessDateISO } from "@/lib/businessDay";
 
 const CHART_ID = 93;
 const DATASOURCE_ID = 18;
@@ -24,16 +25,8 @@ const DATASOURCE_ID = 18;
 // far more often).
 const ROLLING_TTL_MS = 5 * 60 * 1000;
 
-function todayCentralISO(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
+const todayCentralISO = (): string => businessDateISO();
 
 function dayBefore(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);

@@ -15,6 +15,7 @@
  */
 
 import { PERIODS, currentPeriod, type FiscalPeriod } from "../fiscal";
+import { businessDate } from "../businessDay";
 
 /** Fiscal year label, derived the same way driveThruTrend.ts derives its key prefix. */
 export const FISCAL_YEAR = Number(PERIODS[0].end.slice(0, 4));
@@ -40,17 +41,8 @@ function fmt(d: Date): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-/** Today in America/Chicago — Vercel runs UTC, so the server clock can't be trusted. */
-function todayCentral(): Date {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return new Date(get("year"), get("month") - 1, get("day"));
-}
+/** Today's business date in Central (rolls at 2:15 AM — see lib/businessDay.ts). */
+const todayCentral = (): Date => businessDate();
 
 export type BonusWindow = {
   periodLabel: string;

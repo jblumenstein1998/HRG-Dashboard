@@ -35,7 +35,7 @@ const csv = rows.slice(1)
 const api = JSON.parse(readFileSync(process.argv[3], "utf8"));
 const JOLT_NAME = { Brentwood:"HRG Brentwood LLC", College:"HRG College LLC", Columbia:"HRG Columbia LLC",
   Jefferson:"HRG Jefferson LLC", "Spring Hill":"HRG Spring Hill LLC", Springfield:"HRG Springfield LLC",
-  "White House":"HRG White House LLC" };
+  "White House":"HRG White House LLC", Portland:"HRG Portland LLC" };
 
 const mine = [];
 for (const s of api.stores) for (const r of s.rows)
@@ -116,6 +116,6 @@ console.log("\n" + "=".repeat(78));
 console.log("3. COVERAGE");
 console.log("=".repeat(78));
 console.log(`   Instances in CSV (all locations) ${csv.length}`);
-console.log(`   ...Portland, excluded by design  ${csv.length - csvTracked.length}`);
+console.log(`   ...locations not on dashboard    ${csv.length - csvTracked.length}`);
 console.log(`   Dashboard rows for the same day  ${mine.length}`);
 console.log(`   Dashboard rows absent from CSV   ${mine.length - matched - mismatched.length}`);
