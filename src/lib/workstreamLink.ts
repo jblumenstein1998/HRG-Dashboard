@@ -16,8 +16,10 @@
  *
  * So this module never decides a doubtful match. It decides exactly one case
  * automatically: the two names are character-for-character identical after
- * normalisation, and that name is unique on both sides of the store. Everything
- * else becomes a proposal with ranked candidates, and a person confirms it.
+ * normalisation, and that name is unique among Workstream's current staff — or,
+ * when no current employee has it, unique among everyone the store has had.
+ * Everything else becomes a proposal with ranked candidates, and a person
+ * confirms it.
  *
  * ── Leavers are out of scope ─────────────────────────────────────────────────
  *
@@ -284,6 +286,20 @@ function scoreNames(par: ParPerson, ws: WorkstreamPerson): { score: number; reas
   const lastExact = pLast === wLast;
   const lastLike = similarity(pLast, wLast);
 
+  /*
+   * A surname part the two records share, for double and hyphenated surnames.
+   *
+   * Comparing only the final word split one person into strangers: PAR's
+   * "Uzziel Martinez-Grande" was compared as "grande" against Workstream's
+   * "martinez" and scored too low to be offered at all. Families with two
+   * surnames are routinely recorded with one in one system and both in the
+   * other, in either order, hyphenated or not. One-letter parts are left out
+   * so a stray initial cannot count as a shared surname.
+   */
+  const pLastParts = normalizeName(par.lastName).split(" ").filter((t) => t.length > 1);
+  const wLastParts = normalizeName(ws.lastName).split(" ").filter((t) => t.length > 1);
+  const sharedLast = lastExact ? null : (pLastParts.find((t) => wLastParts.includes(t)) ?? null);
+
   // Workstream holds a preferred name, and it is often the only name the store
   // uses — PAR will say "Trey Ellison" where Workstream's legal record says
   // "Robert". Treated as an alternative first name for ranking only: a
@@ -308,6 +324,17 @@ function scoreNames(par: ParPerson, ws: WorkstreamPerson): { score: number; reas
   } else if (lastExact) {
     score = 62;
     reasons.push("last name matches, first name does not");
+  } else if (sharedLast && canonicalFirst(pFirst) === canonicalFirst(wFirst)) {
+    // Below an exact match on purpose: ranked first for a reviewer, but the
+    // automatic link still needs the whole name (see nameKey).
+    score = 88;
+    reasons.push(`first name matches; both last names include "${sharedLast}" — a double or hyphenated surname`);
+  } else if (sharedLast && pFirst && wFirst && pFirst[0] === wFirst[0]) {
+    score = 70;
+    reasons.push(`first initial matches; both last names include "${sharedLast}"`);
+  } else if (sharedLast) {
+    score = 55;
+    reasons.push(`both last names include "${sharedLast}", first name does not match`);
   } else if (pFirst === wFirst && lastLike > 0.5) {
     score = 68;
     reasons.push("first name matches, last name is similar — a name change or a typo");
@@ -750,14 +777,33 @@ export function proposeStoreLinks(input: {
      * A rejection still blocks it: that is somebody saying "these two are not
      * the same person", which outranks any amount of name agreement.
      */
+    /*
+     * No current employee of that name? Then fall back to everybody this store
+     * has ever had, leavers included, and link if that is still exactly one.
+     *
+     * By this point the PAR record has hours in the activity window (see the
+     * "ignored" check above), so somebody of that name is working here. When
+     * the one Workstream record of the name is offboarded, it is still the only
+     * person it can be — usually somebody who just left, or a status Workstream
+     * has wrong. The card keeps showing "Offboarded", so the disagreement is
+     * still visible; it just no longer waits on a click.
+     *
+     * Only reached when the active pool has nobody, so a leaver can never
+     * outrank or collide with a current employee of the same name.
+     */
+    const pool =
+      key && exact.length === 0
+        ? workstreamEmployees.filter((w) => nameKey(w.firstName, w.lastName) === key)
+        : exact;
+
     const unique =
       key.length > 0 &&
-      exact.length === 1 &&
-      !rejected.has(`${p.id} ${exact[0].uuid}`);
+      pool.length === 1 &&
+      !rejected.has(`${p.id} ${pool[0].uuid}`);
 
     if (unique) {
-      resolved.add(exact[0].uuid);
-      proposals.push({ ...base, state: "auto", workstreamUuid: exact[0].uuid, candidates: ranked });
+      resolved.add(pool[0].uuid);
+      proposals.push({ ...base, state: "auto", workstreamUuid: pool[0].uuid, candidates: ranked });
     } else {
       proposals.push({ ...base, state: "review", workstreamUuid: null, candidates: ranked });
     }

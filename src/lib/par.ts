@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { unstable_cache } from "next/cache";
 
 const ACCESS_TOKEN = process.env.PAR_ACCESS_TOKEN ?? "";
@@ -45,20 +46,49 @@ export function getLocationToken(storeId: string): string {
 
 // ── Rate limiter (5 concurrent per PAR best-practice guide) ──────────────────
 
+/*
+ * One queue per priority level, served lowest level first, FIFO within a level.
+ *
+ * The Staffing tab fires every section at once and they all share these five
+ * permits, so without an order the roster at the top waited behind a hundred-odd
+ * shift reads for the charts below it. The levels are the order somebody reads
+ * the page in — see PAR_PRIORITY.
+ */
+export const PAR_PRIORITY = {
+  onClock: 0,
+  missedPunches: 1,
+  hours: 2,
+  openClose: 3,
+  /** Anything that did not ask: crons, other tabs, the reconciliation. */
+  background: 4,
+} as const;
+
 class Semaphore {
   private permits: number;
-  private waiters: (() => void)[] = [];
+  private queues: (() => void)[][] = [];
   constructor(n: number) { this.permits = n; }
-  acquire(): Promise<void> {
+  acquire(level: number): Promise<void> {
     if (this.permits > 0) { this.permits--; return Promise.resolve(); }
-    return new Promise(r => this.waiters.push(r));
+    return new Promise(r => (this.queues[level] ??= []).push(r));
   }
   release(): void {
-    const next = this.waiters.shift();
-    if (next) next(); else this.permits++;
+    for (const q of this.queues) {
+      const next = q?.shift();
+      if (next) { next(); return; }
+    }
+    this.permits++;
   }
 }
 const sem = new Semaphore(5);
+
+// Carried through the async call chain rather than threaded as an argument
+// through every fetcher, so getEmployees/getShifts/etc. need no changes.
+const parPriority = new AsyncLocalStorage<number>();
+
+/** Runs `fn` with its PAR calls queued at `level` (lower goes first). */
+export function withParPriority<T>(level: number, fn: () => Promise<T>): Promise<T> {
+  return parPriority.run(level, fn);
+}
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 // Wrapped with unstable_cache (below) instead of an in-memory Map: on Vercel each
@@ -106,7 +136,7 @@ function stripTag(xml: string, tag: string): string {
 // ── SOAP transport ────────────────────────────────────────────────────────────
 
 async function soapPost(service: string, action: string, body: string, locationToken: string): Promise<string> {
-  await sem.acquire();
+  await sem.acquire(parPriority.getStore() ?? PAR_PRIORITY.background);
   try {
     const res = await fetch(`${BASE_URL}/${service}`, {
       method: "POST",
@@ -395,7 +425,9 @@ export const getEmployees = unstable_cache(
     });
   },
   ["par-employees", PARSE_VERSION],
-  { revalidate: 60 * 60 * 24, tags: ["par-data"] },
+  // Its own tag as well, so the Staffing tab's Refresh can re-read thirteen
+  // staff lists without throwing away every cached day of shifts and sales.
+  { revalidate: 60 * 60 * 24, tags: ["par-data", "par-employees"] },
 );
 
 /**
@@ -542,6 +574,20 @@ export async function getShiftsLive(storeId: string, businessDate: string): Prom
   );
   return withoutNonLaborJobs(parseShiftsXml(xml, getStoreTimeZone(storeId)), excluded);
 }
+
+/**
+ * Today's shifts, at most two minutes old.
+ *
+ * For scrubbing the Staffing slider through today: every position on it reads
+ * the same two business dates, so a live read per position re-fetched identical
+ * shifts twelve stores at a time. "Now" and Refresh still go through
+ * getShiftsLive.
+ */
+export const getShiftsRecent = unstable_cache(
+  getShiftsLive,
+  ["par-shifts-recent", PARSE_VERSION],
+  { revalidate: 120, tags: ["par-data"] },
+);
 
 // ── Date utilities ────────────────────────────────────────────────────────────
 

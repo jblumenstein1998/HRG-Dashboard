@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { getStaffingAt, type StaffingMoment } from "@/lib/staffing";
 
@@ -69,8 +70,20 @@ export async function GET(req: NextRequest) {
     moment = { kind: "instant", at };
   }
 
+  /*
+   * The tab's Refresh button: who works here, re-read from PAR.
+   *
+   * The staff lists are cached for a day, so a record deleted or terminated in
+   * PAR stayed on HR Cleanup until tomorrow. Clearing the tag here makes this
+   * request the one that re-reads them, and the sections the page reloads
+   * afterwards find the fresh copies in the cache rather than asking PAR again.
+   * Shifts on the roster dates are read live too, slider or not.
+   */
+  const fresh = params.get("fresh") === "1";
+  if (fresh) revalidateTag("par-employees", { expire: 0 });
+
   try {
-    return NextResponse.json(await getStaffingAt(moment));
+    return NextResponse.json(await getStaffingAt(moment, { fresh }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing] failed:", msg);

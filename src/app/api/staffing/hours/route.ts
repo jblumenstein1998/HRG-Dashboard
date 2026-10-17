@@ -9,6 +9,7 @@ import {
   recentCompletePeriods,
   weekToDateSpan,
 } from "@/lib/staffing";
+import { PAR_PRIORITY, withParPriority } from "@/lib/par";
 import { todayCentralISO } from "@/lib/parRollup";
 
 /**
@@ -95,7 +96,7 @@ export async function GET(req: NextRequest) {
           : weeks;
 
   try {
-    return NextResponse.json(await getStoreHours(spans));
+    return NextResponse.json(await withParPriority(PAR_PRIORITY.hours, () => getStoreHours(spans)));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing/hours] failed:", msg);

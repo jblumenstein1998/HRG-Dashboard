@@ -37,7 +37,7 @@ export const SEVERITY_LABELS: Record<AuditSeverity, string> = {
   "splitting-hours": "Splitting hours",
   "duplicate-workstream": "Duplicate Workstream profile",
   "stray-copies": "Stray PAR copies",
-  dormant: "Dormant duplicates",
+  dormant: "No recent hours",
 };
 
 /** One PAR employee record inside a cluster. */
@@ -80,11 +80,6 @@ export type AuditRow = {
   severity: AuditSeverity;
   par: AuditParRecord[];
   workstream: AuditWorkstreamRecord[];
-  /**
-   * What to do about it, in a sentence — which number to keep and which to
-   * retire. A suggestion, not a decision anyone has recorded.
-   */
-  recommendedAction: string;
 };
 
 export type AuditReport = {
@@ -102,6 +97,100 @@ export const EMPTY_COUNTS: Record<AuditSeverity, number> = {
   dormant: 0,
 };
 
+// ── Who is listed, and where ─────────────────────────────────────────────────
+//
+// Here rather than in workstreamAudit.ts because the browser runs it too: the
+// leader filter narrows each person to the records at that leader's stores and
+// then has to decide again whether they still belong on the list. One copy of
+// the rule means the server and the screen cannot disagree about it.
+
+/** The activity window, in days, behind every "no recent hours" decision. */
+export const ACTIVITY_DAYS = 30;
+
+/** A calendar date `days` away from `iso`, both "YYYY-MM-DD". */
+export function shiftDate(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** First day of the activity window ending on `today`. */
+export function auditWindowStart(today: string): string {
+  return shiftDate(today, -ACTIVITY_DAYS);
+}
+
+/** A PAR record counts as live if it has worked at all in the window. */
+export function isLive(r: AuditParRecord): boolean {
+  return r.recentMinutes > 0;
+}
+
+/**
+ * Whether a person is listed, and in which group — null for "not listed".
+ *
+ * Listed for a duplicate (two numbers at one store, or two live Workstream
+ * profiles) or for any PAR number with no hours in the window, alone or not,
+ * at their own store or another. Those are the leavers PAR was never told about
+ * and the numbers left behind by a transfer. Two numbers that are both *in use*
+ * at two stores is somebody covering two restaurants, and is left alone.
+ *
+ * Not yet started is not gone: a new hire exists in PAR before their first
+ * shift and looks exactly like a leaver. When no hours is the only reason to
+ * list somebody and Workstream has them hired inside the window, they are left
+ * off. A new hire with two Workstream profiles is still a duplicate to fix.
+ */
+export function classifyPerson(
+  par: AuditParRecord[],
+  workstream: AuditWorkstreamRecord[],
+  windowStart: string,
+): AuditSeverity | null {
+  const perStore = new Map<string, AuditParRecord[]>();
+  for (const r of par) perStore.set(r.storeId, [...(perStore.get(r.storeId) ?? []), r]);
+  const stores = [...perStore.values()];
+
+  const anyStoreHasDupes = stores.some((rs) => rs.length >= 2);
+  const anyUnused = par.some((r) => !isLive(r));
+  const liveCount = par.filter(isLive).length;
+
+  if (!anyStoreHasDupes && workstream.length < 2 && !anyUnused) return null;
+  if (
+    !anyStoreHasDupes
+    && workstream.length < 2
+    && liveCount === 0
+    && workstream.some((w) => (w.hiredDate ?? "") >= windowStart)
+  ) return null;
+
+  // Two live numbers at one store is the hours problem. Two live numbers at
+  // two stores is a person with two jobs.
+  if (stores.some((rs) => rs.filter(isLive).length >= 2)) return "splitting-hours";
+  if (workstream.length >= 2) return "duplicate-workstream";
+  return liveCount >= 1 ? "stray-copies" : "dormant";
+}
+
+/**
+ * One person, as seen by somebody who runs only `storeIds`.
+ *
+ * A person is a name across the whole estate, so without this a leader saw
+ * every record that name holds anywhere — another store's dead numbers, and
+ * unrelated namesakes merged in by name. Narrowing to the records at their
+ * stores, then deciding again, gives each leader exactly the numbers they can
+ * act on, in the group those numbers alone put the person in. Workstream
+ * profiles are not per store and stay as they are.
+ *
+ * Null when nothing at those stores needs doing.
+ */
+export function scopeRow(row: AuditRow, storeIds: Set<string>, windowStart: string): AuditRow | null {
+  const par = row.par.filter((r) => storeIds.has(r.storeId));
+  if (par.length === 0) return null;
+  const severity = classifyPerson(par, row.workstream, windowStart);
+  if (!severity) return null;
+  return {
+    ...row,
+    par,
+    severity,
+    storeIds: [...new Set(par.map((r) => r.storeId))],
+    storeNames: [...new Set(par.map((r) => r.storeName))],
+  };
+}
+
 /** Tally rows by severity. Used wherever a filtered view needs its own header. */
 export function countBySeverity(rows: AuditRow[]): Record<AuditSeverity, number> {
   const counts = { ...EMPTY_COUNTS };
@@ -114,6 +203,11 @@ export function countBySeverity(rows: AuditRow[]): Record<AuditSeverity, number>
 /** Minutes as "18.5h". */
 function hrs(minutes: number): string {
   return `${(minutes / 60).toFixed(1)}h`;
+}
+
+/** An hourly rate as "$14.50". Salaried staff carry none in PAR. */
+function rate(amount: number | null): string {
+  return amount != null && amount > 0 ? `$${amount.toFixed(2)}` : "—";
 }
 
 /** "YYYY-MM-DD" as "Oct 4, 2026", read as a plain date rather than an instant. */
@@ -137,6 +231,46 @@ function esc(s: string | null | undefined): string {
     .replace(/"/g, "&quot;");
 }
 
+/** People A to Z. */
+function byName(rows: AuditRow[]): AuditRow[] {
+  return [...rows].sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
+}
+
+/**
+ * Who the report lists, and in what order — the one decision both exports
+ * share.
+ *
+ * The PDF and the Excel are two formats of one report, not two reports, so
+ * neither filters or orders anything on its own: both take this and only lay
+ * it out. A person missing from one file but not the other was exactly the bug
+ * this exists to prevent.
+ *
+ * Everyone is listed. People with hours in the last 30 days come first, then
+ * those whose every record has none — still duplicates somebody has to
+ * deactivate, just not the urgent ones.
+ */
+export function reportPeople(rows: AuditRow[]): { active: AuditRow[]; noRecentHours: AuditRow[] } {
+  return {
+    active: byName(rows.filter((r) => r.severity !== "dormant")),
+    noRecentHours: byName(rows.filter((r) => r.severity === "dormant")),
+  };
+}
+
+/** The line under the title in both exports. */
+export function reportSubtitle(scope: string, today: string): string {
+  return `${scope} · hours measured over the 30 days to ${longDate(today)}`;
+}
+
+/** The line at the top of both exports, so the two can be checked at a glance. */
+export function reportCountLine(people: ReturnType<typeof reportPeople>): string {
+  const total = people.active.length + people.noRecentHours.length;
+  return `${total} ${total === 1 ? "person" : "people"} to clean up`
+    + (people.noRecentHours.length ? ` (${people.noRecentHours.length} with no recent hours)` : "");
+}
+
+/** The label above the people with no recent hours, in both exports. */
+export const NO_RECENT_HOURS_LABEL = "No recent hours — no record has worked in the last 30 days";
+
 function personBlock(r: AuditRow): string {
   return `
     <article class="person">
@@ -147,7 +281,7 @@ function personBlock(r: AuditRow): string {
       <table>
         <thead>
           <tr><th>System</th><th>Record</th><th>Store</th><th>Role</th>
-              <th class="num">Hours (30d)</th><th>Last worked</th></tr>
+              <th class="num">Pay rate</th><th class="num">Hours (30d)</th><th>Last worked</th></tr>
         </thead>
         <tbody>
           ${r.par.map((p) => `
@@ -156,6 +290,7 @@ function personBlock(r: AuditRow): string {
               <td class="mono">#${esc(p.employeeId)}</td>
               <td>${esc(p.storeName)}</td>
               <td>${esc(p.job ?? "—")}</td>
+              <td class="num">${rate(p.payRate)}</td>
               <td class="num">${hrs(p.recentMinutes)}</td>
               <td>${esc(longDate(p.lastWorked))}</td>
             </tr>`).join("")}
@@ -165,12 +300,12 @@ function personBlock(r: AuditRow): string {
               <td>${esc(w.name)}</td>
               <td>${esc(w.storeName ?? "no store assigned")}</td>
               <td>${esc(w.title ?? "—")}</td>
+              <td class="num">${rate(w.hourlyRate)}</td>
               <td class="num">—</td>
               <td>${esc(w.hiredDate ? `hired ${longDate(w.hiredDate)}` : "—")}</td>
             </tr>`).join("")}
         </tbody>
       </table>
-      <p class="action"><strong>Action:</strong> ${esc(r.recommendedAction)}</p>
     </article>`;
 }
 
@@ -183,10 +318,10 @@ function personBlock(r: AuditRow): string {
  * document title is what Chrome offers as that filename, which is why it is
  * built from the ribbon's scope.
  *
- * Dormant duplicates are summarised rather than listed. They are several
- * hundred records nobody has touched in a month, and a report nobody finishes
- * is worse than a shorter one — the count is stated so their absence reads as
- * a decision rather than an omission.
+ * People A to Z, with no category headings. A person often has problems in
+ * both systems at once, so filing them under one category named half of it and
+ * hid the other half — the table under each name already shows everything.
+ * Who is listed comes from reportPeople, shared with the Excel export.
  */
 export function auditToReportHtml(opts: {
   title: string;
@@ -195,18 +330,7 @@ export function auditToReportHtml(opts: {
   rows: AuditRow[];
 }): string {
   const { title, scope, today, rows } = opts;
-  const counts = countBySeverity(rows);
-  const listed: AuditSeverity[] = ["splitting-hours", "duplicate-workstream", "stray-copies"];
-
-  const section = (sev: AuditSeverity): string => {
-    const items = rows.filter((r) => r.severity === sev);
-    if (items.length === 0) return "";
-    return `
-      <section class="tier">
-        <h2>${esc(SEVERITY_LABELS[sev])} <span class="count">${items.length}</span></h2>
-        ${items.map(personBlock).join("")}
-      </section>`;
-  };
+  const people = reportPeople(rows);
 
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${esc(title)}</title>
@@ -221,12 +345,9 @@ export function auditToReportHtml(opts: {
              margin-bottom: 18px; background: #fafafa; }
   .summary span { display: inline-block; margin-right: 18px; }
   .summary b { font-size: 14px; }
-  .tier { margin-bottom: 18px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
-       border-bottom: 1.5px solid #111; padding-bottom: 3px; margin: 0 0 10px; }
-  h2 .count { color: #777; font-weight: normal; }
-  /* Keep a person whole on one page: a split record list is unreadable, and a
-     recommendation orphaned from its evidence is worse than useless. */
+  h2 { font-size: 12px; color: #555; font-weight: 600; border-bottom: 1px solid #ccc;
+       padding-bottom: 3px; margin: 22px 0 10px; break-after: avoid; }
+  /* Keep a person whole on one page: a split record list is unreadable. */
   .person { page-break-inside: avoid; break-inside: avoid;
             border: 1px solid #e3e3e3; border-radius: 6px; padding: 9px 11px;
             margin-bottom: 10px; }
@@ -240,26 +361,22 @@ export function auditToReportHtml(opts: {
   tr.live td { font-weight: 600; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
-  .action { margin: 7px 0 0; padding: 6px 8px; background: #f6f6f6;
-            border-left: 2.5px solid #111; font-size: 10.5px; }
   footer { margin-top: 18px; color: #777; font-size: 10px;
            border-top: 1px solid #ddd; padding-top: 7px; }
 </style></head>
 <body>
   <h1>${esc(title)}</h1>
-  <p class="sub">${esc(scope)} · hours measured over the 30 days to ${esc(longDate(today))}</p>
+  <p class="sub">${esc(reportSubtitle(scope, today))}</p>
 
-  <div class="summary">
-    <span><b>${counts["splitting-hours"]}</b> splitting hours</span>
-    <span><b>${counts["duplicate-workstream"]}</b> duplicate Workstream profiles</span>
-    <span><b>${counts["stray-copies"]}</b> stray PAR copies</span>
-  </div>
+  <div class="summary">${esc(reportCountLine(people))}</div>
 
-  ${listed.map(section).join("")}
+  ${people.active.map(personBlock).join("")}
+
+  ${people.noRecentHours.length
+    ? `<h2>${esc(NO_RECENT_HOURS_LABEL)}</h2>${people.noRecentHours.map(personBlock).join("")}`
+    : ""}
 
   <footer>
-    ${counts.dormant} dormant duplicate${counts.dormant === 1 ? "" : "s"} not listed —
-    every copy has no recorded hours in the last 30 days.
     Generated from the HRG staffing dashboard.
   </footer>
 </body></html>`;

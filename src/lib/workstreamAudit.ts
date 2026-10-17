@@ -27,6 +27,8 @@
  *
  *   two or more PAR records at the same store   — one person, two clock numbers
  *   two or more live Workstream profiles        — blocks automatic linking
+ *   any PAR number with no hours in 30 days     — a leaver, or left behind by a
+ *                                                 transfer; alone or not
  *
  * ── Why severity is the organising principle ─────────────────────────────────
  *
@@ -51,26 +53,17 @@ import { storeById } from "./bonus/storeMap";
 import type { LinkProposal } from "./workstreamLink";
 import {
   SEVERITY_ORDER,
+  auditWindowStart,
+  classifyPerson,
   countBySeverity,
   type AuditParRecord,
   type AuditReport,
   type AuditRow,
-  type AuditSeverity,
   type AuditWorkstreamRecord,
 } from "./workstreamAuditFormat";
 
 // Re-exported so callers can reach the whole audit through one module.
 export * from "./workstreamAuditFormat";
-
-/** Minutes as "18.5h", for the recommendation text. */
-function hours(minutes: number): string {
-  return `${(minutes / 60).toFixed(1)}h`;
-}
-
-/** A PAR record counts as live if it has worked at all in the window. */
-function isLive(r: AuditParRecord): boolean {
-  return r.recentMinutes > 0;
-}
 
 /**
  * The spelling to show for a cluster.
@@ -83,69 +76,6 @@ function bestName(names: string[]): string {
   return names.reduce((best, n) => (n.trim().length > best.trim().length ? n : best), names[0] ?? "");
 }
 
-/** Group a person's PAR records by the store each belongs to. */
-function byStore(par: AuditParRecord[]): Map<string, AuditParRecord[]> {
-  const out = new Map<string, AuditParRecord[]>();
-  for (const r of par) {
-    const list = out.get(r.storeId) ?? [];
-    list.push(r);
-    out.set(r.storeId, list);
-  }
-  return out;
-}
-
-function recommend(row: Omit<AuditRow, "recommendedAction">): string {
-  if (row.severity === "splitting-hours") {
-    /*
-     * Name the store the duplication is in.
-     *
-     * A person covering three restaurants must not be told to merge records
-     * that belong to different ones — those are supposed to be separate.
-     */
-    const offending = [...byStore(row.par).values()]
-      .map((rs) => rs.filter(isLive).sort((a, b) => b.recentMinutes - a.recentMinutes))
-      .filter((rs) => rs.length >= 2);
-
-    return offending
-      .map((rs) => {
-        const [keep, ...rest] = rs;
-        return (
-          `At ${keep.storeName}, merge PAR ${rest.map((r) => `#${r.employeeId}`).join(" and ")}`
-          + ` into #${keep.employeeId} (${hours(keep.recentMinutes)} vs`
-          + ` ${rest.map((r) => hours(r.recentMinutes)).join(" and ")} in the last 30 days),`
-          + ` then retire the spare number.`
-        );
-      })
-      .join(" ");
-  }
-
-  if (row.severity === "duplicate-workstream") {
-    const assigned = row.workstream.filter((w) => w.storeName);
-    const unassigned = row.workstream.filter((w) => !w.storeName);
-    if (unassigned.length && assigned.length) {
-      return (
-        `Two live Workstream profiles. Keep the one assigned to ${assigned[0].storeName}`
-        + ` and terminate the unassigned duplicate.`
-      );
-    }
-    const where = assigned.map((w) => w.storeName).join(" and ");
-    return (
-      `Live Workstream profiles at ${where}. Terminate whichever is not in use,`
-      + ` then link the PAR records to the survivor.`
-    );
-  }
-
-  if (row.severity === "stray-copies") {
-    const keep = row.par.filter(isLive)[0];
-    const dormant = row.par.filter((r) => !isLive(r) && r.storeId === keep.storeId);
-    return (
-      `PAR #${keep.employeeId} at ${keep.storeName} is the one in use. Deactivate`
-      + ` ${dormant.map((r) => `#${r.employeeId}`).join(", ")} so they stop appearing.`
-    );
-  }
-
-  return "No recent hours on any copy. Deactivate all but one in PAR when convenient.";
-}
 
 /**
  * Build the audit.
@@ -181,6 +111,10 @@ export async function getDuplicateAudit(today: string): Promise<AuditReport> {
   for (const view of views) {
     if (view.error) continue;
     for (const p of view.proposals as LinkProposal[]) {
+      // Already terminated in PAR is already cleaned up. Counting it would make
+      // a person with one live number and one closed one a "duplicate", and
+      // send HR to terminate something that is.
+      if (p.parTerminated) continue;
       const key = normalizeName(p.parName);
       if (!key) continue;
       const list = parByName.get(key) ?? [];
@@ -202,22 +136,12 @@ export async function getDuplicateAudit(today: string): Promise<AuditReport> {
   }
 
   const rows: AuditRow[] = [];
+  const windowStart = auditWindowStart(today);
 
   for (const [key, par] of parByName) {
     const ws = (wsByName.get(key) ?? []).filter(
       (e) => e.status === "active" && !e.terminationDate,
     );
-
-    const perStore = byStore(par);
-    const anyStoreHasDupes = [...perStore.values()].some((rs) => rs.length >= 2);
-
-    /*
-     * Only a real duplicate earns a row.
-     *
-     * Two records at two stores is somebody covering two restaurants, which is
-     * exactly how PAR models it and is nobody's cleanup job.
-     */
-    if (!anyStoreHasDupes && ws.length < 2) continue;
 
     const workstream: AuditWorkstreamRecord[] = ws.map((e) => ({
       uuid: e.uuid,
@@ -229,18 +153,9 @@ export async function getDuplicateAudit(today: string): Promise<AuditReport> {
       storeName: e.storeId ? (storeById(e.storeId)?.name ?? e.storeId) : null,
     }));
 
-    // Two live numbers at one store is the hours problem. Two live numbers at
-    // two stores is a person with two jobs.
-    const splitting = [...perStore.values()].some((rs) => rs.filter(isLive).length >= 2);
-    const liveCount = par.filter(isLive).length;
-
-    const severity: AuditSeverity = splitting
-      ? "splitting-hours"
-      : workstream.length >= 2
-        ? "duplicate-workstream"
-        : liveCount >= 1
-          ? "stray-copies"
-          : "dormant";
+    // Shared with the browser, which re-runs it on each leader's slice.
+    const severity = classifyPerson(par, workstream, windowStart);
+    if (!severity) continue;
 
     // Store by store, busiest number first, so the list reads in the order
     // somebody would work through it.
@@ -257,7 +172,7 @@ export async function getDuplicateAudit(today: string): Promise<AuditReport> {
       par,
       workstream,
     };
-    rows.push({ ...base, recommendedAction: recommend(base) });
+    rows.push(base);
   }
 
   rows.sort(

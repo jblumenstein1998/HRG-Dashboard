@@ -34,6 +34,7 @@ import {
   type WorkstreamPerson,
 } from "./workstreamLink";
 import { listDecisions } from "./workstreamLinkStore";
+import { ACTIVITY_DAYS, shiftDate } from "./workstreamAuditFormat";
 import {
   listActiveStoredEmployees,
   listStoredRosterForStore,
@@ -61,7 +62,8 @@ const CORROBORATION_DAYS = 7;
  * picks shifts up again reappears on their own — and so the rule does not
  * empty the queue every first of the month.
  */
-const ACTIVITY_DAYS = 30;
+// ACTIVITY_DAYS lives in workstreamAuditFormat.ts, where the browser can reach
+// it: the HR Cleanup filter decides "no recent hours" against the same window.
 
 // ── Workstream side ──────────────────────────────────────────────────────────
 
@@ -201,10 +203,6 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
   });
 }
 
-function shiftDate(iso: string, days: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
 
 // ── The report ───────────────────────────────────────────────────────────────
 

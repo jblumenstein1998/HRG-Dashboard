@@ -32,10 +32,13 @@ import {
   PAR_LOCATIONS,
   getShifts,
   getShiftsLive,
+  getShiftsRecent,
   getBusinessHours,
   getEmployees,
   getJobs,
   getStoreTimeZone,
+  withParPriority,
+  PAR_PRIORITY,
   type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
@@ -263,6 +266,8 @@ export type StaffingMoment =
 async function rosterForStore(
   loc: (typeof PAR_LOCATIONS)[number],
   moment: StaffingMoment,
+  /** Refresh was pressed: read today and yesterday live even off the slider. */
+  fresh: boolean,
 ): Promise<StoreRoster> {
   const timeZone = getStoreTimeZone(loc.storeId);
   const { date: localDate, minutes: localMinutes } =
@@ -285,21 +290,36 @@ async function rosterForStore(
     // is one round of parallel calls rather than two.
     const trailingDates = weekToDateBefore(localDate);
 
-    // The two roster dates are read live; the earlier days of the week come
-    // from cache. A shift that is still open keeps changing, and the whole
-    // question this screen answers is "right now" — an hour-old snapshot
-    // answers a different one. Past business dates do not move, so caching
-    // them is free.
+    // How fresh each roster date has to be. Only the store's last two calendar
+    // days can still have a shift open on them; anything older does not move,
+    // so it comes from the hour cache like the rest of the week. Of the two
+    // that can move, "Now" reads them live — the whole question there is
+    // "right now" — while scrubbing the slider through today accepts a read up
+    // to two minutes old, because every slider position asks for the same two
+    // dates and a live read per position was the bulk of the wait.
+    const settledBefore = shiftLocalDate(zonedParts(new Date(), timeZone).date, -1);
+    const readShifts = (d: string) =>
+      d < settledBefore
+        ? getShifts(loc.storeId, d)
+        : moment.kind === "instant" || fresh
+          ? getShiftsLive(loc.storeId, d)
+          : getShiftsRecent(loc.storeId, d);
+
+    // Yesterday is usually also the last day of the week so far; it is read
+    // once, as a roster date, rather than a second time from the cache.
+    const otherWeekDays = trailingDates.filter((d) => d !== previousDate);
+
     const [employees, jobs, linked, today, yesterday, ...trailing] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
       // Never throws: an unreachable Workstream costs the position column, not
       // the screen.
       linkedRosterOrEmpty(loc.storeId),
-      getShiftsLive(loc.storeId, localDate),
-      getShiftsLive(loc.storeId, previousDate),
-      ...trailingDates.map((d) => getShifts(loc.storeId, d)),
+      readShifts(localDate),
+      readShifts(previousDate),
+      ...otherWeekDays.map((d) => getShifts(loc.storeId, d)),
     ]);
+    const trailingByDate = new Map(otherWeekDays.map((d, i) => [d, trailing[i]]));
 
     const nameById = new Map(employees.map((e) => [e.id, e]));
     const jobById = new Map(jobs.map((j) => [j.id, j]));
@@ -323,7 +343,7 @@ async function rosterForStore(
      * somebody finishing an overnight Sunday shift correctly shows no hours
      * against the week that just started.
      */
-    const weekDays = trailingDates.map((d, i) => (d === previousDate ? yesterday : trailing[i]));
+    const weekDays = trailingDates.map((d) => (d === previousDate ? yesterday : trailingByDate.get(d) ?? []));
 
     const trailingByEmployee = new Map<string, { minutes: number; shifts: number }>();
     for (const day of [...weekDays, today]) {
@@ -422,9 +442,15 @@ async function rosterForStore(
  * at five, and every call here is cached, so a repeat look at the same moment
  * costs nothing.
  */
-export async function getStaffingAt(moment: StaffingMoment): Promise<StaffingReport> {
+export async function getStaffingAt(
+  moment: StaffingMoment,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<StaffingReport> {
   const [stores, status] = await Promise.all([
-    Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, moment))),
+    // Ahead of the other sections' PAR reads: this is the roster at the top of
+    // the tab, and the one somebody is waiting on.
+    withParPriority(PAR_PRIORITY.onClock, () =>
+      Promise.all(PAR_LOCATIONS.map((loc) => rosterForStore(loc, moment, fresh)))),
     // Never a reason for the page to fail: if the roster table cannot be read,
     // say it has never synced and let the banner explain the blank columns.
     workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),

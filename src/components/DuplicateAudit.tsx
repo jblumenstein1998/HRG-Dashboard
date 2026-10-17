@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Duplicate audit — people who exist more than once, in either system.
+ * HR Cleanup — people who exist more than once in either system, plus any PAR
+ * number nobody has used in 30 days.
  *
  * Organised by severity rather than by store or by name, because the shape of
  * the data demands it: 564 clusters, of which six are costing somebody hours
@@ -23,12 +24,15 @@ import { useCallback, useEffect, useState } from "react";
 import type { BonusStore } from "@/lib/bonus/storeMap";
 import {
   auditToReportHtml,
+  auditWindowStart,
   countBySeverity,
+  scopeRow,
   type AuditParRecord,
   type AuditReport,
   type AuditRow,
   type AuditSeverity,
 } from "@/lib/workstreamAuditFormat";
+import { auditToXlsx } from "@/lib/workstreamAuditExcel";
 
 const SEVERITIES: AuditSeverity[] = [
   "splitting-hours",
@@ -50,12 +54,12 @@ const HEADINGS: Record<AuditSeverity, { title: string; blurb: string; tone: stri
   },
   "stray-copies": {
     title: "Stray PAR copies",
-    blurb: "One number in use, with unused duplicates alongside it. Nothing is broken.",
+    blurb: "One number in use, with unused numbers alongside it — at the same store or another. Terminate the unused ones.",
     tone: "text-gray-700",
   },
   dormant: {
-    title: "Dormant duplicates",
-    blurb: "No recent hours on any copy. Housekeeping.",
+    title: "No recent hours",
+    blurb: "No PAR number for this person has worked in 30 days, duplicate or not. Usually somebody who left; terminate in PAR.",
     tone: "text-gray-500",
   },
 };
@@ -74,10 +78,13 @@ function shortDate(iso: string | null): string {
 export default function DuplicateAudit({
   stores,
   scopeLabel,
+  reloadKey,
 }: {
   stores: BonusStore[];
   /** What the ribbon is filtered to — "Tommy Demorest", "VA", or null. */
   scopeLabel: string | null;
+  /** Bumped by the tab's Refresh button, after the roster has reloaded. */
+  reloadKey: number;
 }) {
   const [storeId, setStoreId] = useState("");
   const [data, setData] = useState<AuditReport | null>(null);
@@ -86,6 +93,7 @@ export default function DuplicateAudit({
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<AuditSeverity>>(new Set(OPEN_BY_DEFAULT));
   const [busy, setBusy] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   /**
    * Read the whole estate, once.
@@ -97,7 +105,12 @@ export default function DuplicateAudit({
    * server throwing away work it had already done, and the viewer waiting for
    * it to happen again.
    */
-  const load = useCallback(async () => {
+  // Which Refresh the data in hand answers. Marked at the start of a load, so a
+  // failed one is not retried in a loop.
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
+
+  const load = useCallback(async (forKey: number) => {
+    setLoadedFor(forKey);
     setLoading(true);
     setError(null);
     try {
@@ -114,10 +127,11 @@ export default function DuplicateAudit({
   }, []);
 
   // Only loads once opened, and not again when the store changes — that is a
-  // filter over rows already in hand, not a new question.
+  // filter over rows already in hand, not a new question. Refresh does ask a
+  // new one; while closed it waits, and reloads when next opened.
   useEffect(() => {
-    if (open && !data) void load();
-  }, [open, data, load]);
+    if (open && loadedFor !== reloadKey) void load(reloadKey);
+  }, [open, loadedFor, reloadKey, load]);
 
   /*
    * Two filters, and the outer one is not optional.
@@ -134,12 +148,20 @@ export default function DuplicateAudit({
    * keep showing it.
    */
   const allowed = new Set(stores.map((s) => s.storeId));
-  // A person belongs to a store if any of their PAR records is there, since a
-  // cluster now spans every store they hold a record at.
-  const inScope = (data?.rows ?? []).filter((r) => r.storeIds.some((id) => allowed.has(id)));
-  const rows = allowed.has(storeId)
-    ? inScope.filter((r) => r.storeIds.includes(storeId))
-    : inScope;
+  /*
+   * Narrowed record by record, not person by person.
+   *
+   * A person is a name across the whole estate, and keeping them whenever any
+   * one record was in scope showed a leader every record that name holds
+   * anywhere — other stores' dead numbers, and namesakes merged in by name —
+   * so "No recent hours" barely moved with the filter. scopeRow keeps only the
+   * records at these stores and re-decides the group from those alone.
+   */
+  const scope = allowed.has(storeId) ? new Set([storeId]) : allowed;
+  const windowStart = data ? auditWindowStart(data.today) : "";
+  const rows = (data?.rows ?? [])
+    .map((r) => scopeRow(r, scope, windowStart))
+    .filter((r): r is AuditRow => r !== null);
   const counts = countBySeverity(rows);
 
   /**
@@ -169,7 +191,7 @@ export default function DuplicateAudit({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(String(json.error ?? res.status));
-      await load();
+      await load(reloadKey);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -187,32 +209,76 @@ export default function DuplicateAudit({
    * report, naming only their stores.
    */
   const storeName = stores.find((st) => st.storeId === storeId)?.name ?? null;
-  const reportTitle = `${scopeLabel ?? storeName ?? "All stores"} - HR Cleanup Report`;
+  const fileName = `HR Cleanup - ${scopeLabel ?? storeName ?? "All stores"} - ${data?.today ?? ""}`;
+
+  /*
+   * Everything a download is built from, in one place.
+   *
+   * The PDF and the Excel are one report in two formats, so they take the same
+   * object — same title, same scope line, same rows — and decide nothing for
+   * themselves. Who is listed is settled downstream by reportPeople, which both
+   * also share.
+   */
+  const report = data
+    ? {
+        title: fileName,
+        scope: scopeLabel
+          ? `${scopeLabel} — ${stores.map((st) => st.name).join(", ")}`
+          : (storeName ?? "All stores"),
+        today: data.today,
+        rows,
+      }
+    : null;
+
+  /** The report as a workbook, under the same filename as the PDF. */
+  async function downloadExcel() {
+    if (!report) return;
+    setExporting(true);
+    try {
+      const blob = await auditToXlsx(report);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fileName}.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   /**
    * Hand the browser a printable copy of the report.
    *
    * An offscreen iframe rather than a new window: a popup is blocked by
-   * default and would make the button look broken. The frame's own document
-   * title is what the print dialog offers as the filename, which is the whole
-   * reason the title is built above rather than written into the page.
+   * default and would make the button look broken.
+   *
+   * The filename comes from the *top* page's title, not the frame's — Chrome
+   * names a saved PDF after the main document even when an iframe is what is
+   * printed. So the title is swapped for the length of the dialog and put back
+   * afterwards. Dashes rather than slashes in the date, since a slash cannot
+   * appear in a filename.
    */
   function printReport() {
-    if (!data) return;
-    const html = auditToReportHtml({
-      title: reportTitle,
-      scope: scopeLabel
-        ? `${scopeLabel} — ${stores.map((st) => st.name).join(", ")}`
-        : (storeName ?? "All stores"),
-      today: data.today,
-      rows,
-    });
+    if (!report) return;
+    const html = auditToReportHtml(report);
 
     const frame = document.createElement("iframe");
     frame.setAttribute("aria-hidden", "true");
     frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
     frame.srcdoc = html;
     frame.onload = () => {
+      const pageTitle = document.title;
+      document.title = fileName;
+      // afterprint fires when the dialog closes, saved or cancelled — whether
+      // or not print() itself blocked until then.
+      frame.contentWindow?.addEventListener(
+        "afterprint",
+        () => { document.title = pageTitle; },
+        { once: true },
+      );
       frame.contentWindow?.focus();
       frame.contentWindow?.print();
       // Left in place briefly: removing it during the dialog cancels the job
@@ -236,7 +302,7 @@ export default function DuplicateAudit({
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
-          Duplicate audit
+          HR Cleanup
         </button>
 
         {open && (
@@ -259,24 +325,34 @@ export default function DuplicateAudit({
             {urgent > 0 ? (
               <>
                 <strong className="text-red-700">{urgent}</strong> needing attention of{" "}
-                {rows.length} duplicates
+                {rows.length} {rows.length === 1 ? "person" : "people"}
               </>
             ) : (
-              <>{rows.length} duplicates, none urgent</>
+              <>{rows.length} {rows.length === 1 ? "person" : "people"}, none urgent</>
             )}
           </span>
         )}
         {loading && <span className="text-xs text-gray-400">reading every store…</span>}
 
         {open && (
-          <button
-            onClick={printReport}
-            disabled={!data || rows.length === 0}
-            title={`${reportTitle}.pdf`}
-            className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
-          >
-            Download PDF
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={downloadExcel}
+              disabled={!data || rows.length === 0 || exporting}
+              title={`${fileName}.xlsx`}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+            >
+              {exporting ? "Building…" : "Download Excel"}
+            </button>
+            <button
+              onClick={printReport}
+              disabled={!data || rows.length === 0}
+              title={`${fileName}.pdf`}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+            >
+              Download PDF
+            </button>
+          </div>
         )}
       </div>
 
@@ -289,7 +365,7 @@ export default function DuplicateAudit({
           )}
 
           {data && rows.length === 0 && !loading && (
-            <p className="text-sm text-gray-500">No duplicates at this store.</p>
+            <p className="text-sm text-gray-500">Nothing to clean up at this store.</p>
           )}
 
           {data && SEVERITIES.map((sev) => {
@@ -405,14 +481,6 @@ function AuditCard({
           </li>
         ))}
       </ul>
-
-      {/* What to do about it, in a sentence. The row above states the problem;
-          somebody still has to be told which number to keep, and leaving that
-          as an inference from two hours figures is how the wrong one gets
-          retired. */}
-      <div className="px-3 py-2 text-xs text-gray-600 bg-gray-50/60 border-t border-gray-100">
-        {row.recommendedAction}
-      </div>
     </div>
   );
 }

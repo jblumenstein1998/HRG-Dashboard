@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
-import { getDuplicateAudit, countBySeverity } from "@/lib/workstreamAudit";
+import {
+  auditWindowStart,
+  countBySeverity,
+  getDuplicateAudit,
+  scopeRow,
+  type AuditRow,
+} from "@/lib/workstreamAudit";
 
 /**
  * People who exist more than once, in either system.
@@ -31,10 +37,14 @@ export async function GET(req: NextRequest) {
     const report = await getDuplicateAudit(today);
 
     // Counts describe what the caller is looking at, so they are recomputed
-    // after the filter rather than carried over from the whole estate.
-    // A person is in scope if any of their PAR records is at that store — a
-    // cluster now spans every store they hold a record at.
-    const rows = store ? report.rows.filter((r) => r.storeIds.includes(store)) : report.rows;
+    // after the filter rather than carried over from the whole estate. Narrowed
+    // record by record, the same way the screen does it (see scopeRow).
+    const windowStart = auditWindowStart(report.today);
+    const rows = store
+      ? report.rows
+          .map((r) => scopeRow(r, new Set([store]), windowStart))
+          .filter((r): r is AuditRow => r !== null)
+      : report.rows;
     return NextResponse.json({ ...report, rows, counts: countBySeverity(rows) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

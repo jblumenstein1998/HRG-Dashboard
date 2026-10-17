@@ -116,7 +116,14 @@ type SearchHit = {
   status?: string | null;
 };
 
-export default function ReconciliationSection({ stores }: { stores: BonusStore[] }) {
+export default function ReconciliationSection({
+  stores,
+  reloadKey,
+}: {
+  stores: BonusStore[];
+  /** Bumped by the tab's Refresh button, after the roster has reloaded. */
+  reloadKey: number;
+}) {
   const [picked, setPicked] = useState(stores[0]?.storeId ?? "");
 
   /*
@@ -160,10 +167,10 @@ export default function ReconciliationSection({ stores }: { stores: BonusStore[]
     }
   }, []);
 
-  // Loads with the tab, and reloads when the store changes.
+  // Loads with the tab, and reloads when the store changes or Refresh is hit.
   useEffect(() => {
     if (storeId) void load(storeId);
-  }, [storeId, load]);
+  }, [storeId, load, reloadKey]);
 
   /**
    * Re-read Workstream now, rather than waiting for tomorrow's sync.

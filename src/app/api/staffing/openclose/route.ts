@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { getOpenCloseReport } from "@/lib/staffing";
+import { PAR_PRIORITY, withParPriority } from "@/lib/par";
 import { todayCentralISO } from "@/lib/parRollup";
 
 /**
@@ -32,7 +33,9 @@ export async function GET(req: NextRequest) {
     : todayCentralISO();
 
   try {
-    return NextResponse.json(await getOpenCloseReport(today, days));
+    return NextResponse.json(
+      await withParPriority(PAR_PRIORITY.openClose, () => getOpenCloseReport(today, days)),
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing/openclose] failed:", msg);

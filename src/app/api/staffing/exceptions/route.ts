@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { dateRange } from "@/lib/par";
 import { getMissedPunches, payPeriodFor, recentPayPeriods } from "@/lib/staffing";
+import { PAR_PRIORITY, withParPriority } from "@/lib/par";
 import { todayCentralISO } from "@/lib/parRollup";
 
 /**
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const report = await getMissedPunches(dates);
+    const report = await withParPriority(PAR_PRIORITY.missedPunches, () => getMissedPunches(dates));
     // The calendar travels with the report so the selector does not have to
     // rebuild it, and cannot drift from what was actually queried.
     return NextResponse.json({ ...report, payPeriod, payPeriods: recentPayPeriods(today) });

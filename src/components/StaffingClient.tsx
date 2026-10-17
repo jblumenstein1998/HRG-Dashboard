@@ -159,39 +159,6 @@ function timeLabel(minutes: number): string {
   return `${h12}:${String(m).padStart(2, "0")}${suffix}`;
 }
 
-/** "YYYY-MM-DD" → "Sun Sep 20", read as a plain date rather than an instant. */
-function dayLabel(date: string): string {
-  const [y, m, d] = date.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function addDays(date: string, delta: number): string {
-  const [y, m, d] = date.split("-").map(Number);
-  const dt = new Date(y, m - 1, d + delta);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
-}
-
-/*
- * The times of day worth jumping straight to.
- *
- * A native datetime field makes you spin through 1,440 minutes one at a time to
- * answer a question that is nearly always one of five: how did we open, how did
- * lunch look, the afternoon lull, the dinner rush, and who is left at the end.
- * These are those five, and the slider covers everything in between.
- */
-const TIME_PRESETS: { label: string; minutes: number }[] = [
-  { label: "Open", minutes: 6 * 60 + 30 },
-  { label: "Lunch", minutes: 12 * 60 },
-  { label: "Lull", minutes: 15 * 60 },
-  { label: "Dinner", minutes: 18 * 60 },
-  { label: "Close", minutes: 22 * 60 },
-];
-
 /**
  * Pick the instant the roster is read at.
  *
@@ -199,9 +166,8 @@ const TIME_PRESETS: { label: string; minutes: number }[] = [
  * question. That control is built for entering an appointment — a date and a
  * time typed once, to the minute — where this screen is *scrubbed*: you slide
  * through a day watching the floor fill and empty, and the minute almost never
- * matters. So the day is a stepper and the time is a slider, both of which
- * answer a drag instead of six keystrokes, and the five times anyone actually
- * asks about are one click away.
+ * matters. So the day comes from a calendar and the time is a slider, which
+ * answers a drag instead of six keystrokes.
  *
  * "Now" stays a separate pill rather than a position on the slider, because
  * following the clock is a different mode, not a time — a page left open on
@@ -239,33 +205,19 @@ function TimeScrubber({
         Now
       </button>
 
-      {/* The day, as a stepper. Yesterday is one click, and the date itself is
-          still a date field for the rare jump to last month. */}
-      <div className={`flex items-center rounded-lg border border-gray-200 ${live ? "opacity-60" : ""}`}>
-        <button
-          onClick={() => setDate(addDays(date, -1))}
-          className="px-2 py-1.5 text-gray-500 hover:bg-gray-50 rounded-l-lg transition"
-          aria-label="previous day"
-        >
-          ‹
-        </button>
-        <label className="relative text-xs tabular-nums text-gray-700 px-1 cursor-pointer">
-          {dayLabel(date)}
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => e.target.value && setDate(e.target.value)}
-            className="absolute inset-0 opacity-0 cursor-pointer"
-          />
-        </label>
-        <button
-          onClick={() => setDate(addDays(date, 1))}
-          className="px-2 py-1.5 text-gray-500 hover:bg-gray-50 rounded-r-lg transition"
-          aria-label="next day"
-        >
-          ›
-        </button>
-      </div>
+      {/* The day, from a calendar. Clicking anywhere on the field opens it, not
+          only the icon. */}
+      <input
+        type="date"
+        value={date}
+        max={toLocalInput(new Date()).slice(0, 10)}
+        onChange={(e) => e.target.value && setDate(e.target.value)}
+        onClick={(e) => e.currentTarget.showPicker?.()}
+        className={`text-xs tabular-nums border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+          live ? "opacity-60" : ""
+        }`}
+        aria-label="date"
+      />
 
       {/* Quarter-hour steps: finer than that is a precision the question does
           not have, and coarser would miss a shift change. */}
@@ -280,22 +232,6 @@ function TimeScrubber({
         aria-label="time of day"
       />
       <span className="text-xs tabular-nums text-gray-900 w-16">{timeLabel(minutes)}</span>
-
-      <div className="hidden md:flex items-center gap-1">
-        {TIME_PRESETS.map((p) => (
-          <button
-            key={p.label}
-            onClick={() => setMinutes(p.minutes)}
-            className={`text-[11px] px-1.5 py-1 rounded-md border transition ${
-              !live && minutes === p.minutes
-                ? "bg-gray-900 text-white border-gray-900"
-                : "border-gray-200 text-gray-500 hover:bg-gray-50"
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -330,13 +266,32 @@ export default function StaffingClient({
   // page opened in the morning is still telling the truth at lunchtime.
   const [when, setWhen] = useState(() => toLocalInput(new Date()));
   const [live, setLive] = useState(true);
+  // What was last asked of the server, which trails `when` while the slider is
+  // being dragged. Every request reads twelve stores, and abandoned ones still
+  // run to the end server-side, so a drag through the day used to queue a dozen
+  // full reads ahead of the one position anybody stopped on.
+  const [fetchWhen, setFetchWhen] = useState(when);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /*
+   * Refresh is the whole tab, in reading order.
+   *
+   * The roster goes first, alone, and re-reads PAR's staff lists on the way
+   * (`fresh=1`). Only once it is on screen do the sections below reload — by
+   * then the fresh staff lists are in the cache, so they reuse that one pull
+   * rather than each asking PAR again, and the roster is not left waiting
+   * behind them. `freshNext` marks which request the button sent, so a slider
+   * move never triggers the cascade.
+   */
+  const freshNext = useRef(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
   // Loading is derived from a request key rather than set inside the effect —
   // the React Compiler rejects a synchronous setState there, and keying the
   // response also drops answers that arrive out of order.
-  const requestKey = `${live ? "live" : when}|${refreshKey}`;
+  const requestKey = `${live ? "live" : fetchWhen}|${refreshKey}`;
   const [state, setState] = useState<{ key: string; data: StaffingReport | null; error: string | null }>(
     { key: "", data: null, error: null }
   );
@@ -352,9 +307,15 @@ export default function StaffingClient({
      * which is both what somebody means by "at dinner" and the only form whose
      * answer does not depend on where the person asking is sitting.
      */
-    const qs = live
-      ? ""
-      : `?date=${when.slice(0, 10)}&minutes=${Number(when.slice(11, 13)) * 60 + Number(when.slice(14, 16))}`;
+    const fresh = freshNext.current;
+    freshNext.current = false;
+    const params = new URLSearchParams();
+    if (!live) {
+      params.set("date", fetchWhen.slice(0, 10));
+      params.set("minutes", String(Number(fetchWhen.slice(11, 13)) * 60 + Number(fetchWhen.slice(14, 16))));
+    }
+    if (fresh) params.set("fresh", "1");
+    const qs = params.size ? `?${params}` : "";
     fetch(`/api/staffing${qs}`)
       .then(async (r) => {
         if (r.status === 401) { router.push("/login"); return null; }
@@ -363,9 +324,11 @@ export default function StaffingClient({
         return json as StaffingReport;
       })
       .then((json) => { if (!cancelled && json) setState({ key: requestKey, data: json, error: null }); })
-      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
+      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); })
+      // Success or not, the rest of the tab was asked to refresh too.
+      .finally(() => { if (fresh) setReloadKey((k) => k + 1); });
     return () => { cancelled = true; };
-  }, [requestKey, live, when, router]);
+  }, [requestKey, live, fetchWhen, router]);
 
   const loading = state.key !== requestKey;
   const data = state.data;
@@ -380,12 +343,15 @@ export default function StaffingClient({
   const momentLabel =
     data?.moment?.kind === "instant" && data.at
       ? new Date(data.at).toLocaleString()
-      : `${when.slice(0, 10)} ${timeLabel(
-          Number(when.slice(11, 13)) * 60 + Number(when.slice(14, 16)),
+      : `${fetchWhen.slice(0, 10)} ${timeLabel(
+          Number(fetchWhen.slice(11, 13)) * 60 + Number(fetchWhen.slice(14, 16)),
         )} local`;
 
   const setNow = useCallback(() => {
-    setWhen(toLocalInput(new Date()));
+    if (debounce.current) clearTimeout(debounce.current);
+    const now = toLocalInput(new Date());
+    setWhen(now);
+    setFetchWhen(now);
     setLive(true);
     setRefreshKey((k) => k + 1);
   }, []);
@@ -451,7 +417,12 @@ export default function StaffingClient({
             <TimeScrubber
               when={when}
               live={live}
-              onChange={(v) => { setWhen(v); setLive(false); }}
+              onChange={(v) => {
+                setWhen(v);
+                setLive(false);
+                if (debounce.current) clearTimeout(debounce.current);
+                debounce.current = setTimeout(() => setFetchWhen(v), 350);
+              }}
               onNow={setNow}
             />
 
@@ -463,7 +434,7 @@ export default function StaffingClient({
             )}
 
             <button
-              onClick={() => setRefreshKey((k) => k + 1)}
+              onClick={() => { freshNext.current = true; setRefreshKey((k) => k + 1); }}
               disabled={loading}
               className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
             >
@@ -485,7 +456,7 @@ export default function StaffingClient({
 
         {/* First on the page: the only section here that is a task rather than
             a report. */}
-        <MissedClockOutSection filter={storeFilter} />
+        <MissedClockOutSection filter={storeFilter} reloadKey={reloadKey} />
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
           <CopyableTitle
@@ -529,9 +500,9 @@ export default function StaffingClient({
           )}
         </div>
 
-        <OpenCloseSection filter={storeFilter} />
+        <HoursSection filter={storeFilter} reloadKey={reloadKey} />
 
-        <HoursSection filter={storeFilter} />
+        <OpenCloseSection filter={storeFilter} reloadKey={reloadKey} />
 
         {/* Admin-only: it shows everyone's pay rate side by side and its
             decisions determine whose hours are costed at whose rate. */}
@@ -539,10 +510,16 @@ export default function StaffingClient({
           <DuplicateAudit
             stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))}
             scopeLabel={storeFilter.label}
+            reloadKey={reloadKey}
           />
         )}
 
-        {isAdmin && <ReconciliationSection stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))} />}
+        {isAdmin && (
+          <ReconciliationSection
+            stores={BONUS_STORES.filter((s) => inFilter(storeFilter.allowed, s.name))}
+            reloadKey={reloadKey}
+          />
+        )}
 
         <p className="text-[11px] text-gray-400">
           Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
@@ -577,7 +554,7 @@ export default function StaffingClient({
  * closing shift running past midnight is measured in its own frame rather than
  * wrapping into a negative span.
  */
-function OpenCloseSection({ filter }: { filter: StoreFilter }) {
+function OpenCloseSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   const [side, setSide] = useState<"open" | "close">("open");
   const sorter = useColumnSort("desc");
   const [state, setState] = useState<{ loaded: boolean; data: OpenCloseReport | null; error: string | null }>(
@@ -595,7 +572,7 @@ function OpenCloseSection({ filter }: { filter: StoreFilter }) {
       .then((json) => { if (!cancelled) setState({ loaded: true, data: json, error: null }); })
       .catch((err) => { if (!cancelled) setState({ loaded: true, data: null, error: String(err?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
   // Filtered once, at the source, so this section's table, chart and legend
   // cannot disagree about which stores are on screen.
@@ -997,7 +974,7 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
  *
  * Empty is the expected state, and says so rather than showing a bare table.
  */
-function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
+function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   const [payDate, setPayDate] = useState<string | null>(null);
   const [state, setState] = useState<{
     key: string; data: MissedPunchReport & { payPeriods?: PayPeriod[] } | null; error: string | null;
@@ -1017,7 +994,7 @@ function MissedClockOutSection({ filter }: { filter: StoreFilter }) {
       .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
       .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [requestKey, query]);
+  }, [requestKey, query, reloadKey]);
 
   const loading = state.key !== requestKey;
   const data = state.data;
@@ -1174,7 +1151,7 @@ function daysBeforeYesterday(days: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-function HoursSection({ filter }: { filter: StoreFilter }) {
+function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   /*
    * Two independent choices, because they are two questions.
    *
@@ -1225,7 +1202,7 @@ function HoursSection({ filter }: { filter: StoreFilter }) {
       .then((json) => { if (!cancelled) setState({ key: requestKey, data: json, error: null }); })
       .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [requestKey, query]);
+  }, [requestKey, query, reloadKey]);
 
   const loading = state.key !== requestKey;
   const data = useMemo(

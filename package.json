@@ -12,6 +12,7 @@
     "@ai-sdk/react": "^4.0.37",
     "@neondatabase/serverless": "^1.1.0",
     "ai": "^7.0.34",
+    "exceljs": "^4.4.0",
     "html-to-image": "^1.11.13",
     "jose": "^6.2.2",
     "next": "16.2.3",
