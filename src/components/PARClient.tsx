@@ -732,12 +732,13 @@ const QUICK_RANGES = [
   { key: "wtd", label: "WTD" },
   { key: "last_week", label: "Last Week" },
   { key: "ptd", label: "PTD" },
+  { key: "qtd", label: "QTD" },
   { key: "ytd", label: "YTD" },
 ] as const;
 
 // A custom window is keyed "<start>_<end>" (ISO dates) — the same string the
 // sales-snapshot route parses, so it travels as one `range` param.
-type SnapshotRange = (typeof QUICK_RANGES)[number]["key"] | `p${number}` | `${string}_${string}`;
+type SnapshotRange = (typeof QUICK_RANGES)[number]["key"] | `p${number}` | `q${number}` | `${string}_${string}`;
 
 const CUSTOM_RANGE_RE = /^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/;
 
@@ -761,11 +762,28 @@ function completedPeriods(): FiscalPeriod[] {
   return PERIODS.filter(p => p.period < cur).slice().reverse();
 }
 
+type FiscalQuarter = { quarter: number; start: string; end: string; label: string };
+
+// Completed fiscal quarters only, newest first — the in-progress one is QTD.
+// The year is the fiscal year's (FY2026 starts 2025-12-29), read off the
+// quarter's first period's end date; same rule as the server's label.
+function completedQuarters(): FiscalQuarter[] {
+  const cur = currentPeriod().quarter;
+  const quarters: FiscalQuarter[] = [];
+  for (let q = 1; q < cur; q++) {
+    const ps = PERIODS.filter(p => p.quarter === q);
+    if (ps.length === 0) continue;
+    quarters.push({ quarter: q, start: ps[0].start, end: ps[ps.length - 1].end, label: `Q${q} ${ps[0].end.slice(0, 4)}` });
+  }
+  return quarters.reverse();
+}
+
 function snapshotRangeLabel(range: SnapshotRange): string {
   const quick = QUICK_RANGES.find(r => r.key === range);
   if (quick) return quick.label;
   const custom = parseCustomRange(range);
   if (custom) return custom.start === custom.end ? custom.start : `${fmtDate(custom.start)}–${fmtDate(custom.end)}`;
+  if (range.startsWith("q")) return completedQuarters().find(q => `q${q.quarter}` === range)?.label ?? range.toUpperCase();
   return `P${range.slice(1)}`;
 }
 
@@ -954,6 +972,7 @@ function SnapshotVsLastYearTable({
   const hrgStores = stores;
 
   const periods = completedPeriods();
+  const quarters = completedQuarters();
 
   // TN and VA are in different time zones, so each has its own "as of" cutoff
   // (last year's comparison is sliced to the same local time-of-day, not a
@@ -999,6 +1018,13 @@ function SnapshotVsLastYearTable({
           <optgroup label="Past periods">
             {periods.map(p => <option key={p.period} value={`p${p.period}`}>{periodLabel(p)}</option>)}
           </optgroup>
+          {quarters.length > 0 && (
+            <optgroup label="Past quarters">
+              {quarters.map(q => (
+                <option key={q.quarter} value={`q${q.quarter}`}>{q.label} ({fmtDate(q.start)}–{fmtDate(q.end)})</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         {/* Keyed on the window shown, so it resets to that window whenever
             the dropdown (or an Apply) changes it. */}
