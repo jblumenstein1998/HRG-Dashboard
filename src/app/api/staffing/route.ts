@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
 import { getStaffingAt, type StaffingMoment } from "@/lib/staffing";
+import { expireEditWindow } from "@/lib/parShiftStore";
 
 /**
  * Who was on the clock, every store.
@@ -80,7 +81,13 @@ export async function GET(req: NextRequest) {
    * Shifts on the roster dates are read live too, slider or not.
    */
   const fresh = params.get("fresh") === "1";
-  if (fresh) revalidateTag("par-employees", { expire: 0 });
+  if (fresh) {
+    revalidateTag("par-employees", { expire: 0 });
+    // And the last 14 days of stored shifts: the usual reason to press Refresh
+    // is having just fixed a timecard, so every section re-reads PAR for those
+    // days on its next load instead of waiting out their five minutes.
+    await expireEditWindow().catch((err) => console.error("[staffing] expireEditWindow failed:", err));
+  }
 
   try {
     return NextResponse.json(await getStaffingAt(moment, { fresh }));

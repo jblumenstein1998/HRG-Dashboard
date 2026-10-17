@@ -18,12 +18,20 @@
  * was already good keeps its rows; and PAR answering "no shifts" for a day we
  * hold shifts for is treated as a failure, not a deletion of everybody.
  *
- * ── Read: settled days from here, the last two from PAR ─────────────────────
+ * ── Read: three ages of day ──────────────────────────────────────────────────
  *
- * Today and yesterday are still moving (open shifts, managers fixing punches),
- * so they keep coming from PAR. Anything older comes from here if we hold it,
- * and from PAR if we do not yet — so a backfill in progress, or a store-day
- * that errored, costs speed and never correctness.
+ *   today            PAR, as before — shifts are still open and moving.
+ *   last 14 days     here, but never more than five minutes behind PAR: a
+ *                    store-day read older than that is re-read from PAR first.
+ *                    This is where timecards get fixed, and a manager who
+ *                    fixes one and comes back expects to see it, not tomorrow.
+ *                    The tab's Refresh marks the whole window stale, so a fix
+ *                    shows on the next read without waiting out the five.
+ *   older            here, as stored. Nobody edits a month-old timecard, and
+ *                    the nightly job re-reads the window before days leave it.
+ *
+ * Anything not held as good falls back to PAR — so a backfill in progress, or
+ * a store-day that errored, costs speed and never correctness.
  */
 
 import { gzipSync } from "node:zlib";
@@ -102,13 +110,14 @@ export async function syncShiftDay(storeId: string, businessDate: string): Promi
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // A day already held keeps its rows and its "ok": one bad morning from PAR
-    // must not turn good history back into a gap.
+    // must not turn good history back into a gap. fetched_at still moves, so a
+    // PAR outage costs each edit-window day one failed try per five minutes
+    // rather than one per page load.
     await sql`
       INSERT INTO par_shift_days (store_id, business_date, status, error, fetched_at)
       VALUES (${storeId}, ${businessDate}, 'error', ${error.slice(0, 500)}, now())
       ON CONFLICT (store_id, business_date) DO UPDATE SET
         error = EXCLUDED.error, fetched_at = now()
-      WHERE par_shift_days.status <> 'ok'
     `.catch(() => {});
     return { storeId, businessDate, ok: false, shifts: 0, error };
   }
@@ -161,15 +170,66 @@ type ShiftRow = {
 
 const toNumber = (v: string | null) => (v == null ? null : Number(v));
 
+/** How old a stored day inside the edit window may be before it is re-read. */
+const WINDOW_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** The days timecards are still being fixed on — par-rollup measured 14. */
+const EDIT_WINDOW_DAYS = 14;
+
+/** Status and last fetch of one stored day — a few bytes, never cached. */
+async function dayStatus(storeId: string, businessDate: string): Promise<{ ok: boolean; fetchedAt: string } | null> {
+  const [day] = await sql`
+    SELECT status, to_json(fetched_at) AS fetched_at FROM par_shift_days
+    WHERE store_id = ${storeId} AND business_date = ${businessDate}
+  `;
+  return day ? { ok: day.status === "ok", fetchedAt: day.fetched_at as string } : null;
+}
+
+/**
+ * One re-read per store-day at a time.
+ *
+ * Every section on the Staffing tab loads at once and several read the same
+ * days, so without this a stale day would be fetched from PAR once per section.
+ */
+const inFlight = new Map<string, Promise<SyncResult>>();
+function syncOnce(storeId: string, businessDate: string): Promise<SyncResult> {
+  const key = `${storeId} ${businessDate}`;
+  let p = inFlight.get(key);
+  if (!p) {
+    p = syncShiftDay(storeId, businessDate).finally(() => inFlight.delete(key));
+    inFlight.set(key, p);
+  }
+  return p;
+}
+
+/**
+ * Mark the edit window stale, so the next read of each day re-reads PAR.
+ *
+ * For the tab's Refresh button: "I just fixed a timecard" should not have to
+ * wait out the five minutes. Backdates rather than clears fetched_at, so it
+ * still says roughly when the copy was taken.
+ */
+export async function expireEditWindow(): Promise<void> {
+  const today = businessDateISO();
+  await sql`
+    UPDATE par_shift_days
+    SET fetched_at = LEAST(fetched_at, now() - interval '1 hour')
+    WHERE status = 'ok' AND business_date >= ${shiftDate(today, -EDIT_WINDOW_DAYS)}
+  `;
+}
+
 /**
  * One store-day as stored, or null when we do not hold it as good.
  *
- * Cached for a day under SHIFT_HISTORY_TAG, which every sync clears — so a
- * page reads each store-day from Postgres once, not once per visitor, which is
- * what keeps this inside the free plan's network transfer.
+ * Cached, so a page reads each store-day from Postgres once rather than once
+ * per visitor — which is what keeps this inside the free plan's network
+ * transfer. `version` is the day's fetched_at: a re-read changes it, so a fresh
+ * copy is a new cache entry rather than something to invalidate. Older days
+ * pass a constant and rely on SHIFT_HISTORY_TAG, which every sync clears.
  */
 const readStoredShiftDay = unstable_cache(
-  async (storeId: string, businessDate: string): Promise<PARShiftRecord[] | null> => {
+  async (storeId: string, businessDate: string, version: string): Promise<PARShiftRecord[] | null> => {
+    void version;
     const [day] = await sql`
       SELECT status FROM par_shift_days WHERE store_id = ${storeId} AND business_date = ${businessDate}
     `;
@@ -209,16 +269,30 @@ const readStoredShiftDay = unstable_cache(
 
 /**
  * A store's shifts for one business date — the drop-in for getShifts on any
- * screen that looks back further than yesterday.
+ * screen that looks back past today.
  *
  * Same output as getShifts, non-labor jobs already removed: stored days are
  * converted by the same shiftFromRecord a live response goes through.
  */
 export async function getShiftsHistory(storeId: string, businessDate: string): Promise<PARShift[]> {
   const timeZone = getStoreTimeZone(storeId);
-  if (businessDate >= shiftDate(businessDateISO(timeZone), -1)) return getShifts(storeId, businessDate);
+  const today = businessDateISO(timeZone);
+  if (businessDate >= today) return getShifts(storeId, businessDate);
 
-  const stored = await readStoredShiftDay(storeId, businessDate).catch(() => null);
+  let version = "settled";
+  if (businessDate >= shiftDate(today, -EDIT_WINDOW_DAYS)) {
+    // Inside the edit window: re-read PAR first if our copy is more than five
+    // minutes old, so a fixed timecard shows on the next look.
+    let status = await dayStatus(storeId, businessDate).catch(() => null);
+    if (!status?.ok || Date.now() - new Date(status.fetchedAt).getTime() > WINDOW_MAX_AGE_MS) {
+      await syncOnce(storeId, businessDate);
+      status = await dayStatus(storeId, businessDate).catch(() => null);
+    }
+    if (!status?.ok) return getShifts(storeId, businessDate);
+    version = status.fetchedAt;
+  }
+
+  const stored = await readStoredShiftDay(storeId, businessDate, version).catch(() => null);
   if (!stored) return getShifts(storeId, businessDate);
 
   const excluded = await nonLaborJobIds(storeId);
