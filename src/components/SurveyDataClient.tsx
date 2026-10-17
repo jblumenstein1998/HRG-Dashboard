@@ -206,8 +206,8 @@ export default function SurveyDataClient({
 
   const [periodSel, setPeriodSel] = useState<string>("");
   const storeFilter = useStoreFilter(leaders);
-  // Opens on biggest-selling first, the order the table used to build in.
-  const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "sales", dir: "desc" });
+  // Opens on most surveys first.
+  const [sort, setSort] = useState<{ col: string; dir: "asc" | "desc" }>({ col: "surveys", dir: "desc" });
   const [refreshKey, setRefreshKey] = useState(0);
   const [fetching, setFetching] = useState(false);
   const [fetchNote, setFetchNote] = useState<{ ok: boolean; text: string } | null>(null);
