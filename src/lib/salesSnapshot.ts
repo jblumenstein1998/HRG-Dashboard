@@ -16,8 +16,9 @@ import { businessDateISO, businessMinutes, businessParts, isoOf, zonedParts } fr
 //    already fully happened, so its orders get cut off at the same time-of-day
 //    as "now" for an apples-to-apples comparison (see summarize/cutoffMinutes).
 //
-//  • every other range (yesterday / WTD / last week / PTD / YTD / a past
-//    fiscal period)
+//  • every other range (yesterday / WTD / last week / PTD / QTD / YTD / a past
+//    fiscal period or quarter / a custom date window, which must end by
+//    yesterday)
 //    resolves entirely through the Postgres daily rollup, exactly like the
 //    Net Sales / Transactions / Average Check tables below it on the POS tab.
 //    Those windows all end yesterday-or-earlier, so they're settled: no live
@@ -62,14 +63,66 @@ function nowLabelForState(state: PARLocation["state"], businessDate: string): st
 
 // ── Range keys ────────────────────────────────────────────────────────────────
 
-export const QUICK_RANGES = ["today", "yesterday", "wtd", "last_week", "ptd", "ytd"] as const;
+export const QUICK_RANGES = ["today", "yesterday", "wtd", "last_week", "ptd", "qtd", "ytd"] as const;
 export type QuickRange = (typeof QUICK_RANGES)[number];
-/** A quick range, or `p<n>` for a full fiscal period (e.g. "p5"). */
-export type SnapshotRange = QuickRange | `p${number}`;
+/**
+ * A quick range, `p<n>` for a full fiscal period (e.g. "p5"), `q<n>` for a
+ * full fiscal quarter (e.g. "q2"), or a custom `<start>_<end>` window of ISO
+ * dates (e.g. "2026-10-01_2026-10-12").
+ */
+export type SnapshotRange = QuickRange | `p${number}` | `q${number}` | `${string}_${string}`;
 
 export const DEFAULT_SNAPSHOT_RANGE: SnapshotRange = "today";
 
 const PERIOD_KEY_RE = /^p(\d+)$/;
+const QUARTER_KEY_RE = /^q(\d)$/;
+
+/** A fiscal quarter's full window, first period's start to last period's end. */
+function quarterWindow(quarter: number): { start: string; end: string } | null {
+  const periods = PERIODS.filter((p) => p.quarter === quarter);
+  if (periods.length === 0) return null;
+  return { start: periods[0].start, end: periods[periods.length - 1].end };
+}
+
+// The fiscal year is named for the calendar year most of it falls in — FY2026
+// starts 2025-12-29 — so a quarter's year is its first period's end date's.
+function quarterLabel(quarter: number): string {
+  const first = PERIODS.find((p) => p.quarter === quarter);
+  return `Q${quarter} ${first ? first.end.slice(0, 4) : ""}`.trim();
+}
+const CUSTOM_KEY_RE = /^(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/;
+
+// Two years covers YTD plus any period-over-period window anyone has asked for;
+// past that it's almost certainly a typo'd year.
+const MAX_CUSTOM_DAYS = 731;
+
+function isRealISODate(iso: string): boolean {
+  const d = new Date(iso + "T00:00:00Z");
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(iso);
+}
+
+function dayBeforeISO(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Splits a custom range key into its dates, or null if it isn't a usable one.
+ * A custom window must end by yesterday: today is still moving, and only the
+ * "today" range knows how to cut last year off at the same clock time — a
+ * window that took today live would set a partial day against a whole one.
+ */
+function parseCustomRange(key: string): { start: string; end: string } | null {
+  const match = key.match(CUSTOM_KEY_RE);
+  if (!match) return null;
+  const [, start, end] = match;
+  if (!isRealISODate(start) || !isRealISODate(end) || start > end) return null;
+  if (end > dayBeforeISO(todayISOCentral())) return null;
+  const days = (Date.parse(end) - Date.parse(start)) / 86_400_000 + 1;
+  if (days > MAX_CUSTOM_DAYS) return null;
+  return { start, end };
+}
 
 /** Validates an untrusted range string (e.g. a query param). Null if unknown. */
 export function parseSnapshotRange(raw: string | null | undefined): SnapshotRange | null {
@@ -78,6 +131,9 @@ export function parseSnapshotRange(raw: string | null | undefined): SnapshotRang
   if ((QUICK_RANGES as readonly string[]).includes(key)) return key as QuickRange;
   const match = key.match(PERIOD_KEY_RE);
   if (match && PERIODS.some((p) => p.period === Number(match[1]))) return key as `p${number}`;
+  const qMatch = key.match(QUARTER_KEY_RE);
+  if (qMatch && quarterWindow(Number(qMatch[1]))) return key as `q${number}`;
+  if (parseCustomRange(key)) return key as `${string}_${string}`;
   return null;
 }
 
@@ -87,11 +143,16 @@ const QUICK_RANGE_LABELS: Record<QuickRange, string> = {
   wtd: "WTD",
   last_week: "Last Week",
   ptd: "PTD",
+  qtd: "QTD",
   ytd: "YTD",
 };
 
 function snapshotRangeLabel(range: SnapshotRange): string {
   if (range in QUICK_RANGE_LABELS) return QUICK_RANGE_LABELS[range as QuickRange];
+  const custom = parseCustomRange(range);
+  if (custom) return `${custom.start} – ${custom.end}`;
+  const qMatch = range.match(QUARTER_KEY_RE);
+  if (qMatch) return quarterLabel(Number(qMatch[1]));
   return `P${range.match(PERIOD_KEY_RE)?.[1] ?? "?"}`;
 }
 
@@ -103,6 +164,11 @@ function resolveWindow(range: SnapshotRange): { start: string; end: string } {
     const t = todayISOCentral();
     return { start: t, end: t };
   }
+  const custom = parseCustomRange(range);
+  if (custom) return custom;
+  const qMatch = range.match(QUARTER_KEY_RE);
+  const quarter = qMatch ? quarterWindow(Number(qMatch[1])) : null;
+  if (quarter) return quarter;
   const key: RangeKey = range === "ptd" ? "mtd" : (range as RangeKey);
   const { start, end } = resolveDateBounds(key);
   return { start, end };
