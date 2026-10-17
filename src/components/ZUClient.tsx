@@ -11,8 +11,8 @@ import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 /**
  * Zaxby's University — training compliance out of Schoox.
  *
- * One table, one row per store, sorted TN then VA the way every other tab
- * orders them. Opening a row lists that store's people worst-rate-first, which
+ * One table, one row per store, TN above VA the way every other tab orders
+ * them, ranked within each market by compliance rate. Opening a row lists that store's people worst-rate-first, which
  * is the question a store row raises: not "how bad", but "who".
  */
 
@@ -175,6 +175,13 @@ type Sort = SortKey[];
 
 /** One shared empty sort, so an unsorted drop-down doesn't churn a new array each render. */
 const NO_SORT: Sort = [];
+
+/**
+ * The store table opens ranked by Average Compliance Rate, best first, so the
+ * stores to chase sit at the bottom of each market. One click on the column
+ * turns it off and falls back to the plain TN-then-VA store order.
+ */
+const STORE_DEFAULT_SORT: Sort = [{ key: "rate", dir: "desc" }];
 
 /**
  * Clicking any column promotes it to primary; clicking the one that is already
@@ -392,7 +399,7 @@ export default function ZUClient({
   const [testsError, setTestsError] = useState<string>("");
   const [openTestStores, setOpenTestStores] = useState<Set<string>>(new Set());
   const testsRef = useRef<HTMLDivElement>(null);
-  const [storeSort, setStoreSort] = useState<Sort>(NO_SORT);
+  const [storeSort, setStoreSort] = useState<Sort>(STORE_DEFAULT_SORT);
   const [testSort, setTestSort] = useState<Sort>(NO_SORT);
   // Keyed by store, so sorting one open drop-down leaves the others alone.
   const [rosterSort, setRosterSort] = useState<Record<string, Sort>>({});
