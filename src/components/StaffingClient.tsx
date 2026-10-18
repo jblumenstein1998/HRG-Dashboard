@@ -134,6 +134,12 @@ function cleanJobTitle(job: string | null | undefined): string | null {
   return job.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
 }
 
+/** "YYYY-MM-DD" moved by `n` calendar days. */
+function addDaysISO(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
 /** A loaded day as the roster report for one minute of it, computed here. */
 function reportFromDay(day: StaffingDay, minutes: number): StaffingReport {
   return {
@@ -364,21 +370,38 @@ export default function StaffingClient({
     const isToday = date === toLocalInput(new Date()).slice(0, 10);
     return isToday && Date.now() - hit.at > 120_000 ? null : hit.day;
   }, []);
-  const loadDay = useCallback((date: string, fresh: boolean): Promise<StaffingDay> => {
-    const pending = !fresh && dayInFlight.current.get(date);
-    if (pending) return pending;
-    const p = fetch(`/api/staffing/day?date=${date}${fresh ? "&fresh=1" : ""}`)
+  /*
+   * Fetch days `from`..`to` in one request and hold each. A date already on
+   * its way is waited on rather than asked for twice — so picking a date the
+   * seven-day preload is still fetching costs nothing extra.
+   */
+  const loadDays = useCallback((from: string, to: string, fresh: boolean): Promise<StaffingDay[]> => {
+    const batch = fetch(`/api/staffing/day?from=${from}&to=${to}${fresh ? "&fresh=1" : ""}`)
       .then(async (r) => {
         if (r.status === 401) { router.push("/login"); throw new Error("Not signed in"); }
         const json = await r.json();
         if (!r.ok) throw new Error(json.error ?? "Failed to load");
-        dayCache.current.set(date, { day: json as StaffingDay, at: Date.now() });
-        return json as StaffingDay;
-      })
-      .finally(() => dayInFlight.current.delete(date));
-    dayInFlight.current.set(date, p);
-    return p;
+        const days = (json as { days: StaffingDay[] }).days;
+        for (const day of days) dayCache.current.set(day.date, { day, at: Date.now() });
+        return days;
+      });
+    for (let d = from; d <= to; d = addDaysISO(d, 1)) {
+      const date = d;
+      const p = batch.then((days) => {
+        const day = days.find((x) => x.date === date);
+        if (!day) throw new Error(`No data came back for ${date}`);
+        return day;
+      });
+      dayInFlight.current.set(date, p);
+      p.catch(() => {}).finally(() => { if (dayInFlight.current.get(date) === p) dayInFlight.current.delete(date); });
+    }
+    return batch;
   }, [router]);
+  const loadDay = useCallback((date: string, fresh: boolean): Promise<StaffingDay> => {
+    const pending = !fresh && dayInFlight.current.get(date);
+    if (pending) return pending;
+    return loadDays(date, date, fresh).then((days) => days[0]);
+  }, [loadDays]);
 
   useEffect(() => {
     let cancelled = false;
@@ -412,10 +435,11 @@ export default function StaffingClient({
         })
         .then((json) => {
           done(json);
-          // "Now" is on screen; fetch the rest of today behind it, so sliding
-          // back to earlier in the day is instant.
+          // "Now" is on screen; fetch today and the six days before it behind
+          // it, in one request, so sliding back through today — or picking any
+          // day this past week — is instant.
           const today = toLocalInput(new Date()).slice(0, 10);
-          if (json && !usableDay(today)) loadDay(today, false).catch(() => {});
+          if (json && !usableDay(today)) loadDays(addDaysISO(today, -6), today, false).catch(() => {});
         })
         .catch(failed)
         .finally(cascade);
@@ -429,7 +453,7 @@ export default function StaffingClient({
         .finally(cascade);
     }
     return () => { cancelled = true; };
-  }, [requestKey, live, fetchWhen, router, usableDay, loadDay]);
+  }, [requestKey, live, fetchWhen, router, usableDay, loadDay, loadDays]);
 
   const loading = state.key !== requestKey;
   // The slider waits 350ms before asking (see fetchWhen), and the screen should

@@ -39,6 +39,7 @@ import {
   getStoreTimeZone,
   withParPriority,
   PAR_PRIORITY,
+  type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
@@ -247,149 +248,147 @@ async function rosterForStore(
     moment.kind === "instant"
       ? zonedParts(moment.at, timeZone)
       : { date: moment.date, minutes: moment.minutes };
-  return rosterAt(await storeDayFor(loc, localDate, moment.kind === "instant" || fresh), localMinutes);
+  const [day] = await storeDaysFor(loc, [localDate], moment.kind === "instant" || fresh);
+  return rosterAt(day, localMinutes);
 }
 
 /**
- * One store's shifts and facts for a local date — everything rosterAt needs
- * to answer any minute of it.
+ * One store's shifts and facts for one or more local dates — everything
+ * rosterAt needs to answer any minute of each.
  *
- * `live` reads the day still being worked straight from PAR (Now, Refresh);
- * otherwise it may be up to two minutes old. Earlier dates are stored history
- * either way.
+ * Several dates share one read: every date needed — each day, the day before
+ * it, and its week so far — is fetched once, the settled ones from Postgres in
+ * a single batch (getShiftsHistoryRange). So the slider's seven-day preload is
+ * about the same cost per store as one day was.
+ *
+ * Where each date comes from: only the business day still being worked can
+ * have shifts open on it — PAR closes a day at 2:15 AM — so every date before
+ * it is stored history, read from Postgres (and re-read from PAR when Refresh
+ * flags it). The day still being worked, and the calendar day before it while
+ * an overnight shift can still be open on it, come from PAR: live for Now and
+ * Refresh (`live`), otherwise at most two minutes old.
  */
-async function storeDayFor(
+async function storeDaysFor(
   loc: (typeof PAR_LOCATIONS)[number],
-  localDate: string,
+  dates: string[],
   live: boolean,
-): Promise<StoreDay> {
+): Promise<StoreDay[]> {
   const timeZone = getStoreTimeZone(loc.storeId);
-  const base = {
+  const baseFor = (localDate: string) => ({
     storeId: loc.storeId,
     storeName: loc.name,
     state: loc.state,
     timeZone,
     localDate,
-  };
+  });
 
   try {
-    const previousDate = shiftLocalDate(localDate, -1);
-
-    // This week so far, Monday up to yesterday. Fetched alongside so one store
-    // is one round of parallel calls rather than two.
-    const trailingDates = weekToDateBefore(localDate);
-
-    // Where each roster date comes from. Only the business day still being
-    // worked can have shifts open on it — PAR closes a day at 2:15 AM — so
-    // every date before it is stored history, read from Postgres like the rest
-    // of the tab (and re-read from PAR when Refresh flags it). Scrubbing back to
-    // yesterday at six is then two Postgres reads per store, not two PAR calls.
-    //
-    // The day still being worked, and the calendar day before it while an
-    // overnight shift can still be open on it, come from PAR: "Now" live, the
-    // slider through today at most two minutes old, since every slider
-    // position asks for the same dates.
+    const needed = new Set<string>();
+    for (const d of dates) {
+      needed.add(d);
+      needed.add(shiftLocalDate(d, -1));
+      for (const w of weekToDateBefore(d)) needed.add(w);
+    }
     const settledBefore = businessDateISO(timeZone);
-    const readShifts = (d: string) =>
-      d < settledBefore
-        ? getShiftsHistory(loc.storeId, d)
-        : live
-          ? getShiftsLive(loc.storeId, d)
-          : getShiftsRecent(loc.storeId, d);
+    const settled = [...needed].filter((d) => d < settledBefore);
+    const current = [...needed].filter((d) => d >= settledBefore);
 
-    // Yesterday is usually also the last day of the week so far; it is read
-    // once, as a roster date, rather than a second time from the cache.
-    const otherWeekDays = trailingDates.filter((d) => d !== previousDate);
-
-    const [employees, jobs, linked, today, yesterday, ...trailing] = await Promise.all([
+    const [employees, jobs, linked, settledByDate, ...currentShifts] = await Promise.all([
       getEmployees(loc.storeId),
       getJobs(loc.storeId),
       // Never throws: an unreachable Workstream costs the position column, not
       // the screen.
       linkedRosterOrEmpty(loc.storeId),
-      readShifts(localDate),
-      readShifts(previousDate),
-      ...otherWeekDays.map((d) => getShiftsHistory(loc.storeId, d)),
+      settled.length ? getShiftsHistoryRange(loc.storeId, settled) : Promise.resolve(new Map<string, PARShift[]>()),
+      ...current.map((d) => (live ? getShiftsLive(loc.storeId, d) : getShiftsRecent(loc.storeId, d))),
     ]);
-    const trailingByDate = new Map(otherWeekDays.map((d, i) => [d, trailing[i]]));
+    const currentByDate = new Map(current.map((d, i) => [d, currentShifts[i]]));
+    const shiftsOn = (d: string): PARShift[] => settledByDate.get(d) ?? currentByDate.get(d) ?? [];
 
     const nameById = new Map(employees.map((e) => [e.id, e]));
     const jobById = new Map(jobs.map((j) => [j.id, j]));
 
-    /*
-     * Week to date, including the shift being worked right now.
-     *
-     * Today's own shifts come from the live read rather than the cached week
-     * days, so the figure climbs through the day — which is the point. The
-     * question it answers is whether somebody should be sent home before they
-     * cross forty, and a total that stopped at midnight could not answer it.
-     *
-     * Yesterday is read twice — once cached as part of the week, once live for
-     * the roster — and the live copy wins. A shift that started at 6pm and is
-     * still running belongs to yesterday's business date, so the cached copy
-     * has it frozen at whatever it had accrued when the day was first read;
-     * taking the live one is what makes an overnight shift climb.
-     *
-     * On a Monday `trailingDates` is empty and yesterday is Sunday, which
-     * belongs to last week's payroll — so it is left out entirely, and
-     * somebody finishing an overnight Sunday shift correctly shows no hours
-     * against the week that just started.
-     */
-    const weekDays = trailingDates.map((d) => (d === previousDate ? yesterday : trailingByDate.get(d) ?? []));
-
-    const wtd: StoreDay["wtd"] = {};
-    for (const day of [...weekDays, today]) {
-      for (const sh of day) {
-        if (!sh.employeeId) continue;
-        const acc = (wtd[sh.employeeId] ??= { minutes: 0, shifts: 0 });
-        acc.minutes += sh.minutesWorked;
-        acc.shifts += 1;
-      }
-    }
-
-    // Names, jobs and Workstream facts for just the people and jobs on these
-    // two days — what a minute's roster can show — so the day stays small
-    // enough to send to the page.
-    const names: StoreDay["names"] = {};
-    const jobNames: StoreDay["jobs"] = {};
-    const workstream: StoreDay["workstream"] = {};
-    for (const sh of [...today, ...yesterday]) {
-      if (sh.jobId && !(sh.jobId in jobNames)) {
-        const job = jobById.get(sh.jobId);
-        if (job) jobNames[sh.jobId] = job.name;
-      }
-      const id = sh.employeeId;
-      if (!id || id in names) continue;
-      const ws = linked.get(id);
-      // Workstream's name wins where there is one: PAR's is a first name and a
-      // last initial, and a roster is read to find a person.
-      names[id] = ws?.name ?? fullName(nameById.get(id)) ?? `#${id}`;
-      if (ws) {
-        workstream[id] = {
-          fullName: ws.name,
-          position: ws.title,
-          rateOfRecord: ws.hourlyRate,
-          hiredDate: ws.hiredDate,
-          terminationDate: ws.terminationDate,
-          linkedBy: ws.linkedBy,
-          assignedElsewhere: ws.assignedElsewhere,
-        };
-      }
-    }
-
-    return { ...base, today, yesterday, wtd, names, jobs: jobNames, workstream, error: null };
+    return dates.map((localDate) => buildStoreDay(baseFor(localDate), shiftsOn, nameById, jobById, linked));
   } catch (err) {
-    return {
-      ...base,
+    const error = err instanceof Error ? err.message : String(err);
+    return dates.map((localDate) => ({
+      ...baseFor(localDate),
       today: [],
       yesterday: [],
       wtd: {},
       names: {},
       jobs: {},
       workstream: {},
-      error: err instanceof Error ? err.message : String(err),
-    };
+      error,
+    }));
   }
+}
+
+/** One store-day from shifts already read — the part of storeDaysFor per date. */
+function buildStoreDay(
+  base: Pick<StoreDay, "storeId" | "storeName" | "state" | "timeZone" | "localDate">,
+  shiftsOn: (date: string) => PARShift[],
+  nameById: Map<string, Awaited<ReturnType<typeof getEmployees>>[number]>,
+  jobById: Map<string, Awaited<ReturnType<typeof getJobs>>[number]>,
+  linked: Awaited<ReturnType<typeof linkedRosterOrEmpty>>,
+): StoreDay {
+  const localDate = base.localDate;
+  const today = shiftsOn(localDate);
+  const yesterday = shiftsOn(shiftLocalDate(localDate, -1));
+
+  /*
+   * Week to date, including the date's own shifts — so on today the figure
+   * climbs through the day, which is the point: the question it answers is
+   * whether somebody should be sent home before they cross forty.
+   *
+   * On a Monday the week has no earlier days and yesterday is Sunday, which
+   * belongs to last week's payroll — so it is left out entirely, and somebody
+   * finishing an overnight Sunday shift correctly shows no hours against the
+   * week that just started.
+   */
+  const weekDays = weekToDateBefore(localDate).map(shiftsOn);
+
+  const wtd: StoreDay["wtd"] = {};
+  for (const day of [...weekDays, today]) {
+    for (const sh of day) {
+      if (!sh.employeeId) continue;
+      const acc = (wtd[sh.employeeId] ??= { minutes: 0, shifts: 0 });
+      acc.minutes += sh.minutesWorked;
+      acc.shifts += 1;
+    }
+  }
+
+  // Names, jobs and Workstream facts for just the people and jobs on these
+  // two days — what a minute's roster can show — so the day stays small
+  // enough to send to the page.
+  const names: StoreDay["names"] = {};
+  const jobNames: StoreDay["jobs"] = {};
+  const workstream: StoreDay["workstream"] = {};
+  for (const sh of [...today, ...yesterday]) {
+    if (sh.jobId && !(sh.jobId in jobNames)) {
+      const job = jobById.get(sh.jobId);
+      if (job) jobNames[sh.jobId] = job.name;
+    }
+    const id = sh.employeeId;
+    if (!id || id in names) continue;
+    const ws = linked.get(id);
+    // Workstream's name wins where there is one: PAR's is a first name and a
+    // last initial, and a roster is read to find a person.
+    names[id] = ws?.name ?? fullName(nameById.get(id)) ?? `#${id}`;
+    if (ws) {
+      workstream[id] = {
+        fullName: ws.name,
+        position: ws.title,
+        rateOfRecord: ws.hourlyRate,
+        hiredDate: ws.hiredDate,
+        terminationDate: ws.terminationDate,
+        linkedBy: ws.linkedBy,
+        assignedElsewhere: ws.assignedElsewhere,
+      };
+    }
+  }
+
+  return { ...base, today, yesterday, wtd, names, jobs: jobNames, workstream, error: null };
 }
 
 export type StaffingDay = {
@@ -400,19 +399,23 @@ export type StaffingDay = {
 };
 
 /**
- * Every store's whole day at once, for the page to answer any minute of it
- * itself (rosterAt) — the slider then needs no request per position.
+ * Every store's whole day for each of `dates`, for the page to answer any
+ * minute of them itself (rosterAt) — the slider then needs no request per
+ * position, and the week behind today none per date.
  *
  * Same reads as a single minute: the day still being worked from PAR (live on
- * Refresh, else at most two minutes old), earlier dates from stored history.
+ * Refresh, else at most two minutes old), earlier dates from stored history in
+ * one batch per store.
  */
-export async function getStaffingDay(date: string, { fresh = false }: { fresh?: boolean } = {}): Promise<StaffingDay> {
-  const [stores, status] = await Promise.all([
+export async function getStaffingDays(dates: string[], { fresh = false }: { fresh?: boolean } = {}): Promise<StaffingDay[]> {
+  const [byStore, status] = await Promise.all([
     withParPriority(PAR_PRIORITY.onClock, () =>
-      Promise.all(PAR_LOCATIONS.map((loc) => storeDayFor(loc, date, fresh)))),
+      Promise.all(PAR_LOCATIONS.map((loc) => storeDaysFor(loc, dates, fresh)))),
     workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
   ]);
-  return { date, stores, fetchedAt: Date.now(), workstreamSync: syncAge(status) };
+  const fetchedAt = Date.now();
+  const workstreamSync = syncAge(status);
+  return dates.map((date, i) => ({ date, stores: byStore.map((days) => days[i]), fetchedAt, workstreamSync }));
 }
 
 function syncAge(status: { rows: number; lastSyncedAt: string | null }): StaffingReport["workstreamSync"] {
