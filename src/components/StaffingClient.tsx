@@ -74,7 +74,7 @@ function useColumnSort(defaultDir: "asc" | "desc" = "desc") {
 
 /** A header cell that ranks the table by its column. */
 function SortHeader({
-  label, sortKey, arrow, onClick, align = "right", className = "", before = null,
+  label, sortKey, arrow, onClick, align = "right", className = "",
 }: {
   label: string;
   sortKey: string;
@@ -82,13 +82,10 @@ function SortHeader({
   onClick: (key: string) => void;
   align?: "left" | "right";
   className?: string;
-  /** Rendered ahead of the sort button — e.g. a pay period's open/close toggle. */
-  before?: React.ReactNode;
 }) {
   const mark = arrow(sortKey);
   return (
     <th className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${align === "left" ? "text-left" : "text-right"} ${mark ? "text-gray-600" : "text-gray-400"} ${className}`}>
-      {before}
       <button
         type="button"
         onClick={() => onClick(sortKey)}
@@ -1369,8 +1366,6 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
   const [mode, setMode] = useState<"recent" | "custom">("recent");
   const [from, setFrom] = useState(() => daysBeforeYesterday(27));
   const [to, setTo] = useState(yesterdayISO);
-  // Pay periods opened into their two weeks, by the period's first day.
-  const [openPeriods, setOpenPeriods] = useState<Set<string>>(new Set());
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
@@ -1406,48 +1401,31 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
   );
 
   /*
-   * What the chart and the table draw.
-   *
-   * By week, the report as it came. By pay period, the weeks added into their
-   * fortnights — one point per period on the chart, and in the table a column
-   * per period, or its two weeks for any period opened up.
+   * What the chart and the table draw: by week, the report as it came; by pay
+   * period, the weeks added into their fortnights, one column and one point
+   * per period.
    */
   const periods = filtered?.periods ?? null;
-  const chartData = useMemo(
+  const view = useMemo(
     () => (filtered && periods ? groupHours(filtered, periods.map(periodColumn)) : filtered),
     [filtered, periods],
   );
-  const tableData = useMemo(() => {
-    if (!filtered || !periods) return filtered;
-    const weekSpan = new Map(filtered.weeks.map((w) => [w.start, w]));
-    return groupHours(
-      filtered,
-      periods.flatMap((p): HoursColumn[] =>
-        openPeriods.has(p.start)
-          ? p.weekStarts.map((s) => ({
-              key: s,
-              label: weekSpan.get(s)?.label ?? md(s),
-              weekStarts: [s],
-            }))
-          : [periodColumn(p)],
-      ),
-    );
-  }, [filtered, periods, openPeriods]);
-  // Which pay period each table column belongs to, for the open/close toggle.
-  const periodOfColumn = useMemo(() => {
-    const out = new Map<string, PayPeriodSpan>();
-    for (const p of periods ?? []) {
-      out.set(`P${p.start}`, p);
-      for (const s of p.weekStarts) out.set(s, p);
-    }
-    return out;
-  }, [periods]);
-  const togglePeriod = (start: string) =>
-    setOpenPeriods((prev) => {
-      const next = new Set(prev);
-      if (next.has(start)) next.delete(start); else next.add(start);
-      return next;
-    });
+
+  // The bottom row: every store shown, added up per column — so it follows the
+  // leader filter, and says what the stores on screen cost together.
+  const totals = useMemo(
+    () => (view?.weeks ?? []).map((c) => {
+      let overtimeMinutes = 0;
+      let overtimeCost = 0;
+      for (const store of view?.stores ?? []) {
+        const cell = store.weeks.find((w) => w.weekStart === c.start);
+        overtimeMinutes += cell?.overtimeMinutes ?? 0;
+        overtimeCost += cell?.overtimeCost ?? 0;
+      }
+      return { key: c.start, overtimeMinutes, overtimeCost };
+    }),
+    [view],
+  );
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1532,47 +1510,27 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
-      {chartData && <OvertimeChart data={chartData} grain={grain === "period" ? "pay period" : "week"} />}
+      {view && <OvertimeChart data={view} grain={grain === "period" ? "pay period" : "week"} />}
 
-      {tableData && (
+      {view && (
         <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
                 <SortHeader label="Store" sortKey="store" align="left" arrow={sorter.arrow} onClick={sorter.toggle} />
-                {tableData.weeks.map((w) => {
-                  const period = periodOfColumn.get(w.start);
-                  // The first column of a pay period carries its open/close
-                  // toggle — the period itself when closed, its first week
-                  // when open — so the control stays where the period starts.
-                  const leads = period && (w.start === `P${period.start}` || w.start === period.weekStarts[0]);
-                  const isOpen = period ? openPeriods.has(period.start) : false;
-                  return (
-                    <SortHeader
-                      key={w.start}
-                      label={columnLabel(w)}
-                      sortKey={w.start}
-                      arrow={sorter.arrow}
-                      onClick={sorter.toggle}
-                      className={isOpen ? "bg-gray-50" : ""}
-                      before={leads && period && period.weekStarts.length > 1 ? (
-                        <button
-                          type="button"
-                          onClick={() => togglePeriod(period.start)}
-                          title={isOpen ? "Show the pay period as one column" : "Show this pay period's two weeks"}
-                          aria-expanded={isOpen}
-                          className="mr-1 px-1 rounded text-gray-500 hover:bg-gray-200 hover:text-gray-800"
-                        >
-                          {isOpen ? "▾" : "▸"}
-                        </button>
-                      ) : null}
-                    />
-                  );
-                })}
+                {view.weeks.map((w) => (
+                  <SortHeader
+                    key={w.start}
+                    label={columnLabel(w)}
+                    sortKey={w.start}
+                    arrow={sorter.arrow}
+                    onClick={sorter.toggle}
+                  />
+                ))}
               </tr>
             </thead>
             <tbody>
-              {sorter.apply(tableData.stores, (store, key) => {
+              {sorter.apply(view.stores, (store, key) => {
                 if (key === "store") return store.storeName;
                 const week = store.weeks.find((w) => w.weekStart === key);
                 return week ? week.overtimeMinutes : null;
@@ -1580,12 +1538,29 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
                 <StoreHoursRows
                   key={store.storeId}
                   store={store}
-                  columns={tableData.weeks}
+                  columns={view.weeks}
                   open={expanded === store.storeId}
                   onToggle={() => setExpanded(expanded === store.storeId ? null : store.storeId)}
                 />
               ))}
             </tbody>
+            {view.stores.length > 1 && (
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td className="px-3 py-1.5 font-semibold text-gray-900">Total</td>
+                  {totals.map((t) => (
+                    <td key={t.key} className="px-3 py-1.5 text-right text-xs tabular-nums whitespace-nowrap font-semibold">
+                      <span className={t.overtimeMinutes > 0 ? "text-amber-800" : "text-gray-400"}>
+                        {hrs(t.overtimeMinutes)}
+                      </span>{" "}
+                      <span className={t.overtimeMinutes > 0 ? "text-amber-700" : "text-gray-400"}>
+                        {usd(t.overtimeCost)}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}
