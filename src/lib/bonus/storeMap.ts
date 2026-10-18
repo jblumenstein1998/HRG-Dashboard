@@ -67,6 +67,30 @@ export type BonusStore = {
   workstreamLocationUuid: string | null;
 };
 
+/**
+ * Each store's Google listing (Places API place id), matched by street address
+ * on 2026-10-18 — every one a "Zaxbys Chicken Fingers & Buffalo Wings" at the
+ * store's own address. lib/storeHours.ts reads opening hours from these.
+ *
+ * Kept beside the store list rather than in it because only the hours job uses
+ * them, and a store with no listing here simply falls back to PAR's hours.
+ */
+export const GOOGLE_PLACE_IDS: Record<string, string> = {
+  "28901": "ChIJE6m_3GtyY4gRrNmm-UdfnpI", // Columbia — 222 S. James M Campbell Blvd., Columbia, TN 38401
+  "61401": "ChIJXb-aLYaCY4gROOu9dv7aLsE", // Spring Hill — 4882 Port Royal Rd., Spring Hill, TN 37174
+  "56301": "ChIJwfJv4at6ZIgR8i3Fga_Ybsk", // Brentwood — 471 Old Hickory Blvd, Brentwood, TN 37027
+  "42601": "ChIJK_2Md6ROZIgRhe5XgDpxWV0", // White House — 800 Highway 76, White House, TN 37188
+  "36001": "ChIJZ3WT691VZIgRA_hXnTP0lYo", // Springfield — 3509 Tom Austin Hwy., Springfield, TN 37172
+  "75075": "ChIJD5gdCwDLZYgRfP0nVk93FRs", // Portland — 409 Hwy 52, Portland, TN 37148
+  "57005": "ChIJWf3yYep-sIkR5H2zX54wfOA", // Jefferson — 12834 Jefferson Ave., Newport News, VA 23607 (Google lists 23608)
+  "57003": "ChIJKSOBsdl4sIkROS_M7v0Zdf8", // Oyster — 531 Oyster Point Rd., Newport News, VA 23602
+  "57002": "ChIJEdu8liODuokR2Xf4Ah-P04E", // Hampton — 2201 Todds Ln., Hampton, VA 23666
+  "57001": "ChIJ7QLgkpefuokRNxUDe1mmE4w", // College — 6120 College Dr., Suffolk, VA 23435
+  "57004": "ChIJ33C-l02guokR1E_xH7WF6DU", // Chesapeake — 2316 Chesapeake Square Ring Rd., Chesapeake, VA 23321
+  "57006": "ChIJj8yitn2wuokRK72I8td8S3E", // Hillcrest — 125 Hillcrest Pkwy., Chesapeake, VA 23322
+  "57007": "ChIJ77ptGADBuokRgqNLt4w7CbU", // Beach — 2332 Elson Green Ave., Virginia Beach, VA 23456
+};
+
 export const BONUS_STORES: BonusStore[] = [
   // Tennessee
   // The four TN stores rest on a unique name; every VA store below is confirmed

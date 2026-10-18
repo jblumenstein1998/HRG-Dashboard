@@ -33,7 +33,6 @@ import {
   PAR_LOCATIONS,
   getShiftsLive,
   getShiftsRecent,
-  getBusinessHours,
   getEmployees,
   getJobs,
   getStoreTimeZone,
@@ -46,6 +45,7 @@ import { sql } from "./db";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
 import { clockLabel, rosterAt, type StoreDay } from "./staffingRoster";
+import { storeHoursFor } from "./storeHours";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -1078,20 +1078,20 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreOpenClose> => {
       try {
-        const [hours, ...days] = await Promise.all([
-          getBusinessHours(loc.storeId),
+        // Opening hours from the store's Google listing (lib/storeHours), per
+        // date so holidays count, with PAR's Business Hours only as a last
+        // resort — PAR had five stores closing at 7pm that trade to 11.
+        const [hoursByDate, ...days] = await Promise.all([
+          storeHoursFor(loc.storeId, dates),
           ...dates.map((d) => getShiftsHistory(loc.storeId, d)),
         ]);
-        const hoursByDay = new Map(hours.map((h) => [h.dayOfWeek, h]));
 
         const open: OpenCloseCell[] = [];
         const close: OpenCloseCell[] = [];
 
         dates.forEach((businessDate, i) => {
           const shifts = days[i] ?? [];
-          const [y, m, d] = businessDate.split("-").map(Number);
-          const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-          const h = hoursByDay.get(dow);
+          const h = hoursByDate.get(businessDate);
 
           if (!h) {
             const empty = {
