@@ -27,6 +27,7 @@
  */
 
 import { PERIODS } from "./fiscal";
+import { businessDateISO } from "./businessDay";
 import { shiftWorkedMinutesInWindow } from "./parRollup";
 import {
   PAR_LOCATIONS,
@@ -290,14 +291,17 @@ async function rosterForStore(
     // is one round of parallel calls rather than two.
     const trailingDates = weekToDateBefore(localDate);
 
-    // How fresh each roster date has to be. Only the store's last two calendar
-    // days can still have a shift open on them; anything older does not move,
-    // so it comes from the hour cache like the rest of the week. Of the two
-    // that can move, "Now" reads them live — the whole question there is
-    // "right now" — while scrubbing the slider through today accepts a read up
-    // to two minutes old, because every slider position asks for the same two
-    // dates and a live read per position was the bulk of the wait.
-    const settledBefore = shiftLocalDate(zonedParts(new Date(), timeZone).date, -1);
+    // Where each roster date comes from. Only the business day still being
+    // worked can have shifts open on it — PAR closes a day at 2:15 AM — so
+    // every date before it is stored history, read from Postgres like the rest
+    // of the tab (and re-read from PAR when Refresh flags it). Scrubbing back to
+    // yesterday at six is then two Postgres reads per store, not two PAR calls.
+    //
+    // The day still being worked, and the calendar day before it while an
+    // overnight shift can still be open on it, come from PAR: "Now" live, the
+    // slider through today at most two minutes old, since every slider
+    // position asks for the same dates.
+    const settledBefore = businessDateISO(timeZone);
     const readShifts = (d: string) =>
       d < settledBefore
         ? getShiftsHistory(loc.storeId, d)

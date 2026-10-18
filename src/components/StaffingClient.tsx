@@ -483,12 +483,6 @@ export default function StaffingClient({
               ))}
             </select>
           )}
-          {loading && (
-            <span className="flex items-center gap-1.5 text-xs text-gray-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />
-              Reading PAR — first load of a new time takes a moment
-            </span>
-          )}
         </div>
 
         <div className={`space-y-3 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
