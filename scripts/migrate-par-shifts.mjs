@@ -59,6 +59,13 @@ await sql`
   )
 `;
 
+// Set by the Staffing tab's Refresh for the last 14 days; the next read of a
+// flagged day re-reads PAR and clears it. Nothing else re-reads PAR on a read —
+// the nightly job keeps the window current otherwise.
+await sql`
+  ALTER TABLE par_shift_days ADD COLUMN IF NOT EXISTS needs_refresh BOOLEAN NOT NULL DEFAULT false
+`;
+
 const [row] = await sql`
   SELECT
     (SELECT count(*)::int FROM par_shifts) AS shifts,

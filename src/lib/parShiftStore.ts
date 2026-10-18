@@ -21,12 +21,12 @@
  * ── Read: three ages of day ──────────────────────────────────────────────────
  *
  *   today            PAR, as before — shifts are still open and moving.
- *   last 14 days     here, but never more than five minutes behind PAR: a
- *                    store-day read older than that is re-read from PAR first.
- *                    This is where timecards get fixed, and a manager who
- *                    fixes one and comes back expects to see it, not tomorrow.
- *                    The tab's Refresh marks the whole window stale, so a fix
- *                    shows on the next read without waiting out the five.
+ *   last 14 days     here, as of the nightly job or the last Refresh. This is
+ *                    where timecards get fixed, but a page load never waits on
+ *                    PAR for it: the tab's Refresh flags the window
+ *                    (needs_refresh), and only a flagged day is re-read from PAR
+ *                    on its next read. A day in the window we do not hold at all
+ *                    — yesterday, before the nightly job — is fetched once.
  *   older            here, as stored. Nobody edits a month-old timecard, and
  *                    the nightly job re-reads the window before days leave it.
  *
@@ -103,21 +103,21 @@ export async function syncShiftDay(storeId: string, businessDate: string): Promi
         VALUES (${storeId}, ${businessDate}, 'ok', ${records.length}, ${gzipSync(xml)}, NULL, now())
         ON CONFLICT (store_id, business_date) DO UPDATE SET
           status = 'ok', shift_count = EXCLUDED.shift_count, raw_gzip = EXCLUDED.raw_gzip,
-          error = NULL, fetched_at = now()
+          error = NULL, fetched_at = now(), needs_refresh = false
       `,
     ]);
     return { storeId, businessDate, ok: true, shifts: records.length };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // A day already held keeps its rows and its "ok": one bad morning from PAR
-    // must not turn good history back into a gap. fetched_at still moves, so a
-    // PAR outage costs each edit-window day one failed try per five minutes
-    // rather than one per page load.
+    // must not turn good history back into a gap. The Refresh flag is cleared
+    // either way, so a PAR outage costs one failed try per Refresh rather than
+    // one per page load; the nightly job tries again.
     await sql`
       INSERT INTO par_shift_days (store_id, business_date, status, error, fetched_at)
       VALUES (${storeId}, ${businessDate}, 'error', ${error.slice(0, 500)}, now())
       ON CONFLICT (store_id, business_date) DO UPDATE SET
-        error = EXCLUDED.error, fetched_at = now()
+        error = EXCLUDED.error, fetched_at = now(), needs_refresh = false
     `.catch(() => {});
     return { storeId, businessDate, ok: false, shifts: 0, error };
   }
@@ -170,20 +170,28 @@ type ShiftRow = {
 
 const toNumber = (v: string | null) => (v == null ? null : Number(v));
 
-/** How old a stored day inside the edit window may be before it is re-read. */
-const WINDOW_MAX_AGE_MS = 5 * 60 * 1000;
-
 /** The days timecards are still being fixed on — par-rollup measured 14. */
 const EDIT_WINDOW_DAYS = 14;
 
-/** Status and last fetch of one stored day — a few bytes, never cached. */
-async function dayStatus(storeId: string, businessDate: string): Promise<{ ok: boolean; fetchedAt: string } | null> {
+type DayStatus = { ok: boolean; fetchedAt: string; needsRefresh: boolean };
+
+/** Status of one stored day — a few bytes, never cached. */
+async function dayStatus(storeId: string, businessDate: string): Promise<DayStatus | null> {
   const [day] = await sql`
-    SELECT status, to_json(fetched_at) AS fetched_at FROM par_shift_days
+    SELECT status, to_json(fetched_at) AS fetched_at, needs_refresh FROM par_shift_days
     WHERE store_id = ${storeId} AND business_date = ${businessDate}
   `;
-  return day ? { ok: day.status === "ok", fetchedAt: day.fetched_at as string } : null;
+  return day
+    ? { ok: day.status === "ok", fetchedAt: day.fetched_at as string, needsRefresh: day.needs_refresh === true }
+    : null;
 }
+
+/**
+ * Whether reading an edit-window day should go to PAR first: only when Refresh
+ * flagged it, or when we have never asked PAR for it at all. Age alone never
+ * does — a page load reads what is stored.
+ */
+const shouldReread = (s: DayStatus | null | undefined): boolean => !s || s.needsRefresh;
 
 /**
  * One re-read per store-day at a time.
@@ -203,18 +211,17 @@ function syncOnce(storeId: string, businessDate: string): Promise<SyncResult> {
 }
 
 /**
- * Mark the edit window stale, so the next read of each day re-reads PAR.
+ * Flag the edit window, so the next read of each day re-reads PAR.
  *
- * For the tab's Refresh button: "I just fixed a timecard" should not have to
- * wait out the five minutes. Backdates rather than clears fetched_at, so it
- * still says roughly when the copy was taken.
+ * The Staffing tab's Refresh button, and the only thing that makes a read go
+ * to PAR for a day we hold: "I just fixed a timecard" is when it is worth the
+ * wait, and an ordinary page load is not.
  */
 export async function expireEditWindow(): Promise<void> {
   const today = businessDateISO();
   await sql`
-    UPDATE par_shift_days
-    SET fetched_at = LEAST(fetched_at, now() - interval '1 hour')
-    WHERE status = 'ok' AND business_date >= ${shiftDate(today, -EDIT_WINDOW_DAYS)}
+    UPDATE par_shift_days SET needs_refresh = true
+    WHERE business_date >= ${shiftDate(today, -EDIT_WINDOW_DAYS)}
   `;
 }
 
@@ -299,8 +306,8 @@ const readStoredShiftRange = unstable_cache(
  *
  * Read one day at a time, a new 40-day overtime range was ~1,000 round trips
  * to Postgres across the stores. Here it is one status query, one batched
- * PAR re-read of whatever in the edit window is stale, and one shift query,
- * per store. Days not held as good fall back to PAR, as for a single day.
+ * PAR re-read of whatever Refresh flagged in the edit window, and one shift
+ * query, per store. Days not held as good fall back to PAR, as for a single day.
  */
 export async function getShiftsHistoryRange(storeId: string, dates: string[]): Promise<Map<string, PARShift[]>> {
   const timeZone = getStoreTimeZone(storeId);
@@ -311,22 +318,22 @@ export async function getShiftsHistoryRange(storeId: string, dates: string[]): P
   const out = new Map<string, PARShift[]>();
 
   const statuses = async (ds: string[]) => {
-    if (ds.length === 0) return new Map<string, { ok: boolean; fetchedAt: string }>();
+    if (ds.length === 0) return new Map<string, DayStatus>();
     const rows = await sql`
-      SELECT business_date::text AS d, status, to_json(fetched_at) AS fetched_at FROM par_shift_days
+      SELECT business_date::text AS d, status, to_json(fetched_at) AS fetched_at, needs_refresh
+      FROM par_shift_days
       WHERE store_id = ${storeId} AND business_date = ANY(${ds}::date[])
     `;
-    return new Map(rows.map((r) => [r.d as string, { ok: r.status === "ok", fetchedAt: r.fetched_at as string }]));
+    return new Map(rows.map((r) => [
+      r.d as string,
+      { ok: r.status === "ok", fetchedAt: r.fetched_at as string, needsRefresh: r.needs_refresh === true },
+    ]));
   };
 
-  const status = await statuses(past).catch(() => new Map<string, { ok: boolean; fetchedAt: string }>());
-  // Inside the edit window: anything not held, or older than five minutes, is
-  // re-read from PAR first — all of them together, so a fixed timecard shows.
-  const stale = past.filter((d) => {
-    if (d < windowStart) return false;
-    const s = status.get(d);
-    return !s?.ok || Date.now() - new Date(s.fetchedAt).getTime() > WINDOW_MAX_AGE_MS;
-  });
+  const status = await statuses(past).catch(() => new Map<string, DayStatus>());
+  // Inside the edit window: only days Refresh flagged, or that PAR was never
+  // asked for, are re-read from PAR first — all of them together.
+  const stale = past.filter((d) => d >= windowStart && shouldReread(status.get(d)));
   if (stale.length) {
     await Promise.all(stale.map((d) => syncOnce(storeId, d)));
     for (const [d, s] of await statuses(stale).catch(() => new Map())) status.set(d, s);
@@ -365,10 +372,10 @@ export async function getShiftsHistory(storeId: string, businessDate: string): P
 
   let version = "settled";
   if (businessDate >= shiftDate(today, -EDIT_WINDOW_DAYS)) {
-    // Inside the edit window: re-read PAR first if our copy is more than five
-    // minutes old, so a fixed timecard shows on the next look.
+    // Inside the edit window: re-read PAR first only if Refresh flagged this
+    // day, or PAR was never asked for it.
     let status = await dayStatus(storeId, businessDate).catch(() => null);
-    if (!status?.ok || Date.now() - new Date(status.fetchedAt).getTime() > WINDOW_MAX_AGE_MS) {
+    if (shouldReread(status)) {
       await syncOnce(storeId, businessDate);
       status = await dayStatus(storeId, businessDate).catch(() => null);
     }

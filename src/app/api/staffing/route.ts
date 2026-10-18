@@ -84,8 +84,8 @@ export async function GET(req: NextRequest) {
   if (fresh) {
     revalidateTag("par-employees", { expire: 0 });
     // And the last 14 days of stored shifts: the usual reason to press Refresh
-    // is having just fixed a timecard, so every section re-reads PAR for those
-    // days on its next load instead of waiting out their five minutes.
+    // is having just fixed a timecard, and this is the only thing that makes a
+    // section re-read PAR for a day we hold — an ordinary load reads Postgres.
     await expireEditWindow().catch((err) => console.error("[staffing] expireEditWindow failed:", err));
   }
 
