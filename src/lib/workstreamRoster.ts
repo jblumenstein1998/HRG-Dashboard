@@ -340,6 +340,9 @@ export async function getLinkedRoster(storeId: string): Promise<Map<string, Link
     workstreamEmployees,
     elsewhere,
     decisions,
+    // Only the links are wanted here, never the suggestions — and ranking
+    // them was ~0.9s a store, on every staffing request.
+    rankCandidates: false,
   });
   // Both pools, so a person assigned to another store still resolves — and
   // carries where Workstream thinks they belong.

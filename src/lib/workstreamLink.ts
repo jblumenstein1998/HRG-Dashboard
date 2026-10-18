@@ -565,8 +565,19 @@ export function proposeStoreLinks(input: {
    */
   elsewhere?: WorkstreamPerson[];
   decisions: LinkDecision[];
+  /**
+   * Score and rank candidates for each record (default true).
+   *
+   * The review queue needs them; the staffing screens' lookup does not — it
+   * keeps only auto and confirmed links, which come from exact names and stored
+   * decisions. Ranking fuzzy-scores every PAR record against every Workstream
+   * person at the store, about 0.9s a store, and it was most of every staffing
+   * request's time; false skips it and leaves `candidates` empty.
+   */
+  rankCandidates?: boolean;
 }): StoreLinkReport {
   const { parStoreId, parEmployees, workstreamEmployees } = input;
+  const rankCandidates = input.rankCandidates ?? true;
   const elsewhere = input.elsewhere ?? [];
 
   const decisions = input.decisions.filter((d) => d.parStoreId === parStoreId);
@@ -629,6 +640,14 @@ export function proposeStoreLinks(input: {
    */
   const currentStaff = workstreamEmployees.filter(isActiveEmployee);
 
+  // Other stores' people by name, built once: looked up per PAR record, it was
+  // re-normalising ~450 names for each of a store's several hundred records.
+  const elsewhereByKey = new Map<string, WorkstreamPerson[]>();
+  for (const w of elsewhere) {
+    const k = nameKey(w.firstName, w.lastName);
+    if (k) elsewhereByKey.set(k, [...(elsewhereByKey.get(k) ?? []), w]);
+  }
+
   const wsByKey = new Map<string, WorkstreamPerson[]>();
   for (const w of currentStaff) {
     const k = nameKey(w.firstName, w.lastName);
@@ -659,11 +678,9 @@ export function proposeStoreLinks(input: {
     // fuzzy-scoring four hundred people from other stores would bury the real
     // answer under near-namesakes who plainly work somewhere else.
     const parKey = nameKey(p.firstName, p.lastName);
-    const crossStore = parKey
-      ? elsewhere.filter((w) => nameKey(w.firstName, w.lastName) === parKey)
-      : [];
+    const crossStore = parKey ? (elsewhereByKey.get(parKey) ?? []) : [];
 
-    const ranked = [...matchable, ...crossStore]
+    const ranked = !rankCandidates ? [] : [...matchable, ...crossStore]
       .filter((w) => !rejected.has(`${p.id} ${w.uuid}`))
       .map((w) => {
         const name = scoreNames(p, w);
