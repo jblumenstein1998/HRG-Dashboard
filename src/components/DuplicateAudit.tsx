@@ -126,12 +126,13 @@ export default function DuplicateAudit({
     }
   }, []);
 
-  // Only loads once opened, and not again when the store changes — that is a
-  // filter over rows already in hand, not a new question. Refresh does ask a
-  // new one; while closed it waits, and reloads when next opened.
+  // Loads with the tab, open or not, so the counts in the header are there
+  // without a click and opening it is instant. Not again when the store
+  // changes — that is a filter over rows already in hand — but again on
+  // Refresh, which does ask a new question.
   useEffect(() => {
-    if (open && loadedFor !== reloadKey) void load(reloadKey);
-  }, [open, loadedFor, reloadKey, load]);
+    if (loadedFor !== reloadKey) void load(reloadKey);
+  }, [loadedFor, reloadKey, load]);
 
   /*
    * Two filters, and the outer one is not optional.
