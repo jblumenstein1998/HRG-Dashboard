@@ -1437,6 +1437,8 @@ function StoreHoursRows({
     rateOfRecord: number | null;
     /** The latest PAR shift rate — shown only when Workstream has none. */
     parRate: number | null;
+    /** On salary in the latest column they appear in: no rate, no dollars. */
+    salaried: boolean;
     total: number;
   }>();
   for (const w of store.weeks) {
@@ -1447,11 +1449,14 @@ function StoreHoursRows({
         position: p.workstream?.position ?? null,
         rateOfRecord: p.workstream?.rateOfRecord ?? null,
         parRate: null,
+        salaried: p.salaried,
         total: 0,
       };
       row.total += p.overtimeMinutes;
-      // Weeks run oldest first, so a later week's rate replaces an earlier one.
+      // Columns run oldest first, so a later one's rate and pay type replace
+      // an earlier one's.
       row.parRate = p.payRate ?? row.parRate;
+      row.salaried = p.salaried;
       people.set(p.employeeId, row);
     }
   }
@@ -1517,8 +1522,11 @@ function StoreHoursRows({
                         )}
                         {/* Workstream's rate of record where linked; otherwise
                             the rate PAR recorded on their latest shift, which is
-                            what the dollars beside it were computed at. */}
-                        {(meta.rateOfRecord ?? meta.parRate) != null && (
+                            what the dollars beside it were computed at. Nothing
+                            for salaried people — their overtime has no price. */}
+                        {meta.salaried ? (
+                          <span className="ml-1.5 text-[11px] text-gray-400">Salaried</span>
+                        ) : (meta.rateOfRecord ?? meta.parRate) != null && (
                           <span
                             className="ml-1.5 text-[11px] text-gray-400 tabular-nums"
                             title={meta.rateOfRecord != null ? "Workstream rate of record" : "Rate on their latest PAR shift — not linked to Workstream"}
@@ -1540,10 +1548,17 @@ function StoreHoursRows({
                             <span className="text-gray-300"> / </span>
                             <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
                               {hrs(row.overtimeMinutes)}
-                            </span>{" "}
-                            <span className={row.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
-                              {usd(row.overtimeCost)}
                             </span>
+                            {/* A salaried person's overtime costs nothing, so it
+                                carries hours and no dollar figure at all. */}
+                            {!row.salaried && (
+                              <>
+                                {" "}
+                                <span className={row.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
+                                  {usd(row.overtimeCost)}
+                                </span>
+                              </>
+                            )}
                           </td>
                         );
                       })}

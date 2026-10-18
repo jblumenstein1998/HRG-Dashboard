@@ -499,6 +499,13 @@ export type EmployeeWeekHours = {
    */
   payRate: number | null;
   /**
+   * Paid a salary, so overtime costs nothing: their hours are shown, their
+   * overtime is never priced, and none of it reaches a store's cost. Workstream
+   * decides where the person is linked (no hourly rate there means salaried);
+   * otherwise a $0 rate on their PAR shifts does.
+   */
+  salaried: boolean;
+  /**
    * Position and rate of record from Workstream, where this PAR employee has
    * been joined to a Workstream one. Null when they haven't — the hours are
    * still right, there is simply nobody to attribute them to on the other side.
@@ -732,6 +739,19 @@ export async function getOvertimeReport(columns: HoursSpan[]): Promise<HoursRepo
     const empById = new Map(employees.map((e) => [e.id, e]));
     const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
 
+    /*
+     * Salaried people's overtime has no pay impact, so it is never costed: the
+     * hours stay, the dollars go — from the person and from the store's total.
+     * Workstream is the authority where somebody is linked, because PAR's pay
+     * setup lags promotions (a GM still carrying the hourly rate they had as an
+     * AGM); a $0 PAR rate decides it for anyone not linked.
+     */
+    const isSalaried = (r: OvertimeRow) => {
+      const ws = r.employee_id ? linked.get(r.employee_id) : undefined;
+      return ws ? ws.hourlyRate == null : !(r.rate && r.rate > 0);
+    };
+    const otCost = (r: OvertimeRow) => (isSalaried(r) ? 0 : r.ot_cost);
+
     const weeks = columns.map((c): StoreWeekHours => {
       const cell = byStoreCol.get(`${loc.storeId} ${c.start}`) ?? [];
       const people: EmployeeWeekHours[] = cell
@@ -745,10 +765,11 @@ export async function getOvertimeReport(columns: HoursSpan[]): Promise<HoursRepo
             regularMinutes: r.reg,
             overtimeMinutes: r.ot,
             regularCost: cents(r.reg_cost),
-            overtimeCost: cents(r.ot_cost),
+            overtimeCost: cents(otCost(r)),
             unratedMinutes: r.unrated,
             shifts: r.shifts,
             payRate: r.rate,
+            salaried: isSalaried(r),
             workstream: ws
               ? {
                   fullName: ws.name,
@@ -773,7 +794,7 @@ export async function getOvertimeReport(columns: HoursSpan[]): Promise<HoursRepo
         regularMinutes: sum((r) => r.reg),
         overtimeMinutes: sum((r) => r.ot),
         regularCost: cents(sum((r) => r.reg_cost)),
-        overtimeCost: cents(sum((r) => r.ot_cost)),
+        overtimeCost: cents(sum(otCost)),
         unratedMinutes: sum((r) => r.unrated),
         people,
       };
