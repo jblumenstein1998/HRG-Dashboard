@@ -25,7 +25,6 @@ import type { BonusStore } from "@/lib/bonus/storeMap";
 import {
   auditToReportHtml,
   auditWindowStart,
-  countBySeverity,
   scopeRow,
   type AuditParRecord,
   type AuditReport,
@@ -163,7 +162,6 @@ export default function DuplicateAudit({
   const rows = (data?.rows ?? [])
     .map((r) => scopeRow(r, scope, windowStart))
     .filter((r): r is AuditRow => r !== null);
-  const counts = countBySeverity(rows);
 
   /**
    * Link one PAR record to the cluster's Workstream person.
@@ -199,8 +197,6 @@ export default function DuplicateAudit({
       setBusy(null);
     }
   }
-
-  const urgent = counts["splitting-hours"] + counts["duplicate-workstream"];
 
   /*
    * The name on the report, and the filename the browser will offer.
@@ -321,18 +317,6 @@ export default function DuplicateAudit({
           </select>
         )}
 
-        {data && !loading && (
-          <span className="text-xs text-gray-500">
-            {urgent > 0 ? (
-              <>
-                <strong className="text-red-700">{urgent}</strong> needing attention of{" "}
-                {rows.length} {rows.length === 1 ? "person" : "people"}
-              </>
-            ) : (
-              <>{rows.length} {rows.length === 1 ? "person" : "people"}, none urgent</>
-            )}
-          </span>
-        )}
         {loading && <span className="text-xs text-gray-400">reading every store…</span>}
 
         {open && (
