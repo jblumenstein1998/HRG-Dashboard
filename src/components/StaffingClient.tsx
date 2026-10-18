@@ -29,7 +29,9 @@ import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
   MissedPunchReport, PayPeriod, PayPeriodSpan, HoursSpan, StoreWeekHours, EmployeeWeekHours,
+  StaffingDay,
 } from "@/lib/staffing";
+import { clockLabel, rosterAt } from "@/lib/staffingRoster";
 
 /**
  * Column sorting for the two tables below.
@@ -130,6 +132,17 @@ function dateHeader(iso: string): string {
 function cleanJobTitle(job: string | null | undefined): string | null {
   if (!job) return null;
   return job.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
+}
+
+/** A loaded day as the roster report for one minute of it, computed here. */
+function reportFromDay(day: StaffingDay, minutes: number): StaffingReport {
+  return {
+    at: null,
+    moment: { kind: "local", label: `${day.date} ${clockLabel(minutes)} local` },
+    stores: day.stores.map((s) => rosterAt(s, minutes)),
+    fetchedAt: day.fetchedAt,
+    workstreamSync: day.workstreamSync,
+  };
 }
 
 /** A small spinning ring, for a load somebody is waiting on. */
@@ -236,16 +249,6 @@ function TimeScrubber({
           not have, and coarser would miss a shift change. The arrows step one
           quarter at a time for when dragging overshoots; from an off-grid time
           (where "Now" leaves it) they land on the quarter in that direction. */}
-      <button
-        type="button"
-        onClick={() => setMinutes(Math.max(0, Math.ceil(minutes / 15) * 15 - 15))}
-        disabled={minutes <= 0}
-        className="px-1.5 py-0.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition"
-        aria-label="15 minutes earlier"
-        title="15 minutes earlier"
-      >
-        ‹
-      </button>
       <input
         type="range"
         min={0}
@@ -256,16 +259,29 @@ function TimeScrubber({
         className={`w-32 sm:w-44 accent-gray-900 cursor-pointer ${live ? "opacity-60" : ""}`}
         aria-label="time of day"
       />
-      <button
-        type="button"
-        onClick={() => setMinutes(Math.min(1425, Math.floor(minutes / 15) * 15 + 15))}
-        disabled={minutes >= 1425}
-        className="px-1.5 py-0.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition"
-        aria-label="15 minutes later"
-        title="15 minutes later"
-      >
-        ›
-      </button>
+      {/* Side by side, so stepping back and forth is one small mouse move. */}
+      <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setMinutes(Math.max(0, Math.ceil(minutes / 15) * 15 - 15))}
+          disabled={minutes <= 0}
+          className="px-2 py-0.5 text-gray-600 hover:bg-gray-100 disabled:opacity-40 transition"
+          aria-label="15 minutes earlier"
+          title="15 minutes earlier"
+        >
+          ‹
+        </button>
+        <button
+          type="button"
+          onClick={() => setMinutes(Math.min(1425, Math.floor(minutes / 15) * 15 + 15))}
+          disabled={minutes >= 1425}
+          className="px-2 py-0.5 text-gray-600 hover:bg-gray-100 disabled:opacity-40 border-l border-gray-200 transition"
+          aria-label="15 minutes later"
+          title="15 minutes later"
+        >
+          ›
+        </button>
+      </div>
       <span className="text-xs tabular-nums text-gray-900 w-16">{timeLabel(minutes)}</span>
     </div>
   );
@@ -331,6 +347,39 @@ export default function StaffingClient({
     { key: "", data: null, error: null }
   );
 
+  /*
+   * Whole days, held so the slider never waits on the server.
+   *
+   * A day is every store's shifts and facts for one local date; rosterAt turns
+   * it into the roster at any minute, here in the browser — the same function
+   * the server uses for "Now", so the two cannot disagree. Today's day is
+   * re-fetched once it is two minutes old, as the per-minute requests were;
+   * earlier dates are history and are kept for the visit.
+   */
+  const dayCache = useRef(new Map<string, { day: StaffingDay; at: number }>());
+  const dayInFlight = useRef(new Map<string, Promise<StaffingDay>>());
+  const usableDay = useCallback((date: string): StaffingDay | null => {
+    const hit = dayCache.current.get(date);
+    if (!hit) return null;
+    const isToday = date === toLocalInput(new Date()).slice(0, 10);
+    return isToday && Date.now() - hit.at > 120_000 ? null : hit.day;
+  }, []);
+  const loadDay = useCallback((date: string, fresh: boolean): Promise<StaffingDay> => {
+    const pending = !fresh && dayInFlight.current.get(date);
+    if (pending) return pending;
+    const p = fetch(`/api/staffing/day?date=${date}${fresh ? "&fresh=1" : ""}`)
+      .then(async (r) => {
+        if (r.status === 401) { router.push("/login"); throw new Error("Not signed in"); }
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        dayCache.current.set(date, { day: json as StaffingDay, at: Date.now() });
+        return json as StaffingDay;
+      })
+      .finally(() => dayInFlight.current.delete(date));
+    dayInFlight.current.set(date, p);
+    return p;
+  }, [router]);
+
   useEffect(() => {
     let cancelled = false;
     /*
@@ -344,26 +393,43 @@ export default function StaffingClient({
      */
     const fresh = freshNext.current;
     freshNext.current = false;
-    const params = new URLSearchParams();
-    if (!live) {
-      params.set("date", fetchWhen.slice(0, 10));
-      params.set("minutes", String(Number(fetchWhen.slice(11, 13)) * 60 + Number(fetchWhen.slice(14, 16))));
+    const done = (json: StaffingReport | null) => {
+      if (!cancelled && json) setState({ key: requestKey, data: json, error: null });
+    };
+    const failed = (err: unknown) => {
+      if (!cancelled) setState({ key: requestKey, data: null, error: String((err as Error)?.message ?? err) });
+    };
+    // Success or not, the rest of the tab was asked to refresh too.
+    const cascade = () => { if (fresh) setReloadKey((k) => k + 1); };
+
+    if (live) {
+      fetch(`/api/staffing${fresh ? "?fresh=1" : ""}`)
+        .then(async (r) => {
+          if (r.status === 401) { router.push("/login"); return null; }
+          const json = await r.json();
+          if (!r.ok) throw new Error(json.error ?? "Failed to load");
+          return json as StaffingReport;
+        })
+        .then((json) => {
+          done(json);
+          // "Now" is on screen; fetch the rest of today behind it, so sliding
+          // back to earlier in the day is instant.
+          const today = toLocalInput(new Date()).slice(0, 10);
+          if (json && !usableDay(today)) loadDay(today, false).catch(() => {});
+        })
+        .catch(failed)
+        .finally(cascade);
+    } else {
+      const date = fetchWhen.slice(0, 10);
+      const minutes = Number(fetchWhen.slice(11, 13)) * 60 + Number(fetchWhen.slice(14, 16));
+      const held = fresh ? null : usableDay(date);
+      (held ? Promise.resolve(held) : loadDay(date, fresh))
+        .then((day) => done(reportFromDay(day, minutes)))
+        .catch(failed)
+        .finally(cascade);
     }
-    if (fresh) params.set("fresh", "1");
-    const qs = params.size ? `?${params}` : "";
-    fetch(`/api/staffing${qs}`)
-      .then(async (r) => {
-        if (r.status === 401) { router.push("/login"); return null; }
-        const json = await r.json();
-        if (!r.ok) throw new Error(json.error ?? "Failed to load");
-        return json as StaffingReport;
-      })
-      .then((json) => { if (!cancelled && json) setState({ key: requestKey, data: json, error: null }); })
-      .catch((err) => { if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) }); })
-      // Success or not, the rest of the tab was asked to refresh too.
-      .finally(() => { if (fresh) setReloadKey((k) => k + 1); });
     return () => { cancelled = true; };
-  }, [requestKey, live, fetchWhen, router]);
+  }, [requestKey, live, fetchWhen, router, usableDay, loadDay]);
 
   const loading = state.key !== requestKey;
   // The slider waits 350ms before asking (see fetchWhen), and the screen should
@@ -459,7 +525,10 @@ export default function StaffingClient({
                 setWhen(v);
                 setLive(false);
                 if (debounce.current) clearTimeout(debounce.current);
-                debounce.current = setTimeout(() => setFetchWhen(v), 350);
+                // A day already loaded is answered in the browser — no request,
+                // so no reason to wait for the drag to settle.
+                if (usableDay(v.slice(0, 10))) setFetchWhen(v);
+                else debounce.current = setTimeout(() => setFetchWhen(v), 350);
               }}
               onNow={setNow}
             />

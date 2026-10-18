@@ -39,10 +39,10 @@ import {
   getStoreTimeZone,
   withParPriority,
   PAR_PRIORITY,
-  type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
+import { clockLabel, rosterAt, type StoreDay } from "./staffingRoster";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -202,34 +202,6 @@ function shiftLocalDate(iso: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-function clockLabel(minutes: number): string {
-  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
-  const h24 = Math.floor(m / 60);
-  const mm = String(m % 60).padStart(2, "0");
-  const suffix = h24 < 12 ? "am" : "pm";
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${mm}${suffix}`;
-}
-
-/**
- * Was this shift running at `queryMinutes`, measured in its own start frame?
- *
- * An open shift has no end, and must not be given one. par.ts fills endMinutes
- * for a shift with no clock-out as start + minutesWorked, which is "as far as
- * they had got when PAR was asked" — a moving target, and a stale one the
- * moment it is cached. Comparing against it hid every person currently on the
- * clock: six were working at Springfield while this screen read zero.
- */
-function coversMinute(shift: PARShift, queryMinutes: number): boolean {
-  if (queryMinutes < shift.startMinutes) return false;
-  return shift.isOpen || queryMinutes < shift.endMinutes;
-}
-
-/** Were they on a break at that minute? PAR records the windows; this reads them. */
-function onBreakAt(shift: PARShift, queryMinutes: number): boolean {
-  return shift.breaks.some((b) => queryMinutes >= b.startMinutes && queryMinutes < b.endMinutes);
-}
-
 /**
  * Business dates from this week's Monday up to, but not including, `date`.
  *
@@ -275,12 +247,28 @@ async function rosterForStore(
     moment.kind === "instant"
       ? zonedParts(moment.at, timeZone)
       : { date: moment.date, minutes: moment.minutes };
-  const base: Omit<StoreRoster, "onClock" | "hourlyWageRunRate" | "salariedOnClock" | "error"> = {
+  return rosterAt(await storeDayFor(loc, localDate, moment.kind === "instant" || fresh), localMinutes);
+}
+
+/**
+ * One store's shifts and facts for a local date — everything rosterAt needs
+ * to answer any minute of it.
+ *
+ * `live` reads the day still being worked straight from PAR (Now, Refresh);
+ * otherwise it may be up to two minutes old. Earlier dates are stored history
+ * either way.
+ */
+async function storeDayFor(
+  loc: (typeof PAR_LOCATIONS)[number],
+  localDate: string,
+  live: boolean,
+): Promise<StoreDay> {
+  const timeZone = getStoreTimeZone(loc.storeId);
+  const base = {
     storeId: loc.storeId,
     storeName: loc.name,
     state: loc.state,
     timeZone,
-    localTime: clockLabel(localMinutes),
     localDate,
   };
 
@@ -305,7 +293,7 @@ async function rosterForStore(
     const readShifts = (d: string) =>
       d < settledBefore
         ? getShiftsHistory(loc.storeId, d)
-        : moment.kind === "instant" || fresh
+        : live
           ? getShiftsLive(loc.storeId, d)
           : getShiftsRecent(loc.storeId, d);
 
@@ -349,94 +337,91 @@ async function rosterForStore(
      */
     const weekDays = trailingDates.map((d) => (d === previousDate ? yesterday : trailingByDate.get(d) ?? []));
 
-    const trailingByEmployee = new Map<string, { minutes: number; shifts: number }>();
+    const wtd: StoreDay["wtd"] = {};
     for (const day of [...weekDays, today]) {
       for (const sh of day) {
         if (!sh.employeeId) continue;
-        const acc = trailingByEmployee.get(sh.employeeId) ?? { minutes: 0, shifts: 0 };
+        const acc = (wtd[sh.employeeId] ??= { minutes: 0, shifts: 0 });
         acc.minutes += sh.minutesWorked;
         acc.shifts += 1;
-        trailingByEmployee.set(sh.employeeId, acc);
       }
     }
 
-    // Today's shifts are tested against today's clock; yesterday's are tested
-    // against the same instant expressed as "minutes since yesterday's
-    // midnight", which is how a shift that started at 6pm and ends at 2am is
-    // still running when the query says 00:30.
-    const candidates: { shift: PARShift; queryMinutes: number }[] = [
-      ...today.map((shift) => ({ shift, queryMinutes: localMinutes })),
-      ...yesterday.map((shift) => ({ shift, queryMinutes: localMinutes + 1440 })),
-    ];
-
-    const onClock: StaffOnClock[] = [];
-    for (const { shift, queryMinutes } of candidates) {
-      if (!coversMinute(shift, queryMinutes)) continue;
-      const emp = shift.employeeId ? nameById.get(shift.employeeId) : undefined;
-      const job = shift.jobId ? jobById.get(shift.jobId) : undefined;
-      const jobName = job?.name ?? null;
-      const trailingAcc = shift.employeeId ? trailingByEmployee.get(shift.employeeId) : undefined;
-      const ws = shift.employeeId ? linked.get(shift.employeeId) : undefined;
-
-      onClock.push({
-        employeeId: shift.employeeId,
-        // Workstream's name wins where there is one: PAR's is a first name and
-        // a last initial, and a roster is read to find a person.
-        name:
-          ws?.name
-          ?? fullName(emp)
-          ?? (shift.employeeId ? `#${shift.employeeId}` : "unknown"),
-        job: jobName,
-        jobId: shift.jobId,
-        payRate: shift.payRate,
-        startMinutes: shift.startMinutes,
-        endMinutes: shift.endMinutes,
-        startLabel: clockLabel(shift.startMinutes),
-        endLabel: shift.isOpen ? "on now" : clockLabel(shift.endMinutes),
-        isOpen: shift.isOpen,
-        onBreak: onBreakAt(shift, queryMinutes),
-        minutesWorked: shift.minutesWorked,
-        minutesElapsedAtQuery: Math.max(0, Math.round(queryMinutes - shift.startMinutes)),
-        wtdMinutes: trailingAcc?.minutes ?? 0,
-        wtdShifts: trailingAcc?.shifts ?? 0,
-        workstream: ws
-          ? {
-              fullName: ws.name,
-              position: ws.title,
-              rateOfRecord: ws.hourlyRate,
-              hiredDate: ws.hiredDate,
-              terminationDate: ws.terminationDate,
-              linkedBy: ws.linkedBy,
-              assignedElsewhere: ws.assignedElsewhere,
-            }
-          : null,
-      });
+    // Names, jobs and Workstream facts for just the people and jobs on these
+    // two days — what a minute's roster can show — so the day stays small
+    // enough to send to the page.
+    const names: StoreDay["names"] = {};
+    const jobNames: StoreDay["jobs"] = {};
+    const workstream: StoreDay["workstream"] = {};
+    for (const sh of [...today, ...yesterday]) {
+      if (sh.jobId && !(sh.jobId in jobNames)) {
+        const job = jobById.get(sh.jobId);
+        if (job) jobNames[sh.jobId] = job.name;
+      }
+      const id = sh.employeeId;
+      if (!id || id in names) continue;
+      const ws = linked.get(id);
+      // Workstream's name wins where there is one: PAR's is a first name and a
+      // last initial, and a roster is read to find a person.
+      names[id] = ws?.name ?? fullName(nameById.get(id)) ?? `#${id}`;
+      if (ws) {
+        workstream[id] = {
+          fullName: ws.name,
+          position: ws.title,
+          rateOfRecord: ws.hourlyRate,
+          hiredDate: ws.hiredDate,
+          terminationDate: ws.terminationDate,
+          linkedBy: ws.linkedBy,
+          assignedElsewhere: ws.assignedElsewhere,
+        };
+      }
     }
 
-    onClock.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
-
-    // Summed from the rate each card actually shows — Workstream's rate of
-    // record where the person is linked, PAR's shift rate otherwise. A run rate
-    // that totalled different numbers than the ones printed above it would be
-    // unarguable-with, which is the opposite of what a figure like this is for.
-    const rates = onClock
-      .map((p) => p.workstream?.rateOfRecord ?? p.payRate)
-      .filter((r): r is number => r !== null && r > 0);
-    const hourlyWageRunRate = rates.length
-      ? Math.round(rates.reduce((a, b) => a + b, 0) * 100) / 100
-      : null;
-    const salariedOnClock = onClock.length - rates.length;
-
-    return { ...base, onClock, hourlyWageRunRate, salariedOnClock, error: null };
+    return { ...base, today, yesterday, wtd, names, jobs: jobNames, workstream, error: null };
   } catch (err) {
     return {
       ...base,
-      onClock: [],
-      hourlyWageRunRate: null,
-      salariedOnClock: 0,
+      today: [],
+      yesterday: [],
+      wtd: {},
+      names: {},
+      jobs: {},
+      workstream: {},
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export type StaffingDay = {
+  date: string;
+  stores: StoreDay[];
+  fetchedAt: number;
+  workstreamSync: StaffingReport["workstreamSync"];
+};
+
+/**
+ * Every store's whole day at once, for the page to answer any minute of it
+ * itself (rosterAt) — the slider then needs no request per position.
+ *
+ * Same reads as a single minute: the day still being worked from PAR (live on
+ * Refresh, else at most two minutes old), earlier dates from stored history.
+ */
+export async function getStaffingDay(date: string, { fresh = false }: { fresh?: boolean } = {}): Promise<StaffingDay> {
+  const [stores, status] = await Promise.all([
+    withParPriority(PAR_PRIORITY.onClock, () =>
+      Promise.all(PAR_LOCATIONS.map((loc) => storeDayFor(loc, date, fresh)))),
+    workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
+  ]);
+  return { date, stores, fetchedAt: Date.now(), workstreamSync: syncAge(status) };
+}
+
+function syncAge(status: { rows: number; lastSyncedAt: string | null }): StaffingReport["workstreamSync"] {
+  return {
+    ...status,
+    ageHours: status.lastSyncedAt
+      ? Math.round(((Date.now() - new Date(status.lastSyncedAt).getTime()) / 3_600_000) * 10) / 10
+      : null,
+  };
 }
 
 /**
@@ -460,12 +445,7 @@ export async function getStaffingAt(
     workstreamSyncStatus().catch(() => ({ rows: 0, lastSyncedAt: null })),
   ]);
 
-  const workstreamSync = {
-    ...status,
-    ageHours: status.lastSyncedAt
-      ? Math.round(((Date.now() - new Date(status.lastSyncedAt).getTime()) / 3_600_000) * 10) / 10
-      : null,
-  };
+  const workstreamSync = syncAge(status);
 
   return {
     at: moment.kind === "instant" ? moment.at.toISOString() : null,
