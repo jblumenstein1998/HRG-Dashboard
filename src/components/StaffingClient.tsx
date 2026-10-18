@@ -28,7 +28,7 @@ import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFil
 import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
-  MissedPunchReport, PayPeriod,
+  MissedPunchReport, PayPeriod, PayPeriodSpan, HoursSpan, StoreWeekHours, EmployeeWeekHours,
 } from "@/lib/staffing";
 
 /**
@@ -72,7 +72,7 @@ function useColumnSort(defaultDir: "asc" | "desc" = "desc") {
 
 /** A header cell that ranks the table by its column. */
 function SortHeader({
-  label, sortKey, arrow, onClick, align = "right", className = "",
+  label, sortKey, arrow, onClick, align = "right", className = "", before = null,
 }: {
   label: string;
   sortKey: string;
@@ -80,10 +80,13 @@ function SortHeader({
   onClick: (key: string) => void;
   align?: "left" | "right";
   className?: string;
+  /** Rendered ahead of the sort button — e.g. a pay period's open/close toggle. */
+  before?: React.ReactNode;
 }) {
   const mark = arrow(sortKey);
   return (
     <th className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${align === "left" ? "text-left" : "text-right"} ${mark ? "text-gray-600" : "text-gray-400"} ${className}`}>
+      {before}
       <button
         type="button"
         onClick={() => onClick(sortKey)}
@@ -230,7 +233,19 @@ function TimeScrubber({
       />
 
       {/* Quarter-hour steps: finer than that is a precision the question does
-          not have, and coarser would miss a shift change. */}
+          not have, and coarser would miss a shift change. The arrows step one
+          quarter at a time for when dragging overshoots; from an off-grid time
+          (where "Now" leaves it) they land on the quarter in that direction. */}
+      <button
+        type="button"
+        onClick={() => setMinutes(Math.max(0, Math.ceil(minutes / 15) * 15 - 15))}
+        disabled={minutes <= 0}
+        className="px-1.5 py-0.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition"
+        aria-label="15 minutes earlier"
+        title="15 minutes earlier"
+      >
+        ‹
+      </button>
       <input
         type="range"
         min={0}
@@ -241,6 +256,16 @@ function TimeScrubber({
         className={`w-32 sm:w-44 accent-gray-900 cursor-pointer ${live ? "opacity-60" : ""}`}
         aria-label="time of day"
       />
+      <button
+        type="button"
+        onClick={() => setMinutes(Math.min(1425, Math.floor(minutes / 15) * 15 + 15))}
+        disabled={minutes >= 1425}
+        className="px-1.5 py-0.5 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition"
+        aria-label="15 minutes later"
+        title="15 minutes later"
+      >
+        ›
+      </button>
       <span className="text-xs tabular-nums text-gray-900 w-16">{timeLabel(minutes)}</span>
     </div>
   );
@@ -1155,25 +1180,104 @@ function daysBeforeYesterday(days: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** A column of the hours table: one week, or several added together. */
+type HoursColumn = { key: string; label: string; weekStarts: string[]; title?: string };
+
+/** "2026-10-06" → "10/06". */
+const md = (iso: string) => iso.slice(5).replace("-", "/");
+
+/** A pay period's column, keyed apart from the week that starts it. */
+function periodColumn(p: PayPeriodSpan): HoursColumn {
+  return {
+    key: `P${p.start}`,
+    label: `${md(p.start)}–${md(p.end)}${p.inProgress ? " (to date)" : ""}`,
+    weekStarts: p.weekStarts,
+    title: `Pay period ${md(p.start)}–${md(p.end)}, paid ${md(p.payDate)}`,
+  };
+}
+
+/**
+ * The report re-cut into `columns`, each the sum of its weeks.
+ *
+ * Done here rather than on the server because the figures are PAR's per
+ * workweek — overtime is split by week — so a pay period is exactly its two
+ * weeks added, and the same weeks also answer "open this fortnight up". The
+ * result has the report's own shape, so the chart and table read it unchanged.
+ */
+function groupHours(report: HoursReport, columns: HoursColumn[]): HoursReport {
+  const spanByStart = new Map(report.weeks.map((w) => [w.start, w]));
+  return {
+    ...report,
+    weeks: columns.map((c) => ({
+      start: c.key,
+      end: spanByStart.get(c.weekStarts.at(-1) ?? "")?.end ?? "",
+      label: c.label,
+    })),
+    stores: report.stores.map((store) => ({
+      ...store,
+      weeks: columns.flatMap((c): StoreWeekHours[] => {
+        const cells = store.weeks.filter((w) => c.weekStarts.includes(w.weekStart));
+        if (cells.length === 0) return [];
+        const people = new Map<string, EmployeeWeekHours>();
+        for (const cell of cells) {
+          for (const p of cell.people) {
+            const acc = people.get(p.employeeId);
+            if (!acc) { people.set(p.employeeId, { ...p }); continue; }
+            acc.regularMinutes += p.regularMinutes;
+            acc.overtimeMinutes += p.overtimeMinutes;
+            acc.regularCost += p.regularCost;
+            acc.overtimeCost += p.overtimeCost;
+            acc.unratedMinutes += p.unratedMinutes;
+            acc.shifts += p.shifts;
+            // Weeks run oldest first: the later week's rate and job are current.
+            acc.payRate = p.payRate ?? acc.payRate;
+            acc.job = p.job ?? acc.job;
+            acc.workstream = acc.workstream ?? p.workstream;
+          }
+        }
+        const sum = (f: (w: StoreWeekHours) => number) => cells.reduce((n, w) => n + f(w), 0);
+        return [{
+          weekStart: c.key,
+          weekEnd: cells.at(-1)!.weekEnd,
+          regularMinutes: sum((w) => w.regularMinutes),
+          overtimeMinutes: sum((w) => w.overtimeMinutes),
+          regularCost: Math.round(sum((w) => w.regularCost) * 100) / 100,
+          overtimeCost: Math.round(sum((w) => w.overtimeCost) * 100) / 100,
+          unratedMinutes: sum((w) => w.unratedMinutes),
+          people: [...people.values()].sort(
+            (a, b) => b.overtimeMinutes - a.overtimeMinutes || b.regularMinutes - a.regularMinutes || a.name.localeCompare(b.name),
+          ),
+        }];
+      }),
+    })),
+  };
+}
+
+/** A column header's text: its own label for pay periods and WTD, else the week's Monday. */
+function columnLabel(span: HoursSpan): string {
+  return span.start.startsWith("P") || span.label === "WTD" ? span.label : dateHeader(span.start);
+}
+
 function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   /*
-   * Two independent choices, because they are two questions.
+   * Week or pay period, because those are the two clocks overtime runs on: PAR
+   * splits it by workweek, and payroll pays it by fortnight.
    *
-   *   grain  — are the columns days or weeks?
-   *   range  — week to date, or dates you pick?
+   *   week        the last four finished weeks and this week so far — five
+   *               points, a trend and where the running week has got to. Dates
+   *               can be picked instead.
+   *   pay period  the last four finished pay fortnights and the one being
+   *               worked, each a column that opens into its two weeks.
    *
-   * They used to be one dropdown of six canned combinations, which meant
-   * "weekly, but for last month" was not on the menu at all. Splitting them
-   * makes every combination reachable and the control smaller.
-   *
-   * One control still drives the chart and the table: they are two views of the
-   * same window, and two selectors that could disagree would be a way to
-   * misread both.
+   * One control drives the chart and the table: they are two views of the same
+   * window, and two selectors that could disagree would be a way to misread both.
    */
-  const [grain, setGrain] = useState<"day" | "week">("week");
-  const [mode, setMode] = useState<"wtd" | "custom">("wtd");
+  const [grain, setGrain] = useState<"week" | "period">("week");
+  const [mode, setMode] = useState<"recent" | "custom">("recent");
   const [from, setFrom] = useState(() => daysBeforeYesterday(27));
   const [to, setTo] = useState(yesterdayISO);
+  // Pay periods opened into their two weeks, by the period's first day.
+  const [openPeriods, setOpenPeriods] = useState<Set<string>>(new Set());
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
@@ -1181,19 +1285,13 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
     { key: "", data: null, error: null },
   );
 
-  /*
-   * Week to date means different things at the two grains, and both are what
-   * somebody asking for "WTD" wants to see:
-   *
-   *   weekly  three finished weeks to read a trend against, then where this
-   *           week has got to
-   *   daily   this week alone, one column per day through yesterday
-   */
-  const query = mode === "wtd"
-    ? (grain === "week" ? "weeks=3&wtd=1" : "wtdDays=1")
-    : `from=${from}&to=${to}&grain=${grain}`;
+  const query = grain === "period"
+    ? "payPeriods=4"
+    : mode === "recent"
+      ? "weeks=4&wtd=1"
+      : `from=${from}&to=${to}&grain=week`;
   const requestKey = query;
-  const badRange = mode === "custom" && to < from;
+  const badRange = grain === "week" && mode === "custom" && to < from;
 
   useEffect(() => {
     let cancelled = false;
@@ -1209,10 +1307,54 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
   }, [requestKey, query, reloadKey]);
 
   const loading = state.key !== requestKey;
-  const data = useMemo(
+  const filtered = useMemo(
     () => (state.data ? { ...state.data, stores: state.data.stores.filter((s) => inFilter(filter.allowed, s.storeName)) } : null),
     [state.data, filter.allowed],
   );
+
+  /*
+   * What the chart and the table draw.
+   *
+   * By week, the report as it came. By pay period, the weeks added into their
+   * fortnights — one point per period on the chart, and in the table a column
+   * per period, or its two weeks for any period opened up.
+   */
+  const periods = filtered?.periods ?? null;
+  const chartData = useMemo(
+    () => (filtered && periods ? groupHours(filtered, periods.map(periodColumn)) : filtered),
+    [filtered, periods],
+  );
+  const tableData = useMemo(() => {
+    if (!filtered || !periods) return filtered;
+    const weekSpan = new Map(filtered.weeks.map((w) => [w.start, w]));
+    return groupHours(
+      filtered,
+      periods.flatMap((p): HoursColumn[] =>
+        openPeriods.has(p.start)
+          ? p.weekStarts.map((s) => ({
+              key: s,
+              label: weekSpan.get(s)?.label ?? md(s),
+              weekStarts: [s],
+            }))
+          : [periodColumn(p)],
+      ),
+    );
+  }, [filtered, periods, openPeriods]);
+  // Which pay period each table column belongs to, for the open/close toggle.
+  const periodOfColumn = useMemo(() => {
+    const out = new Map<string, PayPeriodSpan>();
+    for (const p of periods ?? []) {
+      out.set(`P${p.start}`, p);
+      for (const s of p.weekStarts) out.set(s, p);
+    }
+    return out;
+  }, [periods]);
+  const togglePeriod = (start: string) =>
+    setOpenPeriods((prev) => {
+      const next = new Set(prev);
+      if (next.has(start)) next.delete(start); else next.add(start);
+      return next;
+    });
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1225,7 +1367,7 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
           {/* Grain. A segmented pair rather than a dropdown: two options that
               are always both worth seeing should not need opening. */}
           <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
-            {(["day", "week"] as const).map((g) => (
+            {(["week", "period"] as const).map((g) => (
               <button
                 key={g}
                 onClick={() => { setGrain(g); setExpanded(null); }}
@@ -1233,25 +1375,29 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
                   grain === g ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
                 }`}
               >
-                {g === "day" ? "Daily" : "Weekly"}
+                {g === "week" ? "Week" : "Pay period"}
               </button>
             ))}
           </div>
 
-          <button
-            onClick={() => { setMode("wtd"); setExpanded(null); }}
-            title="Week to date, through yesterday"
-            className={`text-xs px-2.5 py-1 rounded-lg border transition ${
-              mode === "wtd"
-                ? "bg-gray-900 text-white border-gray-900"
-                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
-            }`}
-          >
-            WTD
-          </button>
+          {grain === "week" && (
+            <button
+              onClick={() => { setMode("recent"); setExpanded(null); }}
+              title="The last four finished weeks, then this week through yesterday"
+              className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                mode === "recent"
+                  ? "bg-gray-900 text-white border-gray-900"
+                  : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+              }`}
+            >
+              Last 4 + WTD
+            </button>
+          )}
 
           {/* Touching either date switches to the custom range, so there is no
-              separate "custom" button to press first and forget. */}
+              separate "custom" button to press first and forget. Weeks only:
+              a pay period view is the last four fortnights and the current one. */}
+          {grain === "week" && (
           <label className="flex items-center gap-1 text-xs text-gray-500">
             <input
               type="date"
@@ -1274,8 +1420,14 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
               }`}
             />
           </label>
+          )}
 
-          {loading && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+          {loading && (
+            <span role="status" className="flex items-center gap-1.5 text-xs font-medium text-gray-600">
+              <Spinner />
+              Loading…
+            </span>
+          )}
         </div>
       </div>
 
@@ -1287,27 +1439,47 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
 
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
-      {data && <OvertimeChart data={data} grain={grain === "day" ? "day" : "week"} />}
+      {chartData && <OvertimeChart data={chartData} grain={grain === "period" ? "pay period" : "week"} />}
 
-      {data && (
+      {tableData && (
         <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
                 <SortHeader label="Store" sortKey="store" align="left" arrow={sorter.arrow} onClick={sorter.toggle} />
-                {data.weeks.map((w) => (
-                  <SortHeader
-                    key={w.start}
-                    label={w.label.startsWith("P") ? w.label : dateHeader(w.start)}
-                    sortKey={w.start}
-                    arrow={sorter.arrow}
-                    onClick={sorter.toggle}
-                  />
-                ))}
+                {tableData.weeks.map((w) => {
+                  const period = periodOfColumn.get(w.start);
+                  // The first column of a pay period carries its open/close
+                  // toggle — the period itself when closed, its first week
+                  // when open — so the control stays where the period starts.
+                  const leads = period && (w.start === `P${period.start}` || w.start === period.weekStarts[0]);
+                  const isOpen = period ? openPeriods.has(period.start) : false;
+                  return (
+                    <SortHeader
+                      key={w.start}
+                      label={columnLabel(w)}
+                      sortKey={w.start}
+                      arrow={sorter.arrow}
+                      onClick={sorter.toggle}
+                      className={isOpen ? "bg-gray-50" : ""}
+                      before={leads && period && period.weekStarts.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => togglePeriod(period.start)}
+                          title={isOpen ? "Show the pay period as one column" : "Show this pay period's two weeks"}
+                          aria-expanded={isOpen}
+                          className="mr-1 px-1 rounded text-gray-500 hover:bg-gray-200 hover:text-gray-800"
+                        >
+                          {isOpen ? "▾" : "▸"}
+                        </button>
+                      ) : null}
+                    />
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {sorter.apply(data.stores, (store, key) => {
+              {sorter.apply(tableData.stores, (store, key) => {
                 if (key === "store") return store.storeName;
                 const week = store.weeks.find((w) => w.weekStart === key);
                 return week ? week.overtimeMinutes : null;
@@ -1315,9 +1487,9 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
                 <StoreHoursRows
                   key={store.storeId}
                   store={store}
+                  columns={tableData.weeks}
                   open={expanded === store.storeId}
                   onToggle={() => setExpanded(expanded === store.storeId ? null : store.storeId)}
-                  weekCount={data.weeks.length}
                 />
               ))}
             </tbody>
@@ -1329,13 +1501,15 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
 }
 
 function StoreHoursRows({
-  store, open, onToggle, weekCount,
+  store, columns, open, onToggle,
 }: {
   store: StoreHours;
+  /** The table's columns, so a store missing one still lines up under it. */
+  columns: HoursSpan[];
   open: boolean;
   onToggle: () => void;
-  weekCount: number;
 }) {
+  const cellOf = (key: string) => store.weeks.find((w) => w.weekStart === key);
   // Everyone who appears in any week, ordered by the overtime they racked up
   // across the whole window — the question the drawer is opened to answer.
   // `job` is the job they clocked in as; `position` is what Workstream hired
@@ -1379,21 +1553,25 @@ function StoreHoursRows({
             nobody opens this table to read — the overtime is the actionable
             figure, and sitting it beside one ten times its size made it the
             small print. */}
-        {store.weeks.map((w) => (
-          <td key={w.weekStart} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
-            <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
-              {hrs(w.overtimeMinutes)}
-            </span>{" "}
-            <span className={w.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
-              {usd(w.overtimeCost)}
-            </span>
-          </td>
-        ))}
+        {columns.map((c) => {
+          const w = cellOf(c.start);
+          if (!w) return <td key={c.start} className="px-3 py-1 text-right text-xs text-gray-300">—</td>;
+          return (
+            <td key={c.start} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+              <span className={w.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>
+                {hrs(w.overtimeMinutes)}
+              </span>{" "}
+              <span className={w.overtimeMinutes > 0 ? "text-amber-600" : "text-gray-300"}>
+                {usd(w.overtimeCost)}
+              </span>
+            </td>
+          );
+        })}
       </tr>
 
       {open && (
         <tr className="border-b border-gray-200 bg-gray-50">
-          <td colSpan={weekCount + 1} className="px-3 py-2">
+          <td colSpan={columns.length + 1} className="px-3 py-2">
             {ranked.length === 0 ? (
               <p className="text-sm text-gray-400">No shifts in this window.</p>
             ) : (
@@ -1401,9 +1579,9 @@ function StoreHoursRows({
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Employee</th>
-                    {store.weeks.map((w) => (
-                      <th key={w.weekStart} className="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
-                        {w.weekStart.slice(5).replace("-", "/")}
+                    {columns.map((c) => (
+                      <th key={c.start} className="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
+                        {c.start.startsWith("P") || c.label === "WTD" ? c.label : md(c.start)}
                       </th>
                     ))}
                   </tr>
@@ -1434,15 +1612,15 @@ function StoreHoursRows({
                           </span>
                         )}
                       </td>
-                      {store.weeks.map((w) => {
-                        const row = w.people.find((p) => p.employeeId === id);
-                        if (!row) return <td key={w.weekStart} className="px-2 py-1 text-right text-xs text-gray-300">—</td>;
+                      {columns.map((c) => {
+                        const row = cellOf(c.start)?.people.find((p) => p.employeeId === id);
+                        if (!row) return <td key={c.start} className="px-2 py-1 text-right text-xs text-gray-300">—</td>;
                         // Regular hours for context — how much of a person's
                         // week the overtime sits on top of — but no cost beside
                         // them. The dollar figure that matters is the overtime
                         // one, and a second one next to it is what buried it.
                         return (
-                          <td key={w.weekStart} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
+                          <td key={c.start} className="px-2 py-1 text-right text-xs tabular-nums whitespace-nowrap">
                             <span className="text-gray-600">{hrs(row.regularMinutes)}</span>
                             <span className="text-gray-300"> / </span>
                             <span className={row.overtimeMinutes > 0 ? "text-amber-700 font-medium" : "text-gray-300"}>

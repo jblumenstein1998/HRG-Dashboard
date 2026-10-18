@@ -548,7 +548,65 @@ export type HoursReport = {
   weeks: HoursSpan[];
   stores: StoreHours[];
   fetchedAt: number;
+  /**
+   * Pay periods over those weeks, oldest first, when the request asked for
+   * them. The figures stay per week — PAR splits overtime by workweek — and
+   * the screen adds each fortnight's two weeks together.
+   */
+  periods?: PayPeriodSpan[];
 };
+
+/** A pay fortnight, as the overtime table groups it. */
+export type PayPeriodSpan = {
+  start: string;
+  /** Last day included: the fortnight's Sunday, or yesterday if still running. */
+  end: string;
+  payDate: string;
+  inProgress: boolean;
+  /** The Mondays of the weeks in it that have started, oldest first. */
+  weekStarts: string[];
+};
+
+/**
+ * The weeks of the last `count` finished pay periods and the one being worked,
+ * oldest first — two per fortnight, the running one cut at yesterday.
+ *
+ * Pay periods are Monday-to-Sunday fortnights (payPeriodFor), so they are
+ * whole weeks, and PAR's overtime split is per week. Returning weeks and
+ * letting the screen sum each pair means a period's overtime is exactly its
+ * two weeks', and the same data answers "open this fortnight up".
+ */
+export function recentPayPeriodWeeks(today: string, count: number): { weeks: HoursSpan[]; periods: PayPeriodSpan[] } {
+  const yesterday = shiftLocalDate(today, -1);
+  const fortnights = recentPayPeriods(today, count + 3)
+    .filter((p) => p.start <= yesterday)
+    .slice(0, count + 1)
+    .reverse();
+
+  const weeks: HoursSpan[] = [];
+  const periods: PayPeriodSpan[] = [];
+  for (const p of fortnights) {
+    const weekStarts: string[] = [];
+    for (const start of [p.start, shiftLocalDate(p.start, 7)]) {
+      if (start > yesterday) continue;
+      const end = shiftLocalDate(start, 6);
+      weeks.push({
+        start,
+        end: end > yesterday ? yesterday : end,
+        label: end > yesterday ? "WTD" : start.slice(5).replace("-", "/"),
+      });
+      weekStarts.push(start);
+    }
+    periods.push({
+      start: p.start,
+      end: p.end > yesterday ? yesterday : p.end,
+      payDate: p.payDate,
+      inProgress: p.end > yesterday,
+      weekStarts,
+    });
+  }
+  return { weeks, periods };
+}
 
 /**
  * What an overtime hour costs, as a multiple of the base rate.

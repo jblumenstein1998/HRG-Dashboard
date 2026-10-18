@@ -7,6 +7,7 @@ import {
   recentCompleteDays,
   recentCompleteWeeks,
   recentCompletePeriods,
+  recentPayPeriodWeeks,
   weekToDateSpan,
 } from "@/lib/staffing";
 import { PAR_PRIORITY, withParPriority } from "@/lib/par";
@@ -18,7 +19,9 @@ import { todayCentralISO } from "@/lib/parRollup";
  * GET /api/staffing/hours?weeks=4          the last 4 complete Mon–Sun weeks
  * GET /api/staffing/hours?periods=2        the last 2 complete pay periods
  * GET /api/staffing/hours?days=14          the last 14 complete business dates
- * GET /api/staffing/hours?weeks=3&wtd=1    3 complete weeks, then this week so far
+ * GET /api/staffing/hours?weeks=4&wtd=1    4 complete weeks, then this week so far
+ * GET /api/staffing/hours?payPeriods=4     the weeks of the last 4 pay fortnights
+ *                                          and the one being worked, plus `periods`
  * GET /api/staffing/hours?wtdDays=1        this week, Monday through yesterday
  * GET /api/staffing/hours?from=&to=&grain= a chosen range, cut by day or week
  *
@@ -83,7 +86,16 @@ export async function GET(req: NextRequest) {
     custom = spansForRange.slice(-(grain === "day" ? MAX_DAYS * 3 : MAX_WEEKS * 3));
   }
 
-  const spans = custom
+  // The last N finished pay fortnights and the one being worked, as weeks —
+  // the screen sums each pair into its period.
+  const payPeriods = Number(p.get("payPeriods") ?? 0);
+  const fortnights = payPeriods > 0
+    ? recentPayPeriodWeeks(today, Math.min(6, Math.max(1, payPeriods)))
+    : null;
+
+  const spans = fortnights
+    ? fortnights.weeks
+    : custom
     ? custom
     : wtdDays
     ? currentWeekDays(today)
@@ -104,7 +116,7 @@ export async function GET(req: NextRequest) {
       `[staffing/hours] ${spans[0]?.start}..${spans.at(-1)?.end} ` +
       `(${spans.length} spans) in ${Date.now() - started}ms`,
     );
-    return NextResponse.json(report);
+    return NextResponse.json(fortnights ? { ...report, periods: fortnights.periods } : report);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing/hours] failed:", msg);
