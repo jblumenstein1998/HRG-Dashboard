@@ -145,11 +145,10 @@ export default function ReconciliationSection({
   const [error, setError] = useState<string | null>(null);
   const [showSettled, setShowSettled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  // Open on arrival, and the data loads either way — collapsing hides the
-  // queue, it does not stop it being read. Somebody who has already worked
-  // their store today wants it out of the way without losing the count in the
-  // header telling them whether that is still true.
-  const [open, setOpen] = useState(true);
+  // Collapsed on arrival, like HR Cleanup, and the data loads either way —
+  // collapsing hides the queue, it does not stop it being read, so the count in
+  // the header still says whether there is anything to do.
+  const [open, setOpen] = useState(false);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
