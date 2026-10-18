@@ -28,8 +28,7 @@ import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFil
 import type { Tab } from "@/lib/users/tabs";
 import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
-  MissedPunchReport, PayPeriod, PayPeriodSpan, HoursSpan, StoreWeekHours, EmployeeWeekHours,
-  StaffingDay,
+  MissedPunchReport, PayPeriod, HoursSpan, HoursGrain, StaffingDay,
 } from "@/lib/staffing";
 import { clockLabel, rosterAt } from "@/lib/staffingRoster";
 
@@ -1254,118 +1253,27 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
   );
 }
 
-/** Yesterday, ISO — the latest date any window on this screen may end on. */
-function yesterdayISO(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** `days` before yesterday, ISO — the default start of a custom range. */
-function daysBeforeYesterday(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1 - days);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** A column of the hours table: one week, or several added together. */
-type HoursColumn = { key: string; label: string; weekStarts: string[]; title?: string };
-
-/** "2026-10-06" → "10/06". */
-const md = (iso: string) => iso.slice(5).replace("-", "/");
-
-/** A pay period's column, keyed apart from the week that starts it. */
-function periodColumn(p: PayPeriodSpan): HoursColumn {
-  return {
-    key: `P${p.start}`,
-    label: `${md(p.start)}–${md(p.end)}${p.inProgress ? " (to date)" : ""}`,
-    weekStarts: p.weekStarts,
-    title: `Pay period ${md(p.start)}–${md(p.end)}, paid ${md(p.payDate)}`,
-  };
-}
-
 /**
- * The report re-cut into `columns`, each the sum of its weeks.
- *
- * Done here rather than on the server because the figures are PAR's per
- * workweek — overtime is split by week — so a pay period is exactly its two
- * weeks added, and the same weeks also answer "open this fortnight up". The
- * result has the report's own shape, so the chart and table read it unchanged.
+ * The overtime table's grains. Each shows the last four finished units and the
+ * one in progress, cut at yesterday — five points whichever is chosen.
  */
-function groupHours(report: HoursReport, columns: HoursColumn[]): HoursReport {
-  const spanByStart = new Map(report.weeks.map((w) => [w.start, w]));
-  return {
-    ...report,
-    weeks: columns.map((c) => ({
-      start: c.key,
-      end: spanByStart.get(c.weekStarts.at(-1) ?? "")?.end ?? "",
-      label: c.label,
-    })),
-    stores: report.stores.map((store) => ({
-      ...store,
-      weeks: columns.flatMap((c): StoreWeekHours[] => {
-        const cells = store.weeks.filter((w) => c.weekStarts.includes(w.weekStart));
-        if (cells.length === 0) return [];
-        const people = new Map<string, EmployeeWeekHours>();
-        for (const cell of cells) {
-          for (const p of cell.people) {
-            const acc = people.get(p.employeeId);
-            if (!acc) { people.set(p.employeeId, { ...p }); continue; }
-            acc.regularMinutes += p.regularMinutes;
-            acc.overtimeMinutes += p.overtimeMinutes;
-            acc.regularCost += p.regularCost;
-            acc.overtimeCost += p.overtimeCost;
-            acc.unratedMinutes += p.unratedMinutes;
-            acc.shifts += p.shifts;
-            // Weeks run oldest first: the later week's rate and job are current.
-            acc.payRate = p.payRate ?? acc.payRate;
-            acc.job = p.job ?? acc.job;
-            acc.workstream = acc.workstream ?? p.workstream;
-          }
-        }
-        const sum = (f: (w: StoreWeekHours) => number) => cells.reduce((n, w) => n + f(w), 0);
-        return [{
-          weekStart: c.key,
-          weekEnd: cells.at(-1)!.weekEnd,
-          regularMinutes: sum((w) => w.regularMinutes),
-          overtimeMinutes: sum((w) => w.overtimeMinutes),
-          regularCost: Math.round(sum((w) => w.regularCost) * 100) / 100,
-          overtimeCost: Math.round(sum((w) => w.overtimeCost) * 100) / 100,
-          unratedMinutes: sum((w) => w.unratedMinutes),
-          people: [...people.values()].sort(
-            (a, b) => b.overtimeMinutes - a.overtimeMinutes || b.regularMinutes - a.regularMinutes || a.name.localeCompare(b.name),
-          ),
-        }];
-      }),
-    })),
-  };
-}
-
-/** A column header's text: its own label for pay periods and WTD, else the week's Monday. */
-function columnLabel(span: HoursSpan): string {
-  return span.start.startsWith("P") || span.label === "WTD" ? span.label : dateHeader(span.start);
-}
+const HOURS_GRAINS: { key: HoursGrain; label: string; noun: string }[] = [
+  { key: "week", label: "Week", noun: "week" },
+  { key: "payPeriod", label: "Pay period", noun: "pay period" },
+  { key: "period", label: "Period", noun: "period" },
+  { key: "quarter", label: "Quarter", noun: "quarter" },
+];
 
 function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   /*
-   * Week or pay period, because those are the two clocks overtime runs on: PAR
-   * splits it by workweek, and payroll pays it by fortnight.
-   *
-   *   week        the last four finished weeks and this week so far — five
-   *               points, a trend and where the running week has got to. Dates
-   *               can be picked instead.
-   *   pay period  the last four finished pay fortnights and the one being
-   *               worked, each a column that opens into its two weeks.
+   * One choice: the unit. Whichever it is, the last four finished and the one in
+   * progress (WTD, PPTD, PTD, QTD) — five points, the trend and where the
+   * running unit has got to. No dates to pick.
    *
    * One control drives the chart and the table: they are two views of the same
    * window, and two selectors that could disagree would be a way to misread both.
    */
-  const [grain, setGrain] = useState<"week" | "period">("week");
-  const [mode, setMode] = useState<"recent" | "custom">("recent");
-  const [from, setFrom] = useState(() => daysBeforeYesterday(27));
-  const [to, setTo] = useState(yesterdayISO);
+  const [grain, setGrain] = useState<HoursGrain>("week");
 
   const [expanded, setExpanded] = useState<string | null>(null);
   const sorter = useColumnSort("desc");
@@ -1373,13 +1281,8 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
     { key: "", data: null, error: null },
   );
 
-  const query = grain === "period"
-    ? "payPeriods=4"
-    : mode === "recent"
-      ? "weeks=4&wtd=1"
-      : `from=${from}&to=${to}&grain=week`;
+  const query = `grain=${grain}`;
   const requestKey = query;
-  const badRange = grain === "week" && mode === "custom" && to < from;
 
   useEffect(() => {
     let cancelled = false;
@@ -1400,16 +1303,8 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
     [state.data, filter.allowed],
   );
 
-  /*
-   * What the chart and the table draw: by week, the report as it came; by pay
-   * period, the weeks added into their fortnights, one column and one point
-   * per period.
-   */
-  const periods = filtered?.periods ?? null;
-  const view = useMemo(
-    () => (filtered && periods ? groupHours(filtered, periods.map(periodColumn)) : filtered),
-    [filtered, periods],
-  );
+  // The server sends the five columns already added up, whatever the grain.
+  const view = filtered;
 
   // The bottom row: every store shown, added up per column — so it follows the
   // leader filter, and says what the stores on screen cost together.
@@ -1435,63 +1330,21 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
           overtime hours and cost · through yesterday
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* Grain. A segmented pair rather than a dropdown: two options that
-              are always both worth seeing should not need opening. */}
+          {/* The unit. A segmented row rather than a dropdown: four options
+              that are always all worth seeing should not need opening. */}
           <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
-            {(["week", "period"] as const).map((g) => (
+            {HOURS_GRAINS.map((g) => (
               <button
-                key={g}
-                onClick={() => { setGrain(g); setExpanded(null); }}
-                className={`text-xs px-2.5 py-1 transition ${
-                  grain === g ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                key={g.key}
+                onClick={() => { setGrain(g.key); setExpanded(null); }}
+                className={`text-xs px-2.5 py-1 transition border-l border-gray-200 first:border-l-0 ${
+                  grain === g.key ? "bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
                 }`}
               >
-                {g === "week" ? "Week" : "Pay period"}
+                {g.label}
               </button>
             ))}
           </div>
-
-          {grain === "week" && (
-            <button
-              onClick={() => { setMode("recent"); setExpanded(null); }}
-              title="The last four finished weeks, then this week through yesterday"
-              className={`text-xs px-2.5 py-1 rounded-lg border transition ${
-                mode === "recent"
-                  ? "bg-gray-900 text-white border-gray-900"
-                  : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
-              }`}
-            >
-              Last 4 + WTD
-            </button>
-          )}
-
-          {/* Touching either date switches to the custom range, so there is no
-              separate "custom" button to press first and forget. Weeks only:
-              a pay period view is the last four fortnights and the current one. */}
-          {grain === "week" && (
-          <label className="flex items-center gap-1 text-xs text-gray-500">
-            <input
-              type="date"
-              value={from}
-              max={to}
-              onChange={(e) => { setFrom(e.target.value); setMode("custom"); setExpanded(null); }}
-              className={`text-xs border rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-                mode === "custom" ? "border-gray-400 text-gray-900" : "border-gray-200 text-gray-500"
-              }`}
-            />
-            <span className="text-gray-400">to</span>
-            <input
-              type="date"
-              value={to}
-              min={from}
-              max={yesterdayISO()}
-              onChange={(e) => { setTo(e.target.value); setMode("custom"); setExpanded(null); }}
-              className={`text-xs border rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 ${
-                mode === "custom" ? "border-gray-400 text-gray-900" : "border-gray-200 text-gray-500"
-              }`}
-            />
-          </label>
-          )}
 
           {loading && (
             <span role="status" className="flex items-center gap-1.5 text-xs font-medium text-gray-600">
@@ -1502,15 +1355,9 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
         </div>
       </div>
 
-      {badRange && (
-        <p className="px-3 py-2 text-xs text-amber-700">
-          The start date is after the end date.
-        </p>
-      )}
-
       {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
 
-      {view && <OvertimeChart data={view} grain={grain === "period" ? "pay period" : "week"} />}
+      {view && <OvertimeChart data={view} grain={HOURS_GRAINS.find((g) => g.key === grain)?.noun ?? "week"} />}
 
       {view && (
         <div className={`overflow-x-auto transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
@@ -1521,7 +1368,7 @@ function HoursSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: n
                 {view.weeks.map((w) => (
                   <SortHeader
                     key={w.start}
-                    label={columnLabel(w)}
+                    label={w.label}
                     sortKey={w.start}
                     arrow={sorter.arrow}
                     onClick={sorter.toggle}
@@ -1649,7 +1496,7 @@ function StoreHoursRows({
                     <th className="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Employee</th>
                     {columns.map((c) => (
                       <th key={c.start} className="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
-                        {c.start.startsWith("P") || c.label === "WTD" ? c.label : md(c.start)}
+                        {c.label}
                       </th>
                     ))}
                   </tr>

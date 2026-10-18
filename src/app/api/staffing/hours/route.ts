@@ -1,38 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSuperAdminApi } from "@/lib/users/adminGuard";
-import {
-  currentWeekDays,
-  customSpans,
-  getStoreHours,
-  recentCompleteDays,
-  recentCompleteWeeks,
-  recentCompletePeriods,
-  recentPayPeriodWeeks,
-  weekToDateSpan,
-} from "@/lib/staffing";
+import { getOvertimeReport, overtimeColumns, type HoursGrain } from "@/lib/staffing";
 import { PAR_PRIORITY, withParPriority } from "@/lib/par";
 import { todayCentralISO } from "@/lib/parRollup";
 
 /**
- * Regular and overtime hours, per store, per complete week.
+ * Regular and overtime hours, per store, for the overtime table and chart.
  *
- * GET /api/staffing/hours?weeks=4          the last 4 complete Mon–Sun weeks
- * GET /api/staffing/hours?periods=2        the last 2 complete pay periods
- * GET /api/staffing/hours?days=14          the last 14 complete business dates
- * GET /api/staffing/hours?weeks=4&wtd=1    4 complete weeks, then this week so far
- * GET /api/staffing/hours?payPeriods=4     the weeks of the last 4 pay fortnights
- *                                          and the one being worked, plus `periods`
- * GET /api/staffing/hours?wtdDays=1        this week, Monday through yesterday
- * GET /api/staffing/hours?from=&to=&grain= a chosen range, cut by day or week
+ * GET /api/staffing/hours?grain=week        last 4 weeks, then WTD
+ * GET /api/staffing/hours?grain=payPeriod   last 4 pay fortnights, then PPTD
+ * GET /api/staffing/hours?grain=period      last 4 fiscal periods, then PTD
+ * GET /api/staffing/hours?grain=quarter     last 4 fiscal quarters, then QTD
  *
- * Seven cached GetShifts calls per store per week, so four weeks across twelve
- * stores is 336 calls on a cold cache and nothing on a warm one — past business
- * dates never change.
+ * Five columns whichever grain, added up in Postgres (getOvertimeReport), so a
+ * quarter costs about what a week does.
  */
 export const maxDuration = 300;
 
-const MAX_WEEKS = 8;
-const MAX_DAYS = 21;
+const GRAINS: HoursGrain[] = ["week", "payPeriod", "period", "quarter"];
 
 export async function GET(req: NextRequest) {
   // Admin-only, matching the page. These answer with every employee's name,
@@ -42,6 +27,11 @@ export async function GET(req: NextRequest) {
   if (denied) return denied;
 
   const p = req.nextUrl.searchParams;
+  const rawGrain = p.get("grain") ?? "week";
+  const grain = GRAINS.find((g) => g === rawGrain);
+  if (!grain) {
+    return NextResponse.json({ error: `grain must be one of ${GRAINS.join(", ")}` }, { status: 400 });
+  }
   const rawToday = p.get("today");
   const today = rawToday && /^\d{4}-\d{2}-\d{2}$/.test(rawToday)
     ? rawToday
@@ -50,73 +40,16 @@ export async function GET(req: NextRequest) {
     // the day everyone actually wanted to see.
     : todayCentralISO();
 
-  // A pay period is four or five weeks, so two of them is roughly eight weeks of
-  // shifts per store — cached, but a cold run is not cheap.
-  const periods = Number(p.get("periods") ?? 0);
-  // Days are for the overtime chart, where a week is too coarse to show which
-  // shift tipped the week over. Capped at three weeks: each day is twelve more
-  // cached GetShifts calls, and a line chart past about twenty points stops
-  // being readable anyway.
-  const days = Number(p.get("days") ?? 0);
-
-  // This week broken into days, Monday through yesterday.
-  const wtdDays = p.get("wtdDays") === "1";
-  // Append the running week, so completed weeks and "so far" sit on one axis.
-  const withWtd = p.get("wtd") === "1";
-
-  const weeks = recentCompleteWeeks(today, Math.min(MAX_WEEKS, Math.max(1, Number(p.get("weeks") ?? 4) || 4)));
-  const wtd = weekToDateSpan(today);
-
-  // A chosen range, cut by `grain`. The end is capped at yesterday for the same
-  // reason every other window here is, and the span count is capped because
-  // each one is twelve more PAR reads and a line chart past a few dozen points
-  // is unreadable anyway.
-  const ISO = /^\d{4}-\d{2}-\d{2}$/;
-  const rawFrom = p.get("from");
-  const rawTo = p.get("to");
-  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000)
-    .toISOString().slice(0, 10);
-
-  let custom: ReturnType<typeof customSpans> | null = null;
-  if (rawFrom && rawTo && ISO.test(rawFrom) && ISO.test(rawTo)) {
-    const grain = p.get("grain") === "day" ? "day" : "week";
-    const to = rawTo > yesterday ? yesterday : rawTo;
-    const from = rawFrom > to ? to : rawFrom;
-    const spansForRange = customSpans(from, to, grain);
-    custom = spansForRange.slice(-(grain === "day" ? MAX_DAYS * 3 : MAX_WEEKS * 3));
-  }
-
-  // The last N finished pay fortnights and the one being worked, as weeks —
-  // the screen sums each pair into its period.
-  const payPeriods = Number(p.get("payPeriods") ?? 0);
-  const fortnights = payPeriods > 0
-    ? recentPayPeriodWeeks(today, Math.min(6, Math.max(1, payPeriods)))
-    : null;
-
-  const spans = fortnights
-    ? fortnights.weeks
-    : custom
-    ? custom
-    : wtdDays
-    ? currentWeekDays(today)
-    : periods > 0
-      ? recentCompletePeriods(today, Math.min(4, Math.max(1, periods)))
-      : days > 0
-        ? recentCompleteDays(today, Math.min(MAX_DAYS, Math.max(1, days)))
-        : withWtd && wtd
-          ? [...weeks, wtd]
-          : weeks;
+  const columns = overtimeColumns(grain, today);
 
   try {
-    // Logged because Vercel's request logs carry no duration, and "a new range
-    // is slow" is otherwise impossible to tell apart from "PAR was slow".
+    // Logged because Vercel's request logs carry no duration.
     const started = Date.now();
-    const report = await withParPriority(PAR_PRIORITY.hours, () => getStoreHours(spans));
+    const report = await withParPriority(PAR_PRIORITY.hours, () => getOvertimeReport(columns));
     console.log(
-      `[staffing/hours] ${spans[0]?.start}..${spans.at(-1)?.end} ` +
-      `(${spans.length} spans) in ${Date.now() - started}ms`,
+      `[staffing/hours] ${grain} ${columns[0]?.start}..${columns.at(-1)?.end} in ${Date.now() - started}ms`,
     );
-    return NextResponse.json(fortnights ? { ...report, periods: fortnights.periods } : report);
+    return NextResponse.json(report);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing/hours] failed:", msg);

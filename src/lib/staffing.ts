@@ -39,8 +39,10 @@ import {
   getStoreTimeZone,
   withParPriority,
   PAR_PRIORITY,
+  nonLaborJobIds,
   type PARShift,
 } from "./par";
+import { sql } from "./db";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
 import { clockLabel, rosterAt, type StoreDay } from "./staffingRoster";
@@ -527,69 +529,14 @@ export type StoreHours = {
 export type HoursSpan = { start: string; end: string; label: string };
 
 export type HoursReport = {
-  /** The columns, oldest first. Weeks or pay periods depending on the request. */
+  /** The columns, oldest first: four finished, then the one in progress. */
   weeks: HoursSpan[];
   stores: StoreHours[];
   fetchedAt: number;
-  /**
-   * Pay periods over those weeks, oldest first, when the request asked for
-   * them. The figures stay per week — PAR splits overtime by workweek — and
-   * the screen adds each fortnight's two weeks together.
-   */
-  periods?: PayPeriodSpan[];
 };
 
-/** A pay fortnight, as the overtime table groups it. */
-export type PayPeriodSpan = {
-  start: string;
-  /** Last day included: the fortnight's Sunday, or yesterday if still running. */
-  end: string;
-  payDate: string;
-  inProgress: boolean;
-  /** The Mondays of the weeks in it that have started, oldest first. */
-  weekStarts: string[];
-};
-
-/**
- * The weeks of the last `count` finished pay periods and the one being worked,
- * oldest first — two per fortnight, the running one cut at yesterday.
- *
- * Pay periods are Monday-to-Sunday fortnights (payPeriodFor), so they are
- * whole weeks, and PAR's overtime split is per week. Returning weeks and
- * letting the screen sum each pair means a period's overtime is exactly its
- * two weeks', and the same data answers "open this fortnight up".
- */
-export function recentPayPeriodWeeks(today: string, count: number): { weeks: HoursSpan[]; periods: PayPeriodSpan[] } {
-  const yesterday = shiftLocalDate(today, -1);
-  const fortnights = recentPayPeriods(today, count + 3)
-    .filter((p) => p.start <= yesterday)
-    .slice(0, count + 1)
-    .reverse();
-
-  const weeks: HoursSpan[] = [];
-  const periods: PayPeriodSpan[] = [];
-  for (const p of fortnights) {
-    const weekStarts: string[] = [];
-    for (const start of [p.start, shiftLocalDate(p.start, 7)]) {
-      if (start > yesterday) continue;
-      const end = shiftLocalDate(start, 6);
-      weeks.push({
-        start,
-        end: end > yesterday ? yesterday : end,
-        label: end > yesterday ? "WTD" : start.slice(5).replace("-", "/"),
-      });
-      weekStarts.push(start);
-    }
-    periods.push({
-      start: p.start,
-      end: p.end > yesterday ? yesterday : p.end,
-      payDate: p.payDate,
-      inProgress: p.end > yesterday,
-      weekStarts,
-    });
-  }
-  return { weeks, periods };
-}
+/** What one column of the overtime table is. */
+export type HoursGrain = "week" | "payPeriod" | "period" | "quarter";
 
 /**
  * What an overtime hour costs, as a multiple of the base rate.
@@ -611,264 +558,236 @@ function mondayOf(iso: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
-function eachDate(start: string, end: string): string[] {
-  const out: string[] = [];
-  for (let d = start; d <= end; d = shiftLocalDate(d, 1)) out.push(d);
-  return out;
-}
+/** "2026-10-06" → "10/06". */
+const md = (iso: string) => iso.slice(5).replace("-", "/");
 
 /**
- * The last `count` complete Monday–Sunday weeks before the week containing
- * `today`. The current week is excluded on purpose; see the note above.
+ * Fiscal periods for FY2025 through FY2027, oldest first.
+ *
+ * lib/fiscal lists FY2026 only. The other years follow the same 4-4-5 pattern
+ * from their own start — FY2025 from 2024-12-30, the 364-day shift the rest of
+ * the dashboard uses, and FY2027 from the day after FY2026's last period — with
+ * each year's final period cut at the day before the next year begins, since
+ * the year lengths differ.
  */
-export function recentCompleteWeeks(today: string, count: number): HoursSpan[] {
-  const thisMonday = mondayOf(today);
-  const weeks: HoursSpan[] = [];
-  for (let i = count; i >= 1; i--) {
-    const start = shiftLocalDate(thisMonday, -7 * i);
-    weeks.push({ start, end: shiftLocalDate(start, 6), label: start.slice(5).replace("-", "/") });
-  }
-  return weeks;
-}
-
-/**
- * The last `count` completed business dates, oldest first.
- *
- * Today is left out for the same reason a running week is: a day still being
- * worked reports less overtime than it will finish with, and a line that climbs
- * through the afternoon reads as a store deteriorating when nothing has
- * happened.
- *
- * Each span is a single date, which `getStoreHours` handles without knowing
- * anything new — it already walks every date between start and end.
- *
- * Daily overtime is a different question from weekly. Overtime is a property of
- * a payroll week, so a single day's "overtime minutes" is PAR's own attribution
- * of that day's hours, not a day that broke forty on its own. It answers "which
- * day did the week tip over", which is the useful version for a manager
- * building next week's schedule.
- */
-export function recentCompleteDays(today: string, count: number): HoursSpan[] {
-  const days: HoursSpan[] = [];
-  for (let i = count; i >= 1; i--) {
-    const date = shiftLocalDate(today, -i);
-    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
-  }
-  return days;
-}
-
-/**
- * This week so far — Monday through yesterday.
- *
- * Null on a Monday, when there is no "so far" yet. Returning an empty span
- * instead would plot a point at zero, which is a claim that nobody worked
- * overtime rather than that the week has not started.
- *
- * Today is excluded, as everywhere else on this screen: a day still being
- * worked reports less overtime than it will finish with.
- *
- * It sits alongside completed weeks knowing it is not their equal — a partial
- * week is always lower than a full one, and the axis cannot say so. The label
- * carries that warning, which is why it reads "WTD" rather than a date.
- */
-export function weekToDateSpan(today: string): HoursSpan | null {
-  const monday = mondayOf(today);
-  const yesterday = shiftLocalDate(today, -1);
-  if (yesterday < monday) return null;
-  return { start: monday, end: yesterday, label: "WTD" };
-}
-
-/**
- * Each day of the current week, Monday through yesterday.
- *
- * The breakdown behind the WTD point: same window, one column per day, for
- * working out which shift put the week where it is.
- */
-export function currentWeekDays(today: string): HoursSpan[] {
-  const monday = mondayOf(today);
-  const yesterday = shiftLocalDate(today, -1);
-  const days: HoursSpan[] = [];
-  for (const date of eachDate(monday, yesterday)) {
-    days.push({ start: date, end: date, label: date.slice(5).replace("-", "/") });
-  }
-  return days;
-}
-
-/**
- * A chosen range, cut into days or into weeks.
- *
- * Weeks are Mon–Sun as everywhere else on this screen, and the first and last
- * are **clipped to the range** rather than dropped. Dropping them would be
- * tidier arithmetic and a worse answer: someone who picks the 3rd to the 17th
- * means those dates, and silently returning only the whole weeks inside would
- * answer a question they did not ask — sometimes with nothing at all.
- *
- * The cost is that an edge week can be short, and a short week carries less
- * overtime for that reason alone. A clipped span is marked with a `~` in its
- * label so the chart can say so rather than leaving it to be noticed.
- */
-export function customSpans(from: string, to: string, grain: "day" | "week"): HoursSpan[] {
-  if (to < from) return [];
-
-  if (grain === "day") {
-    return eachDate(from, to).map((date) => ({
-      start: date,
-      end: date,
-      label: date.slice(5).replace("-", "/"),
-    }));
-  }
-
-  const spans: HoursSpan[] = [];
-  let cursor = mondayOf(from);
-  while (cursor <= to) {
-    const weekEnd = shiftLocalDate(cursor, 6);
-    const start = cursor < from ? from : cursor;
-    const end = weekEnd > to ? to : weekEnd;
-    const clipped = start !== cursor || end !== weekEnd;
-    spans.push({
-      start,
-      end,
-      label: `${clipped ? "~" : ""}${start.slice(5).replace("-", "/")}`,
+function fiscalPeriods(): { fy: number; period: number; quarter: number; start: string; end: string }[] {
+  const fy2026Start = PERIODS[0].start;
+  const yearStarts = [
+    { fy: 2025, start: shiftLocalDate(fy2026Start, -364) },
+    { fy: 2026, start: fy2026Start },
+    { fy: 2027, start: shiftLocalDate(PERIODS[PERIODS.length - 1].end, 1) },
+  ];
+  const offset = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+  return yearStarts.flatMap(({ fy, start }, i) => {
+    const days = offset(fy2026Start, start);
+    const nextStart = yearStarts[i + 1]?.start;
+    return PERIODS.map((p, j) => {
+      const end = shiftLocalDate(p.end, days);
+      return {
+        fy,
+        period: p.period,
+        quarter: p.quarter,
+        start: shiftLocalDate(p.start, days),
+        end: j === PERIODS.length - 1 && nextStart ? shiftLocalDate(nextStart, -1) : end,
+      };
     });
-    cursor = shiftLocalDate(cursor, 7);
-  }
-  return spans;
+  });
 }
 
 /**
- * The last `count` completed pay periods.
+ * The overtime table's columns: the last four finished units of `grain` and
+ * the one in progress, cut at yesterday — five points whichever is chosen.
  *
- * A pay period here is the fiscal period from lib/fiscal — four or five weeks,
- * which is what the bonus docs mean when they say "pay-period" and what the
- * bonus engine already scores against. If payroll actually runs on a different
- * cycle, this is the line to change and nothing else.
+ *   week        Mon–Sun weeks, then WTD
+ *   payPeriod   payroll's Mon–Sun fortnights, then PPTD
+ *   period      fiscal 4-4-5 periods, then PTD
+ *   quarter     fiscal quarters, then QTD
  *
- * Only completed periods: one still running reports less overtime than it will
- * finish with, the same reason the weekly columns stop at the last full week.
+ * The running unit stops at yesterday because a day still being worked reports
+ * less overtime than it will finish with. On the first day of a unit, when the
+ * running one has no finished days yet, the last five finished are shown.
  */
-export function recentCompletePeriods(today: string, count: number): HoursSpan[] {
-  return PERIODS.filter((p) => p.end < today)
-    .slice(-count)
-    .map((p) => ({ start: p.start, end: p.end, label: `P${p.period}` }));
+export function overtimeColumns(grain: HoursGrain, today: string): HoursSpan[] {
+  const yesterday = shiftLocalDate(today, -1);
+  type Unit = { start: string; end: string; label: string; toDate: string };
+  let units: Unit[];
+
+  if (grain === "week") {
+    const thisMonday = mondayOf(today);
+    units = [6, 5, 4, 3, 2, 1, 0].map((i) => {
+      const start = shiftLocalDate(thisMonday, -7 * i);
+      return { start, end: shiftLocalDate(start, 6), label: `Wk ${md(start)}`, toDate: "WTD" };
+    });
+  } else if (grain === "payPeriod") {
+    units = recentPayPeriods(today, 7).reverse().map((p) => ({
+      start: p.start, end: p.end, label: `${md(p.start)}–${md(p.end)}`, toDate: "PPTD",
+    }));
+  } else {
+    const periods = fiscalPeriods();
+    if (grain === "period") {
+      units = periods.map((p) => ({
+        start: p.start, end: p.end, label: `P${p.period} FY${String(p.fy).slice(2)}`, toDate: "PTD",
+      }));
+    } else {
+      const quarters = new Map<string, Unit>();
+      for (const p of periods) {
+        const key = `${p.fy}Q${p.quarter}`;
+        const q = quarters.get(key);
+        if (q) q.end = p.end;
+        else quarters.set(key, { start: p.start, end: p.end, label: `Q${p.quarter} FY${String(p.fy).slice(2)}`, toDate: "QTD" });
+      }
+      units = [...quarters.values()];
+    }
+  }
+
+  const started = units.filter((u) => u.start <= yesterday);
+  const running = started.find((u) => u.end > yesterday);
+  const finished = started.filter((u) => u.end <= yesterday);
+  const cols = running
+    ? [...finished.slice(-4), { ...running, end: yesterday, label: running.toDate }]
+    : finished.slice(-5);
+  return cols.map(({ start, end, label }) => ({ start, end, label }));
 }
 
-export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
-  const weeks = spans;
+type OvertimeRow = {
+  store_id: string; col: string; employee_id: string | null;
+  reg: number; ot: number; reg_cost: number; ot_cost: number; unrated: number; shifts: number;
+  rate: number | null; job_id: string | null;
+};
 
-  const stores = await Promise.all(
-    PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
+/**
+ * Regular and overtime hours and cost, per store, per column, per person —
+ * added up in Postgres.
+ *
+ * A quarter view is five quarters, about 65 weeks of shifts: some 170,000 rows
+ * across the stores, too many to ship to the app on every load (and the free
+ * plan's monthly transfer would feel it). Grouping in the database sends back
+ * one row per person per store per column instead, a few thousand at most,
+ * whichever grain is asked for.
+ *
+ * Costs follow the shift-level rule the screen always used: regular minutes at
+ * the shift's own rate, overtime at that rate times OVERTIME_MULTIPLIER, and
+ * minutes on a zero rate (salaried) counted as unrated rather than as free.
+ * Jobs PAR leaves out of labor are left out here too.
+ *
+ * Days inside the edit window that Refresh flagged, or that we do not hold yet,
+ * are brought up to date from PAR first — the same rule every other read of
+ * stored shifts follows.
+ */
+export async function getOvertimeReport(columns: HoursSpan[]): Promise<HoursReport> {
+  if (columns.length === 0) return { weeks: [], stores: [], fetchedAt: Date.now() };
+  const first = columns[0].start;
+  const last = columns[columns.length - 1].end;
+
+  const facts = await Promise.all(
+    PAR_LOCATIONS.map(async (loc) => {
       try {
-        // Every day of every span in one read per store, not one per day: a
-        // new custom range was otherwise ~1,000 separate Postgres round trips.
-        const [employees, jobs, linked, shiftsByDate] = await Promise.all([
+        const windowStart = shiftLocalDate(businessDateISO(getStoreTimeZone(loc.storeId)), -14);
+        const recent = eachDate(windowStart > first ? windowStart : first, last);
+        const [employees, jobs, linked, excluded] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
           linkedRosterOrEmpty(loc.storeId),
-          getShiftsHistoryRange(loc.storeId, weeks.flatMap((w) => eachDate(w.start, w.end))),
+          nonLaborJobIds(loc.storeId),
+          // Read for its side effect: re-reads flagged or missing window days.
+          recent.length ? getShiftsHistoryRange(loc.storeId, recent) : null,
         ]);
-        const empById = new Map(employees.map((e) => [e.id, e]));
-        const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
-
-        const weekRows = await Promise.all(
-          weeks.map(async (w): Promise<StoreWeekHours> => {
-            const days = eachDate(w.start, w.end).map((d) => shiftsByDate.get(d) ?? []);
-
-            const byEmployee = new Map<string, EmployeeWeekHours>();
-            let regularMinutes = 0;
-            let overtimeMinutes = 0;
-            let regularCost = 0;
-            let overtimeCost = 0;
-            let unratedMinutes = 0;
-
-            for (const day of days) {
-              for (const sh of day) {
-                // Each shift is costed at its own recorded rate rather than at a
-                // person's current one: a raise mid-window should not silently
-                // reprice the weeks before it.
-                const rate = sh.payRate ?? 0;
-                const shiftRegularCost = (sh.regularMinutes / 60) * rate;
-                const shiftOvertimeCost = (sh.overtimeMinutes / 60) * rate * OVERTIME_MULTIPLIER;
-                const shiftUnrated = rate > 0 ? 0 : sh.regularMinutes + sh.overtimeMinutes;
-
-                regularMinutes += sh.regularMinutes;
-                overtimeMinutes += sh.overtimeMinutes;
-                regularCost += shiftRegularCost;
-                overtimeCost += shiftOvertimeCost;
-                unratedMinutes += shiftUnrated;
-
-                if (!sh.employeeId) continue;
-                const ws = linked.get(sh.employeeId);
-                const row = byEmployee.get(sh.employeeId) ?? {
-                  employeeId: sh.employeeId,
-                  name: ws?.name ?? fullName(empById.get(sh.employeeId)) ?? `#${sh.employeeId}`,
-                  job: sh.jobId ? jobById.get(sh.jobId)?.name ?? null : null,
-                  regularMinutes: 0,
-                  overtimeMinutes: 0,
-                  regularCost: 0,
-                  overtimeCost: 0,
-                  unratedMinutes: 0,
-                  shifts: 0,
-                  payRate: null,
-                  workstream: ws
-                    ? {
-                        fullName: ws.name,
-                        position: ws.title,
-                        rateOfRecord: ws.hourlyRate,
-                        hiredDate: ws.hiredDate,
-                        terminationDate: ws.terminationDate,
-                        linkedBy: ws.linkedBy,
-                        assignedElsewhere: ws.assignedElsewhere,
-                      }
-                    : null,
-                };
-                row.regularMinutes += sh.regularMinutes;
-                row.overtimeMinutes += sh.overtimeMinutes;
-                row.regularCost += shiftRegularCost;
-                row.overtimeCost += shiftOvertimeCost;
-                row.unratedMinutes += shiftUnrated;
-                row.shifts += 1;
-                // Days run oldest to newest, so the last rate seen is the latest.
-                if (rate > 0) row.payRate = rate;
-                byEmployee.set(sh.employeeId, row);
-              }
-            }
-
-            // Whoever is deepest into overtime first — the question this table
-            // is opened to answer.
-            const people = [...byEmployee.values()].sort(
-              (a, b) =>
-                b.overtimeMinutes - a.overtimeMinutes ||
-                b.regularMinutes - a.regularMinutes ||
-                a.name.localeCompare(b.name),
-            );
-
-            return {
-              weekStart: w.start,
-              weekEnd: w.end,
-              regularMinutes,
-              overtimeMinutes,
-              regularCost: Math.round(regularCost * 100) / 100,
-              overtimeCost: Math.round(overtimeCost * 100) / 100,
-              unratedMinutes,
-              people,
-            };
-          }),
-        );
-
-        return { storeId: loc.storeId, storeName: loc.name, state: loc.state, weeks: weekRows, error: null };
+        return { loc, employees, jobs, linked, excluded, error: null as string | null };
       } catch (err) {
-        return {
-          storeId: loc.storeId,
-          storeName: loc.name,
-          state: loc.state,
-          weeks: [],
-          error: err instanceof Error ? err.message : String(err),
-        };
+        return { loc, employees: [], jobs: [], linked: new Map(), excluded: new Set<string>(), error: err instanceof Error ? err.message : String(err) };
       }
     }),
   );
 
-  return { weeks, stores, fetchedAt: Date.now() };
+  const excludedPairs = facts.flatMap((f) => [...f.excluded].map((job) => `${f.loc.storeId}:${job}`));
+  const rows = (await sql`
+    WITH cols AS (
+      SELECT * FROM UNNEST(${columns.map((c) => c.start)}::text[], ${columns.map((c) => c.start)}::date[], ${columns.map((c) => c.end)}::date[])
+        AS c(col, s, e)
+    )
+    SELECT ps.store_id, c.col, ps.employee_id,
+      sum(ps.regular_minutes)::int AS reg,
+      sum(ps.overtime_minutes)::int AS ot,
+      sum(ps.regular_minutes * coalesce(ps.pay_rate, 0) / 60.0)::float8 AS reg_cost,
+      sum(ps.overtime_minutes * coalesce(ps.pay_rate, 0) / 60.0 * ${OVERTIME_MULTIPLIER})::float8 AS ot_cost,
+      sum(CASE WHEN coalesce(ps.pay_rate, 0) > 0 THEN 0 ELSE ps.regular_minutes + ps.overtime_minutes END)::int AS unrated,
+      count(*)::int AS shifts,
+      ((array_agg(ps.pay_rate ORDER BY ps.business_date DESC, ps.start_at DESC) FILTER (WHERE ps.pay_rate > 0))[1])::float8 AS rate,
+      (array_agg(ps.job_id ORDER BY ps.business_date DESC, ps.start_at DESC))[1] AS job_id
+    FROM par_shifts ps
+    JOIN cols c ON ps.business_date BETWEEN c.s AND c.e
+    WHERE NOT ((ps.store_id || ':' || coalesce(ps.job_id, '')) = ANY(${excludedPairs}::text[]))
+    GROUP BY ps.store_id, c.col, ps.employee_id
+  `) as OvertimeRow[];
+
+  const byStoreCol = new Map<string, OvertimeRow[]>();
+  for (const r of rows) {
+    const key = `${r.store_id} ${r.col}`;
+    byStoreCol.set(key, [...(byStoreCol.get(key) ?? []), r]);
+  }
+  const cents = (n: number) => Math.round(n * 100) / 100;
+
+  const stores = facts.map(({ loc, employees, jobs, linked, error }): StoreHours => {
+    if (error) return { storeId: loc.storeId, storeName: loc.name, state: loc.state, weeks: [], error };
+    const empById = new Map(employees.map((e) => [e.id, e]));
+    const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
+
+    const weeks = columns.map((c): StoreWeekHours => {
+      const cell = byStoreCol.get(`${loc.storeId} ${c.start}`) ?? [];
+      const people: EmployeeWeekHours[] = cell
+        .filter((r): r is OvertimeRow & { employee_id: string } => r.employee_id !== null)
+        .map((r) => {
+          const ws = linked.get(r.employee_id);
+          return {
+            employeeId: r.employee_id,
+            name: ws?.name ?? fullName(empById.get(r.employee_id)) ?? `#${r.employee_id}`,
+            job: r.job_id ? jobById.get(r.job_id)?.name ?? null : null,
+            regularMinutes: r.reg,
+            overtimeMinutes: r.ot,
+            regularCost: cents(r.reg_cost),
+            overtimeCost: cents(r.ot_cost),
+            unratedMinutes: r.unrated,
+            shifts: r.shifts,
+            payRate: r.rate,
+            workstream: ws
+              ? {
+                  fullName: ws.name,
+                  position: ws.title,
+                  rateOfRecord: ws.hourlyRate,
+                  hiredDate: ws.hiredDate,
+                  terminationDate: ws.terminationDate,
+                  linkedBy: ws.linkedBy,
+                  assignedElsewhere: ws.assignedElsewhere,
+                }
+              : null,
+          };
+        })
+        // Whoever is deepest into overtime first — the question this table
+        // is opened to answer.
+        .sort((a, b) => b.overtimeMinutes - a.overtimeMinutes || b.regularMinutes - a.regularMinutes || a.name.localeCompare(b.name));
+
+      const sum = (f: (r: OvertimeRow) => number) => cell.reduce((n, r) => n + f(r), 0);
+      return {
+        weekStart: c.start,
+        weekEnd: c.end,
+        regularMinutes: sum((r) => r.reg),
+        overtimeMinutes: sum((r) => r.ot),
+        regularCost: cents(sum((r) => r.reg_cost)),
+        overtimeCost: cents(sum((r) => r.ot_cost)),
+        unratedMinutes: sum((r) => r.unrated),
+        people,
+      };
+    });
+    return { storeId: loc.storeId, storeName: loc.name, state: loc.state, weeks, error: null };
+  });
+
+  return { weeks: columns, stores, fetchedAt: Date.now() };
+}
+
+function eachDate(start: string, end: string): string[] {
+  const out: string[] = [];
+  for (let d = start; d <= end; d = shiftLocalDate(d, 1)) out.push(d);
+  return out;
 }
 
 // ── Labor before open and after close ────────────────────────────────────────
