@@ -41,7 +41,7 @@ import {
   type PARShift,
 } from "./par";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
-import { getShiftsHistory } from "./parShiftStore";
+import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -504,6 +504,12 @@ export type EmployeeWeekHours = {
   unratedMinutes: number;
   shifts: number;
   /**
+   * The rate on their latest shift in the week, from PAR — what the costs
+   * here are computed at. Shown when there is no Workstream rate of record, so
+   * an unlinked person still has a rate beside the dollars it produced.
+   */
+  payRate: number | null;
+  /**
    * Position and rate of record from Workstream, where this PAR employee has
    * been joined to a Workstream one. Null when they haven't — the hours are
    * still right, there is simply nobody to attribute them to on the other side.
@@ -707,19 +713,20 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreHours> => {
       try {
-        const [employees, jobs, linked] = await Promise.all([
+        // Every day of every span in one read per store, not one per day: a
+        // new custom range was otherwise ~1,000 separate Postgres round trips.
+        const [employees, jobs, linked, shiftsByDate] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
           linkedRosterOrEmpty(loc.storeId),
+          getShiftsHistoryRange(loc.storeId, weeks.flatMap((w) => eachDate(w.start, w.end))),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
         const jobById = new Map(jobs.map((jb) => [jb.id, jb]));
 
         const weekRows = await Promise.all(
           weeks.map(async (w): Promise<StoreWeekHours> => {
-            const days = await Promise.all(
-              eachDate(w.start, w.end).map((d) => getShiftsHistory(loc.storeId, d)),
-            );
+            const days = eachDate(w.start, w.end).map((d) => shiftsByDate.get(d) ?? []);
 
             const byEmployee = new Map<string, EmployeeWeekHours>();
             let regularMinutes = 0;
@@ -756,6 +763,7 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                   overtimeCost: 0,
                   unratedMinutes: 0,
                   shifts: 0,
+                  payRate: null,
                   workstream: ws
                     ? {
                         fullName: ws.name,
@@ -774,6 +782,8 @@ export async function getStoreHours(spans: HoursSpan[]): Promise<HoursReport> {
                 row.overtimeCost += shiftOvertimeCost;
                 row.unratedMinutes += shiftUnrated;
                 row.shifts += 1;
+                // Days run oldest to newest, so the last rate seen is the latest.
+                if (rate > 0) row.payRate = rate;
                 byEmployee.set(sh.employeeId, row);
               }
             }

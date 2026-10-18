@@ -96,7 +96,15 @@ export async function GET(req: NextRequest) {
           : weeks;
 
   try {
-    return NextResponse.json(await withParPriority(PAR_PRIORITY.hours, () => getStoreHours(spans)));
+    // Logged because Vercel's request logs carry no duration, and "a new range
+    // is slow" is otherwise impossible to tell apart from "PAR was slow".
+    const started = Date.now();
+    const report = await withParPriority(PAR_PRIORITY.hours, () => getStoreHours(spans));
+    console.log(
+      `[staffing/hours] ${spans[0]?.start}..${spans.at(-1)?.end} ` +
+      `(${spans.length} spans) in ${Date.now() - started}ms`,
+    );
+    return NextResponse.json(report);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[staffing/hours] failed:", msg);

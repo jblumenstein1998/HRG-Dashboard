@@ -25,7 +25,8 @@
  *
  * Only people **active in both systems** are matched. On Workstream's side that
  * means `status === "active"` — not offboarded, and not still onboarding. On
- * PAR's side it means not terminated.
+ * PAR's side it means hours in the activity window; PAR's own terminated flag
+ * is not trusted, because people keep clocking in on numbers it has closed.
  *
  * Anyone else is out of scope: a leaver's shifts are in the past, and a pending
  * hire has no shifts yet. Neither can be usefully linked, and an onboarding
@@ -712,7 +713,7 @@ export function proposeStoreLinks(input: {
     }
 
     /*
-     * Out of scope: terminated in PAR, or not working any more.
+     * Out of scope: not working any more.
      *
      * "Not working any more" is no recorded hours in the activity window.
      * PAR records are rarely terminated when somebody leaves, so a roster
@@ -727,7 +728,15 @@ export function proposeStoreLinks(input: {
      * Kept in the list rather than dropped, so the store's counts still add up
      * and a link confirmed earlier still resolves.
      */
-    if (p.terminated || p.recentMinutes === 0) {
+    /*
+     * Hours decide it, not PAR's terminated flag.
+     *
+     * The flag is not reliable on its own: Kayla Garry worked 162 hours in a
+     * month on a number PAR had marked terminated, and leaving her unmatched
+     * cost the overtime table her AGM title and her rate. A record somebody is
+     * clocking into is somebody working, whatever PAR calls it.
+     */
+    if (p.recentMinutes === 0) {
       proposals.push({ ...base, state: "ignored", workstreamUuid: null, candidates: [] });
       continue;
     }

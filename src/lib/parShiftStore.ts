@@ -234,38 +234,122 @@ const readStoredShiftDay = unstable_cache(
       SELECT status FROM par_shift_days WHERE store_id = ${storeId} AND business_date = ${businessDate}
     `;
     if (day?.status !== "ok") return null;
-    // to_json gives ISO-8601 instants, which Date parses everywhere; the
-    // driver's own text form for timestamptz does not.
-    const rows = (await sql`
-      SELECT shift_id, shift_number, business_date::text, clock_out_business_date::text,
-             employee_id, job_id, to_json(start_at) AS start_at, to_json(end_at) AS end_at,
-             minutes_worked, regular_minutes, overtime_minutes, extended_minutes,
-             pay_rate::text, declared_tips::text, to_json(modified_at) AS modified_at, breaks
-      FROM par_shifts WHERE store_id = ${storeId} AND business_date = ${businessDate}
-      ORDER BY shift_number NULLS LAST, shift_id
-    `) as ShiftRow[];
-    return rows.map((r) => ({
-      id: r.shift_id,
-      number: r.shift_number,
-      businessDate: r.business_date,
-      clockOutBusinessDate: r.clock_out_business_date,
-      employeeId: r.employee_id,
-      jobId: r.job_id,
-      startAt: r.start_at,
-      endAt: r.end_at,
-      minutesWorked: r.minutes_worked,
-      regularMinutes: r.regular_minutes,
-      overtimeMinutes: r.overtime_minutes,
-      extendedMinutes: r.extended_minutes,
-      payRate: toNumber(r.pay_rate),
-      declaredTips: toNumber(r.declared_tips),
-      modifiedAt: r.modified_at,
-      breaks: r.breaks ?? [],
-    }));
+    return (await selectShifts(storeId, [businessDate])).map(toRecord);
   },
   ["par-shift-history", "v1"],
   { revalidate: 60 * 60 * 24, tags: [SHIFT_HISTORY_TAG] },
 );
+
+/** Every stored shift for a store on any of `dates`, in one query. */
+async function selectShifts(storeId: string, dates: string[]): Promise<ShiftRow[]> {
+  // to_json gives ISO-8601 instants, which Date parses everywhere; the
+  // driver's own text form for timestamptz does not.
+  return (await sql`
+    SELECT shift_id, shift_number, business_date::text, clock_out_business_date::text,
+           employee_id, job_id, to_json(start_at) AS start_at, to_json(end_at) AS end_at,
+           minutes_worked, regular_minutes, overtime_minutes, extended_minutes,
+           pay_rate::text, declared_tips::text, to_json(modified_at) AS modified_at, breaks
+    FROM par_shifts WHERE store_id = ${storeId} AND business_date = ANY(${dates}::date[])
+    ORDER BY business_date, shift_number NULLS LAST, shift_id
+  `) as ShiftRow[];
+}
+
+function toRecord(r: ShiftRow): PARShiftRecord {
+  return {
+    id: r.shift_id,
+    number: r.shift_number,
+    businessDate: r.business_date,
+    clockOutBusinessDate: r.clock_out_business_date,
+    employeeId: r.employee_id,
+    jobId: r.job_id,
+    startAt: r.start_at,
+    endAt: r.end_at,
+    minutesWorked: r.minutes_worked,
+    regularMinutes: r.regular_minutes,
+    overtimeMinutes: r.overtime_minutes,
+    extendedMinutes: r.extended_minutes,
+    payRate: toNumber(r.pay_rate),
+    declaredTips: toNumber(r.declared_tips),
+    modifiedAt: r.modified_at,
+    breaks: r.breaks ?? [],
+  };
+}
+
+/**
+ * A store's stored shifts over many days, grouped by day — one query.
+ *
+ * Cached like the single-day read. `version` carries the fetched_at of every
+ * edit-window day in the range, so re-reading any of them makes a new entry,
+ * and a range already seen is served without touching Postgres.
+ */
+const readStoredShiftRange = unstable_cache(
+  async (storeId: string, dates: string[], version: string): Promise<Record<string, PARShiftRecord[]>> => {
+    void version;
+    const out: Record<string, PARShiftRecord[]> = Object.fromEntries(dates.map((d) => [d, []]));
+    for (const row of await selectShifts(storeId, dates)) out[row.business_date]?.push(toRecord(row));
+    return out;
+  },
+  ["par-shift-range", "v1"],
+  { revalidate: 60 * 60 * 24, tags: [SHIFT_HISTORY_TAG] },
+);
+
+/**
+ * A store's shifts for many business dates at once — getShiftsHistory for a
+ * range, in a handful of queries instead of two per day.
+ *
+ * Read one day at a time, a new 40-day overtime range was ~1,000 round trips
+ * to Postgres across the stores. Here it is one status query, one batched
+ * PAR re-read of whatever in the edit window is stale, and one shift query,
+ * per store. Days not held as good fall back to PAR, as for a single day.
+ */
+export async function getShiftsHistoryRange(storeId: string, dates: string[]): Promise<Map<string, PARShift[]>> {
+  const timeZone = getStoreTimeZone(storeId);
+  const today = businessDateISO(timeZone);
+  const windowStart = shiftDate(today, -EDIT_WINDOW_DAYS);
+  const unique = [...new Set(dates)].sort();
+  const past = unique.filter((d) => d < today);
+  const out = new Map<string, PARShift[]>();
+
+  const statuses = async (ds: string[]) => {
+    if (ds.length === 0) return new Map<string, { ok: boolean; fetchedAt: string }>();
+    const rows = await sql`
+      SELECT business_date::text AS d, status, to_json(fetched_at) AS fetched_at FROM par_shift_days
+      WHERE store_id = ${storeId} AND business_date = ANY(${ds}::date[])
+    `;
+    return new Map(rows.map((r) => [r.d as string, { ok: r.status === "ok", fetchedAt: r.fetched_at as string }]));
+  };
+
+  const status = await statuses(past).catch(() => new Map<string, { ok: boolean; fetchedAt: string }>());
+  // Inside the edit window: anything not held, or older than five minutes, is
+  // re-read from PAR first — all of them together, so a fixed timecard shows.
+  const stale = past.filter((d) => {
+    if (d < windowStart) return false;
+    const s = status.get(d);
+    return !s?.ok || Date.now() - new Date(s.fetchedAt).getTime() > WINDOW_MAX_AGE_MS;
+  });
+  if (stale.length) {
+    await Promise.all(stale.map((d) => syncOnce(storeId, d)));
+    for (const [d, s] of await statuses(stale).catch(() => new Map())) status.set(d, s);
+  }
+
+  const held = past.filter((d) => status.get(d)?.ok);
+  const version = held.filter((d) => d >= windowStart).map((d) => status.get(d)!.fetchedAt).join("|");
+  const stored = held.length
+    ? await readStoredShiftRange(storeId, held, version || "settled").catch(() => null)
+    : {};
+
+  const excluded = await nonLaborJobIds(storeId);
+  await Promise.all(unique.map(async (d) => {
+    const records = stored?.[d];
+    out.set(
+      d,
+      records
+        ? withoutNonLaborJobs(records.map((r) => shiftFromRecord(r, timeZone)), excluded)
+        : await getShifts(storeId, d),
+    );
+  }));
+  return out;
+}
 
 /**
  * A store's shifts for one business date — the drop-in for getShifts on any

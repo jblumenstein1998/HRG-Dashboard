@@ -25,7 +25,7 @@
 
 import { BONUS_STORES, storeById } from "./bonus/storeMap";
 import { dateRange, getEmployees, getJobs } from "./par";
-import { getShiftsHistory } from "./parShiftStore";
+import { getShiftsHistoryRange } from "./parShiftStore";
 import {
   linkCoverage,
   proposeStoreLinks,
@@ -162,9 +162,9 @@ async function parRosterFor(storeId: string, today: string | null): Promise<ParP
 
   const start = shiftDate(today, -ACTIVITY_DAYS);
   const dates = dateRange(start, today);
-  const dayShifts = await Promise.all(
-    dates.map((d) => getShiftsHistory(storeId, d).catch(() => [])),
-  );
+  // One read for the whole window rather than one per day.
+  const byDate = await getShiftsHistoryRange(storeId, dates).catch(() => new Map());
+  const dayShifts = dates.map((d) => byDate.get(d) ?? []);
 
   // Walk oldest to newest so the last write wins and holds the latest rate.
   const recent = new Map<string, { payRate: number | null; jobId: string | null }>();

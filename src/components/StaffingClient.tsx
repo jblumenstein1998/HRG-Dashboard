@@ -1322,6 +1322,8 @@ function StoreHoursRows({
     job: string | null;
     position: string | null;
     rateOfRecord: number | null;
+    /** The latest PAR shift rate — shown only when Workstream has none. */
+    parRate: number | null;
     total: number;
   }>();
   for (const w of store.weeks) {
@@ -1331,9 +1333,12 @@ function StoreHoursRows({
         job: p.job,
         position: p.workstream?.position ?? null,
         rateOfRecord: p.workstream?.rateOfRecord ?? null,
+        parRate: null,
         total: 0,
       };
       row.total += p.overtimeMinutes;
+      // Weeks run oldest first, so a later week's rate replaces an earlier one.
+      row.parRate = p.payRate ?? row.parRate;
       people.set(p.employeeId, row);
     }
   }
@@ -1393,9 +1398,15 @@ function StoreHoursRows({
                             {meta.position ?? cleanJobTitle(meta.job)}
                           </span>
                         )}
-                        {meta.rateOfRecord != null && (
-                          <span className="ml-1.5 text-[11px] text-gray-400 tabular-nums">
-                            ${meta.rateOfRecord.toFixed(2)}/hr
+                        {/* Workstream's rate of record where linked; otherwise
+                            the rate PAR recorded on their latest shift, which is
+                            what the dollars beside it were computed at. */}
+                        {(meta.rateOfRecord ?? meta.parRate) != null && (
+                          <span
+                            className="ml-1.5 text-[11px] text-gray-400 tabular-nums"
+                            title={meta.rateOfRecord != null ? "Workstream rate of record" : "Rate on their latest PAR shift — not linked to Workstream"}
+                          >
+                            ${(meta.rateOfRecord ?? meta.parRate)!.toFixed(2)}/hr
                           </span>
                         )}
                       </td>
