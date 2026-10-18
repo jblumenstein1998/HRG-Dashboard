@@ -520,26 +520,6 @@ export default function StaffingClient({
             reloadKey={reloadKey}
           />
         )}
-
-        <p className="text-[11px] text-gray-400">
-          Times are each store&apos;s own — Tennessee is Central, Virginia Eastern. Position and
-          break windows are PAR&apos;s own. <strong>Elapsed</strong> is time since clocking in and
-          includes breaks; <strong>trailing 7d</strong> is PAR&apos;s paid minutes-worked, which
-          excludes them, over the seven business dates before the one shown. Wages sum the hourly
-          rates on the clock; salaried staff carry no rate in PAR and are counted separately rather
-          than added as zero. The Hours chart and store rows show <strong>overtime only</strong>;
-          opening a store adds each person&apos;s regular hours beside theirs, without a second
-          dollar figure. Overtime is PAR&apos;s own split, costed at the rate recorded on each
-          shift times{" "}
-          <strong>1.5×</strong>, the one figure on this screen that is assumed rather than read,
-          since PAR records the hours but never what it pays for them. It is gross pay, not a
-          burdened cost, and salaried hours cost nothing in it. Every window ends{" "}
-          <strong>yesterday</strong>, because a day still being worked reports less overtime than
-          it will finish with; the <strong>WTD</strong> point is a part-week and will sit below the
-          full weeks beside it for that reason alone. On a custom range a weekly column marked{" "}
-          <strong>~</strong> is a week cut short by the dates you chose, and is low for the same
-          reason.
-        </p>
       </main>
     </div>
   );
