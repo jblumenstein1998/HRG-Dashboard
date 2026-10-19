@@ -30,7 +30,7 @@ import type {
   StaffingReport, StoreRoster, StaffOnClock, HoursReport, StoreHours, OpenCloseReport,
   MissedPunchReport, PayPeriod, HoursSpan, HoursGrain, StaffingDay,
 } from "@/lib/staffing";
-import { clockLabel, rosterAt } from "@/lib/staffingRoster";
+import { clockLabel, hourlyRateOf, rosterAt } from "@/lib/staffingRoster";
 
 /**
  * Column sorting for the two tables below.
@@ -1624,10 +1624,8 @@ function titleOf(p: StaffOnClock): string | null {
  * as 0, and neither is an hourly number. The card says "salaried" rather than
  * "$0.00", which is what it used to do and read as free labour.
  */
-function rateOf(p: StaffOnClock): number | null {
-  const rate = p.workstream?.rateOfRecord ?? p.payRate;
-  return rate === null || rate === 0 ? null : rate;
-}
+/** The card's rate — shared with the store's wage total (lib/staffingRoster). */
+const rateOf = (p: StaffOnClock): number | null => hourlyRateOf(p);
 
 function groupOf(p: StaffOnClock): string {
   const title = p.workstream?.position;

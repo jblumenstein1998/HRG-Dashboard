@@ -67,6 +67,22 @@ function onBreakAt(shift: PARShift, queryMinutes: number): boolean {
   return shift.breaks.some((b) => queryMinutes >= b.startMinutes && queryMinutes < b.endMinutes);
 }
 
+/**
+ * The hourly rate to show and to sum for somebody on the clock — null when
+ * they are salaried.
+ *
+ * Workstream decides for anyone linked: its rate of record, or salaried when
+ * it has none. PAR's shift rate is never used for them, because PAR's pay
+ * setup lags promotions — Caleb Haney, a salaried GM in Workstream, still
+ * clocks in at the $21.25 he had as an AGM. For people not linked, PAR's rate
+ * is all there is, and $0 there means salaried. The same rule decides who is
+ * salaried on the overtime table (getOvertimeReport).
+ */
+export function hourlyRateOf(p: Pick<StaffOnClock, "workstream" | "payRate">): number | null {
+  const rate = p.workstream ? p.workstream.rateOfRecord : p.payRate;
+  return rate !== null && rate > 0 ? rate : null;
+}
+
 /** One store's roster at `minutes` past local midnight on its day. */
 export function rosterAt(day: StoreDay, minutes: number): StoreRoster {
   const base = {
@@ -118,13 +134,12 @@ export function rosterAt(day: StoreDay, minutes: number): StoreRoster {
 
   onClock.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
 
-  // Summed from the rate each card actually shows — Workstream's rate of record
-  // where the person is linked, PAR's shift rate otherwise. A run rate that
-  // totalled different numbers than the ones printed above it would be
+  // Summed from the rate each card actually shows (hourlyRateOf). A run rate
+  // that totalled different numbers than the ones printed above it would be
   // unarguable-with, which is the opposite of what a figure like this is for.
   const rates = onClock
-    .map((p) => p.workstream?.rateOfRecord ?? p.payRate)
-    .filter((r): r is number => r !== null && r > 0);
+    .map(hourlyRateOf)
+    .filter((r): r is number => r !== null);
   const hourlyWageRunRate = rates.length
     ? Math.round(rates.reduce((a, b) => a + b, 0) * 100) / 100
     : null;
