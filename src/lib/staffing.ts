@@ -1105,18 +1105,21 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
 
           // Before open: from the earliest clock-in of the day to the open time.
           let preMinutes = 0;
-          let prePeople = 0;
           let earliest: number | null = null;
           // After close: from the close time to the last clock-out.
           let postMinutes = 0;
-          let postPeople = 0;
           let latest: number | null = null;
+          // People, not shifts: somebody who clocked out and back in before
+          // open is one person. A shift with no employee counts on its own.
+          const prePeople = new Set<string>();
+          const postPeople = new Set<string>();
+          const who = (sh: PARShift, i: number) => sh.employeeId ?? `shift-${i}`;
 
-          for (const sh of shifts) {
+          for (const [i, sh] of shifts.entries()) {
             const before = shiftWorkedMinutesInWindow(sh, 0, h.openMinutes);
             if (before > 0) {
               preMinutes += before;
-              prePeople += 1;
+              prePeople.add(who(sh, i));
               earliest = earliest === null ? sh.startMinutes : Math.min(earliest, sh.startMinutes);
             }
             // The upper bound is deliberately far past midnight rather than
@@ -1125,7 +1128,7 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
             const after = shiftWorkedMinutesInWindow(sh, h.closeMinutes, h.closeMinutes + 720);
             if (after > 0) {
               postMinutes += after;
-              postPeople += 1;
+              postPeople.add(who(sh, i));
               const end = sh.isOpen ? sh.startMinutes + sh.minutesWorked : sh.endMinutes;
               latest = latest === null ? end : Math.max(latest, end);
             }
@@ -1136,7 +1139,7 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
             openLabel: clockLabel(h.openMinutes),
             closeLabel: clockLabel(h.closeMinutes),
             laborMinutes: Math.round(preMinutes),
-            people: prePeople,
+            people: prePeople.size,
             edgeLabel: earliest === null ? null : clockLabel(earliest),
             edgeMinutes: earliest === null ? 0 : Math.max(0, Math.round(h.openMinutes - earliest)),
           });
@@ -1146,7 +1149,7 @@ export async function getOpenCloseReport(today: string, dayCount: number): Promi
             openLabel: clockLabel(h.openMinutes),
             closeLabel: clockLabel(h.closeMinutes),
             laborMinutes: Math.round(postMinutes),
-            people: postPeople,
+            people: postPeople.size,
             edgeLabel: latest === null ? null : clockLabel(latest),
             edgeMinutes: latest === null ? 0 : Math.max(0, Math.round(latest - h.closeMinutes)),
           });
