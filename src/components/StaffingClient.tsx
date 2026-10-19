@@ -1455,7 +1455,17 @@ function StoreHoursRows({
       people.set(p.employeeId, row);
     }
   }
-  const ranked = [...people.entries()].sort((a, b) => b[1].total - a[1].total);
+  // Opens ranked by overtime across the whole window; any header re-ranks by
+  // that column, the same way the store table above it does.
+  const sorter = useColumnSort("desc");
+  const ranked = sorter.apply(
+    [...people.entries()].sort((a, b) => b[1].total - a[1].total),
+    ([id, meta], key) => {
+      if (key === "employee") return meta.name;
+      const row = cellOf(key)?.people.find((p) => p.employeeId === id);
+      return row ? row.overtimeMinutes : null;
+    },
+  );
 
   return (
     <>
@@ -1493,11 +1503,16 @@ function StoreHoursRows({
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Employee</th>
+                    <SortHeader label="Employee" sortKey="employee" align="left" arrow={sorter.arrow} onClick={sorter.toggle} className="px-2!" />
                     {columns.map((c) => (
-                      <th key={c.start} className="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">
-                        {c.label}
-                      </th>
+                      <SortHeader
+                        key={c.start}
+                        label={c.label}
+                        sortKey={c.start}
+                        arrow={sorter.arrow}
+                        onClick={sorter.toggle}
+                        className="px-2!"
+                      />
                     ))}
                   </tr>
                 </thead>
