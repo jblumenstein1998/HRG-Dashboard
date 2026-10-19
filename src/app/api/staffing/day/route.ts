@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { requireSuperAdminApi } from "@/lib/users/adminGuard";
+import { requireTabApi } from "@/lib/users/adminGuard";
 import { getStaffingDays } from "@/lib/staffing";
 import { expireEditWindow } from "@/lib/parShiftStore";
 
@@ -31,7 +31,7 @@ function datesBetween(from: string, to: string): string[] {
 }
 
 export async function GET(req: NextRequest) {
-  const denied = await requireSuperAdminApi();
+  const denied = await requireTabApi("/staffing");
   if (denied) return denied;
 
   const params = req.nextUrl.searchParams;

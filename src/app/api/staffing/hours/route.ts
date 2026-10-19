@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireSuperAdminApi } from "@/lib/users/adminGuard";
+import { requireTabApi } from "@/lib/users/adminGuard";
 import { getOvertimeReport, overtimeColumns, type HoursGrain } from "@/lib/staffing";
 import { PAR_PRIORITY, withParPriority } from "@/lib/par";
 import { todayCentralISO } from "@/lib/parRollup";
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   // Admin-only, matching the page. These answer with every employee's name,
   // hours and pay rate, so gating the screen while leaving the data open
   // would be a lock on a door beside an open window.
-  const denied = await requireSuperAdminApi();
+  const denied = await requireTabApi("/staffing");
   if (denied) return denied;
 
   const p = req.nextUrl.searchParams;

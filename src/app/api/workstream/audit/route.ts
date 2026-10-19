@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireSuperAdminApi } from "@/lib/users/adminGuard";
+import { requireAdminApi } from "@/lib/users/adminGuard";
 import {
   auditWindowStart,
   countBySeverity,
@@ -27,7 +27,7 @@ import {
 export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
-  const denied = await requireSuperAdminApi();
+  const denied = await requireAdminApi();
   if (denied) return denied;
 
   const store = req.nextUrl.searchParams.get("store");

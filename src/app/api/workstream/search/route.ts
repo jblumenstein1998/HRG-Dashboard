@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireSuperAdminApi } from "@/lib/users/adminGuard";
+import { requireAdminApi } from "@/lib/users/adminGuard";
 import { listStoredRoster } from "@/lib/workstreamStore";
 import { storeById } from "@/lib/bonus/storeMap";
 
@@ -27,7 +27,7 @@ import { storeById } from "@/lib/bonus/storeMap";
  */
 
 export async function GET(req: NextRequest) {
-  const denied = await requireSuperAdminApi();
+  const denied = await requireAdminApi();
   if (denied) return denied;
 
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim().toLowerCase();
