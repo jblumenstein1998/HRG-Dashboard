@@ -33,6 +33,7 @@ import { sql } from "@/lib/db";
 import {
   EMPLOYEE_EMBED,
   employeeLocationId,
+  annualSalary,
   hourlyRate,
   jobTitle,
   listEmployees,
@@ -77,6 +78,10 @@ async function createSchema(): Promise<void> {
       synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `;
+
+  // Added after the table: a salary of record, so a salaried person reads as
+  // salaried even when an old hourly rate is still on their assignment.
+  await sql`ALTER TABLE workstream_employees ADD COLUMN IF NOT EXISTS annual_salary NUMERIC`;
 
   await sql`
     CREATE INDEX IF NOT EXISTS workstream_employees_store
@@ -247,6 +252,7 @@ export async function syncWorkstreamEmployees(): Promise<{
       store: [] as (string | null)[],
       title: [] as (string | null)[],
       rate: [] as (number | null)[],
+      salary: [] as (number | null)[],
     };
 
     for (const e of batch) {
@@ -269,19 +275,30 @@ export async function syncWorkstreamEmployees(): Promise<{
       cols.location.push(location);
       cols.store.push(storeByWorkstreamLocation(location)?.storeId ?? null);
       cols.title.push(jobTitle(e));
-      cols.rate.push(hourlyRate(e));
+      // A salary wins. Workstream leaves old hourly rows active beside a new
+      // salary — Caleb Haney carries both his AGM $21.25 and a GM salary — so
+      // anyone with a salary of record has no hourly rate here.
+      const salary = annualSalary(e);
+      cols.salary.push(salary);
+      cols.rate.push(salary !== null ? null : hourlyRate(e));
     }
 
     // COALESCE on location_uuid/store_id/job_title is the whole point: a
     // terminated record arrives with none of them, and must not erase what we
     // already knew. Everything else is overwritten, because Workstream is the
     // authority on it.
+    //
+    // Pay is kept the same way, but as a pair: a record that arrives with no
+    // pay at all (a stripped leaver) keeps what we had, and one that arrives
+    // with either an hourly rate or a salary takes both as sent. Kept one at a
+    // time, an hourly rate outlived the move to salary — Faith Merritt read as
+    // $18/hr for days after Workstream had her on a $58,000 salary.
     await sql`
       INSERT INTO workstream_employees (
         uuid, first_name, middle_initial, last_name, preferred_name, status,
         applied_date, hired_date, start_date, onboard_date,
         termination_date, termination_note,
-        location_uuid, store_id, job_title, hourly_rate, synced_at
+        location_uuid, store_id, job_title, hourly_rate, annual_salary, synced_at
       )
       SELECT * FROM UNNEST(
         ${cols.uuid}::text[], ${cols.first}::text[], ${cols.middle}::text[],
@@ -290,12 +307,12 @@ export async function syncWorkstreamEmployees(): Promise<{
         ${cols.onboard}::timestamptz[],
         ${cols.term}::date[], ${cols.note}::text[],
         ${cols.location}::text[], ${cols.store}::text[], ${cols.title}::text[],
-        ${cols.rate}::numeric[]
+        ${cols.rate}::numeric[], ${cols.salary}::numeric[]
       ) AS t(
         uuid, first_name, middle_initial, last_name, preferred_name, status,
         applied_date, hired_date, start_date, onboard_date,
         termination_date, termination_note,
-        location_uuid, store_id, job_title, hourly_rate
+        location_uuid, store_id, job_title, hourly_rate, annual_salary
       ), LATERAL (SELECT now()) AS s(synced_at)
       ON CONFLICT (uuid) DO UPDATE SET
         first_name       = EXCLUDED.first_name,
@@ -312,7 +329,10 @@ export async function syncWorkstreamEmployees(): Promise<{
         location_uuid    = COALESCE(EXCLUDED.location_uuid, workstream_employees.location_uuid),
         store_id         = COALESCE(EXCLUDED.store_id,      workstream_employees.store_id),
         job_title        = COALESCE(EXCLUDED.job_title,     workstream_employees.job_title),
-        hourly_rate      = COALESCE(EXCLUDED.hourly_rate,   workstream_employees.hourly_rate),
+        hourly_rate      = CASE WHEN EXCLUDED.hourly_rate IS NULL AND EXCLUDED.annual_salary IS NULL
+                                THEN workstream_employees.hourly_rate ELSE EXCLUDED.hourly_rate END,
+        annual_salary    = CASE WHEN EXCLUDED.hourly_rate IS NULL AND EXCLUDED.annual_salary IS NULL
+                                THEN workstream_employees.annual_salary ELSE EXCLUDED.annual_salary END,
         synced_at        = EXCLUDED.synced_at
     `;
     written += batch.length;
