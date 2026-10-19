@@ -707,8 +707,8 @@ function OpenCloseSection({ filter, reloadKey }: { filter: StoreFilter; reloadKe
         </span>
         <span className="text-xs text-gray-400">
           {side === "open"
-            ? "hours worked before the doors open · people · first clock-in"
-            : "hours worked after close · people · last clock-out"}
+            ? "hours worked before open · people · first clock-in → that day's open"
+            : "hours worked after close · people · that day's close → last clock-out"}
         </span>
         <div className="ml-auto flex rounded-lg border border-gray-200 overflow-hidden">
           {(["open", "close"] as const).map((v) => (
@@ -759,26 +759,31 @@ function OpenCloseSection({ filter, reloadKey }: { filter: StoreFilter; reloadKe
                   <tr key={store.storeId} className="border-b border-gray-50">
                     <td className="px-3 py-1 font-medium text-gray-900 whitespace-nowrap">
                       {store.storeName}
-                      {cells[0]?.openLabel && (
-                        <span className="ml-2 text-[11px] font-normal text-gray-400">
-                          {side === "open" ? cells[0].openLabel : cells[0].closeLabel}
-                        </span>
-                      )}
                       {store.error && <span className="ml-2 text-xs text-red-600">{store.error}</span>}
                     </td>
+                    {/* Each day carries its own hours, because they differ by
+                        day (Brentwood closes at midnight on Fridays) and a
+                        holiday can change one date alone. The second line pairs
+                        that day's open or close with what actually happened. */}
                     {cells.map((c) => (
-                      <td key={c.businessDate} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap">
-                        {c.people === 0 ? (
-                          <span className="text-gray-300">—</span>
-                        ) : (
-                          <>
-                            <span className="text-gray-800 font-medium">{hrs(c.laborMinutes)}</span>{" "}
-                            <span className="text-gray-400">{c.people}p</span>{" "}
-                            <span className="text-gray-400" title={side === "open" ? "first clock-in" : "last clock-out"}>
-                              {c.edgeLabel}
-                            </span>
-                          </>
-                        )}
+                      <td key={c.businessDate} className="px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap align-top">
+                        <div>
+                          {c.people === 0 ? (
+                            <span className="text-gray-300">—</span>
+                          ) : (
+                            <>
+                              <span className="text-gray-800 font-medium">{hrs(c.laborMinutes)}</span>{" "}
+                              <span className="text-gray-400">{c.people}p</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400">
+                          {!c.openLabel
+                            ? "closed"
+                            : side === "open"
+                              ? <span title="first clock-in → that day's opening time">{c.edgeLabel ?? "—"} → {c.openLabel}</span>
+                              : <span title="that day's closing time → last clock-out">{c.closeLabel} → {c.edgeLabel ?? "—"}</span>}
+                        </div>
                       </td>
                     ))}
                   </tr>
