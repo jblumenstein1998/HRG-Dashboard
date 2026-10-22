@@ -263,7 +263,7 @@ export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pa
     c.box(x, 72.4, 162, 48.1, C.white, { line: C.gray200, round: true });
     c.text(x + 9.2, 78.3, 143.6, 9.7, label, { size: 7, bold: true, color: C.gray500 });
     c.text(x + 9.2, 88.6, 70.2, 23.8, big, { size: 17, bold: true, color: C.gray900 });
-    c.text(x + 77.8, 97.7, 76.1, 11.9, sub, { size: 7, color: C.gray500, align: "END" });
+    c.text(x + 52, 97.7, 102, 11.9, sub, { size: 7, color: C.gray500, align: "END" });
   });
 
   c.text(34.6, 137.2, 114.5, 10.8, "LOCATION & SALES", { size: 8, bold: true, color: C.gray500 });
@@ -297,7 +297,9 @@ export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pa
 
       if (v != null && p != null) {
         const dv = v - p;
-        const tone: Tone = toneOf(dv);
+        // By sign alone: a TPLH move of 0.03 is real at this scale, where
+        // toneOf's dead band (built for percentages) would grey it out.
+        const tone: Tone = dv > 0 ? "good" : dv < 0 ? "bad" : "neutral";
         const arrow = dv > 0 ? "▲" : dv < 0 ? "▼" : "■";
         c.text(x + 82.1, y + 9.5, 105, 11.9, `${arrow}  ${dv >= 0 ? "+" : "−"}${k.delta(dv)} WoW`, {
           size: 8,
@@ -309,7 +311,7 @@ export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pa
       if (t) {
         const on = v != null && v >= t.floor;
         c.chip(x + 188, y + 7.6, 65.9, 16.2, on ? "ON TARGET" : "BELOW TARGET", on ? "good" : "bad");
-        const targetY = y + (compact ? 26 : 28.7);
+        const targetY = y + (compact ? 24.5 : 28.7);
         c.text(x + 1.1, targetY, 117.2, 10.3, `TARGET  ${targetLabel(k, t)}`, { size: 8, bold: true, color: C.gray700 });
         const gap = v == null ? null : t.floor - v;
         c.text(x + 119.4, targetY, 134.5, 10.3, gap == null ? "" : gap <= 0 ? "At / above floor" : `−${k.delta(gap)} to floor`, {
@@ -320,7 +322,7 @@ export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pa
         });
       }
 
-      const trendY = y + (compact ? 35.4 : 50.5);
+      const trendY = y + (compact ? 37.5 : 50.5);
       trend.forEach((w, j) => {
         const tv = s[k.key][j];
         const last = j === trend.length - 1;
