@@ -4,6 +4,7 @@ import { Suspense, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import WbrPanel from "@/components/WbrPanel";
+import type { WbrWeekOption } from "@/lib/wbr/weeks";
 import type { Tab } from "@/lib/users/tabs";
 import {
   iconUrl,
@@ -40,6 +41,7 @@ export default function AdminLinksClient({
   groups,
   groupTitles,
   wbrConnectedAs,
+  wbrWeeks,
 }: {
   tabs: Tab[];
   isAdmin: boolean;
@@ -47,6 +49,8 @@ export default function AdminLinksClient({
   groupTitles: string[];
   /** The Google account the WBR deck is written as, or null if none is connected. */
   wbrConnectedAs: string | null;
+  /** Weeks the WBR panel offers, newest first. */
+  wbrWeeks: WbrWeekOption[];
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -196,7 +200,7 @@ export default function AdminLinksClient({
         {isAdmin && (
           // useSearchParams needs a Suspense boundary to keep the page static-renderable.
           <Suspense fallback={null}>
-            <WbrPanel connectedAs={wbrConnectedAs} />
+            <WbrPanel connectedAs={wbrConnectedAs} weeks={wbrWeeks} />
           </Suspense>
         )}
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { WbrWeekOption } from "@/lib/wbr/weeks";
 
 /**
  * The Weekly Business Review button, at the top of the Admin tab for admins.
@@ -13,10 +14,17 @@ import { useRouter, useSearchParams } from "next/navigation";
  */
 
 type Result = { url: string; title: string; sourceTitle: string; week: { start: string; end: string }; warnings: string[] };
+type Mode = "new" | "replace" | "copy";
 
-export default function WbrPanel({ connectedAs }: { connectedAs: string | null }) {
+/**
+ * `weeks` comes from the server (Central time, newest first) rather than being
+ * worked out here, so the server render and the browser can't disagree about
+ * which Sunday was last when the page loads near midnight.
+ */
+export default function WbrPanel({ connectedAs, weeks }: { connectedAs: string | null; weeks: WbrWeekOption[] }) {
   const router = useRouter();
   const search = useSearchParams();
+  const [weekEnd, setWeekEnd] = useState(weeks[0]?.weekEnd ?? "");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +40,7 @@ export default function WbrPanel({ connectedAs }: { connectedAs: string | null }
     router.replace("/admin-links");
   }, [search, router]);
 
-  const generate = async (replace = false) => {
+  const generate = async (mode: Mode = "new") => {
     setBusy(true);
     setError(null);
     setExisting(null);
@@ -41,7 +49,7 @@ export default function WbrPanel({ connectedAs }: { connectedAs: string | null }
       const res = await fetch("/api/wbr/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ replace }),
+        body: JSON.stringify({ mode, weekEnd }),
       });
       const body = await res.json();
       if (res.status === 409 && body.existing) setExisting(body.existing);
@@ -65,7 +73,7 @@ export default function WbrPanel({ connectedAs }: { connectedAs: string | null }
         <div className="mr-auto">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-900">Weekly Business Review</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Copies last week&apos;s deck and rebuilds the sales and productivity slides from PAR for the week that just ended.
+            Copies the previous deck and rebuilds the sales and productivity slides from PAR for the chosen week.
           </p>
         </div>
         {connectedAs ? (
@@ -76,8 +84,26 @@ export default function WbrPanel({ connectedAs }: { connectedAs: string | null }
                 disconnect
               </button>
             </span>
+            <select
+              value={weekEnd}
+              onChange={(e) => {
+                setWeekEnd(e.target.value);
+                setExisting(null);
+                setResult(null);
+                setError(null);
+              }}
+              disabled={busy}
+              aria-label="Week"
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer"
+            >
+              {weeks.map((w) => (
+                <option key={w.weekEnd} value={w.weekEnd}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
             <button
-              onClick={() => generate(false)}
+              onClick={() => generate()}
               disabled={busy}
               className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50 transition"
             >
@@ -107,11 +133,18 @@ export default function WbrPanel({ connectedAs }: { connectedAs: string | null }
             already exists.
           </span>
           <button
-            onClick={() => generate(true)}
+            onClick={() => generate("copy")}
+            className="px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition"
+          >
+            Make a copy
+          </button>
+          <button
+            onClick={() => generate("replace")}
             className="px-2.5 py-1 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition"
           >
             Replace it
           </button>
+          <span className="text-gray-400">Both keep its hand-filled slides and rebuild only sales and productivity.</span>
         </div>
       )}
 

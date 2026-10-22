@@ -15,8 +15,19 @@ import { wbrSalesAndProductivity, WBR_SLIDE_PREFIX } from "@/lib/wbr/slides";
 
 export const WBR_TITLE_PREFIX = "Weekly Business Review (";
 
+/** Appended to a "Make a copy" deck, so it never collides with — or stands in for — the real one. */
+export const COPY_SUFFIX = " (dashboard copy)";
+
 /** Decks that look like WBRs but must never be the starting point. */
-const SKIP_SOURCE = /dont use|don't use|\[test\]/i;
+const SKIP_SOURCE = /dont use|don't use|\[test\]|\(dashboard copy\)/i;
+
+/**
+ * new     — no deck for this week yet; start from the latest earlier one.
+ * replace — rebuild this week's deck in place of the existing one.
+ * copy    — rebuild this week's deck as a separate "(dashboard copy)", leaving
+ *           the existing one alone. For trying the generator against a real week.
+ */
+export type GenerateMode = "new" | "replace" | "copy";
 
 type Presentation = {
   slides: {
@@ -69,17 +80,29 @@ export class AlreadyExistsError extends Error {
   }
 }
 
-export async function generateWbr(opts: { weekEnd?: string; replace?: boolean } = {}): Promise<GenerateResult> {
+export async function generateWbr(opts: { weekEnd?: string; mode?: GenerateMode } = {}): Promise<GenerateResult> {
+  const mode = opts.mode ?? "new";
   const wk = await buildWbrWeek(opts.weekEnd);
   const title = wbrTitle(wk);
 
-  const decks = await findPresentations(WBR_TITLE_PREFIX);
+  const decks = (await findPresentations(WBR_TITLE_PREFIX)).filter(
+    (f) => f.name.startsWith(WBR_TITLE_PREFIX) && !SKIP_SOURCE.test(f.name),
+  );
   const existing = decks.find((f) => f.name === title);
-  if (existing && !opts.replace) throw new AlreadyExistsError(existing);
-  const source = decks.find((f) => f.name !== title && f.name.startsWith(WBR_TITLE_PREFIX) && !SKIP_SOURCE.test(f.name));
+  if (existing && mode === "new") throw new AlreadyExistsError(existing);
+
+  // Rebuilding a week that already has a deck starts from that deck, so the
+  // hand-filled worksheets in it survive. Otherwise: the newest deck made before
+  // this week's meeting — last week's, or for a back-filled week, that week's
+  // predecessor rather than today's deck.
+  const meetingDay = new Date(wk.week.end + "T00:00:00Z");
+  meetingDay.setUTCDate(meetingDay.getUTCDate() + 2);
+  const source =
+    existing ??
+    decks.find((f) => f.name !== title && new Date(f.createdTime) < meetingDay);
   if (!source) throw new Error(`No earlier "${WBR_TITLE_PREFIX}…)" deck found to start from.`);
 
-  const copy = await copyFile(source.id, title);
+  const copy = await copyFile(source.id, mode === "copy" ? title + COPY_SUFFIX : title);
   try {
     const deck = await getPresentation<Presentation>(
       copy.id,
@@ -108,7 +131,8 @@ export async function generateWbr(opts: { weekEnd?: string; replace?: boolean } 
     await trashFile(copy.id).catch(() => {});
     throw err;
   }
-  if (existing) await trashFile(existing.id);
+  // Only now that the new deck is whole — a failure above leaves the old one standing.
+  if (existing && mode === "replace") await trashFile(existing.id);
 
   const warnings: string[] = [];
   for (const d of wk.districts) {
@@ -120,7 +144,7 @@ export async function generateWbr(opts: { weekEnd?: string; replace?: boolean } 
 
   return {
     url: copy.webViewLink ?? `https://docs.google.com/presentation/d/${copy.id}/edit`,
-    title,
+    title: copy.name,
     sourceTitle: source.name,
     week: { start: wk.week.start, end: wk.week.end },
     warnings,

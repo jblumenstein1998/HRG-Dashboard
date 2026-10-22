@@ -2,6 +2,8 @@ import AdminLinksClient from "@/components/AdminLinksClient";
 import { requireTab } from "@/lib/users/access";
 import { listAdminLinkGroups, listAdminLinkGroupTitles } from "@/lib/adminLinksStore";
 import { getConnection } from "@/lib/google/workspace";
+import { todayCentralISO } from "@/lib/parRollup";
+import { recentWbrWeeks } from "@/lib/wbr/weeks";
 
 /**
  * The Admin tab.
@@ -38,6 +40,7 @@ export default async function AdminLinksPage() {
       groups={groups}
       groupTitles={groupTitles}
       wbrConnectedAs={google?.email ?? null}
+      wbrWeeks={recentWbrWeeks(todayCentralISO(), 26)}
     />
   );
 }
