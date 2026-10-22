@@ -1,6 +1,7 @@
 import AdminLinksClient from "@/components/AdminLinksClient";
 import { requireTab } from "@/lib/users/access";
 import { listAdminLinkGroups, listAdminLinkGroupTitles } from "@/lib/adminLinksStore";
+import { getConnection } from "@/lib/google/workspace";
 
 /**
  * The Admin tab.
@@ -23,9 +24,11 @@ import { listAdminLinkGroups, listAdminLinkGroupTitles } from "@/lib/adminLinksS
  */
 export default async function AdminLinksPage() {
   const viewer = await requireTab("/admin-links");
-  const [groups, groupTitles] = await Promise.all([
+  const [groups, groupTitles, google] = await Promise.all([
     listAdminLinkGroups(),
     listAdminLinkGroupTitles(),
+    // Only admins see the WBR panel, so only they need to know who's connected.
+    viewer.position.isAdmin ? getConnection() : Promise.resolve(null),
   ]);
 
   return (
@@ -34,6 +37,7 @@ export default async function AdminLinksPage() {
       isAdmin={viewer.position.isAdmin}
       groups={groups}
       groupTitles={groupTitles}
+      wbrConnectedAs={google?.email ?? null}
     />
   );
 }

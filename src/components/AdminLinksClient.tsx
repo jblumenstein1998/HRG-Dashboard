@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { Suspense, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
+import WbrPanel from "@/components/WbrPanel";
 import type { Tab } from "@/lib/users/tabs";
 import {
   iconUrl,
@@ -38,11 +39,14 @@ export default function AdminLinksClient({
   isAdmin,
   groups,
   groupTitles,
+  wbrConnectedAs,
 }: {
   tabs: Tab[];
   isAdmin: boolean;
   groups: AdminLinkGroup[];
   groupTitles: string[];
+  /** The Google account the WBR deck is written as, or null if none is connected. */
+  wbrConnectedAs: string | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -189,6 +193,13 @@ export default function AdminLinksClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-8">
+        {isAdmin && (
+          // useSearchParams needs a Suspense boundary to keep the page static-renderable.
+          <Suspense fallback={null}>
+            <WbrPanel connectedAs={wbrConnectedAs} />
+          </Suspense>
+        )}
+
         <div ref={formRef}>
           {isAdmin && (adding || editing) && (
             <LinkForm
