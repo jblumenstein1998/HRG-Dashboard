@@ -10,6 +10,7 @@ import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
 import { businessDate } from "@/lib/businessDay";
+import { lastNWeeks, bucketDaily, productivityOf, tplhOf, type Week } from "@/lib/parWeekly";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -23,31 +24,6 @@ function fmtDate(iso: string): string {
 function fmtDayLabel(iso: string): string {
   const d = new Date(iso + "T00:00:00");
   return `${d.toLocaleDateString("en-US", { weekday: "short" })} ${fmtDate(iso)}`;
-}
-
-// Mon–Sun business week, matching FoodCostClient's lastCompletedWeekEndDate convention:
-// most recent Sunday on/before today (if today IS Sunday, that week counts as "completed").
-function mostRecentSunday(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - d.getDay());
-  return d;
-}
-
-type Week = { start: string; end: string; label: string };
-
-// Last n completed Mon–Sun weeks, oldest first.
-function lastNWeeks(n: number): Week[] {
-  const lastSun = mostRecentSunday();
-  const weeks: Week[] = [];
-  for (let i = 0; i < n; i++) {
-    const end = new Date(lastSun);
-    end.setDate(lastSun.getDate() - i * 7);
-    const start = new Date(end);
-    start.setDate(end.getDate() - 6);
-    weeks.push({ start: toISO(start), end: toISO(end), label: `${fmtDate(toISO(start))}–${fmtDate(toISO(end))}` });
-  }
-  return weeks.reverse();
 }
 
 // Splits a Mon–Sun-aligned date range into consecutive 7-day weeks.
@@ -105,7 +81,6 @@ const TIERS = [
   { label: "> $85k",      min: 85000, max: Infinity },
 ];
 
-type Bucket = { netSales: number; transactions: number; laborHours: number };
 type StoreData = {
   primarySales: number; // "Net Sales" (weeks mode) or "Avg Weekly Sales" (periods mode) — also drives tier bucketing
   productivity: (number | null)[]; // $/labor-hr, oldest → newest
@@ -143,28 +118,14 @@ function usePosData(locations: PARLocation[], mode: Mode) {
           let tplh: (number | null)[];
 
           if (mode === "weeks") {
-            const buckets: Bucket[] = weeks.map(() => ({ netSales: 0, transactions: 0, laborHours: 0 }));
-            for (const day of daily) {
-              const idx = weeks.findIndex(w => day.date >= w.start && day.date <= w.end);
-              if (idx === -1) continue;
-              buckets[idx].netSales += day.netSales;
-              buckets[idx].transactions += day.transactions;
-              buckets[idx].laborHours += day.laborHours;
-            }
-            productivity = buckets.map(b => (b.laborHours > 0 ? b.netSales / b.laborHours : null));
-            tplh = buckets.map(b => (b.laborHours > 0 ? b.transactions / b.laborHours : null));
+            const buckets = bucketDaily(daily, weeks);
+            productivity = buckets.map(productivityOf);
+            tplh = buckets.map(tplhOf);
             primarySales = buckets[buckets.length - 1].netSales;
           } else {
-            const buckets: Bucket[] = periods.map(() => ({ netSales: 0, transactions: 0, laborHours: 0 }));
-            for (const day of daily) {
-              const idx = periods.findIndex(p => day.date >= p.start && day.date <= p.end);
-              if (idx === -1) continue;
-              buckets[idx].netSales += day.netSales;
-              buckets[idx].transactions += day.transactions;
-              buckets[idx].laborHours += day.laborHours;
-            }
-            productivity = buckets.map(b => (b.laborHours > 0 ? b.netSales / b.laborHours : null));
-            tplh = buckets.map(b => (b.laborHours > 0 ? b.transactions / b.laborHours : null));
+            const buckets = bucketDaily(daily, periods);
+            productivity = buckets.map(productivityOf);
+            tplh = buckets.map(tplhOf);
             const lastBucket = buckets[buckets.length - 1];
             const lastPeriodWeeks = periods[periods.length - 1]?.weeks ?? 1;
             primarySales = lastBucket.netSales / lastPeriodWeeks;
