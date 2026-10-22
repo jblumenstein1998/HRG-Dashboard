@@ -25,6 +25,7 @@ export default function WbrPanel({ connectedAs, weeks }: { connectedAs: string |
   const router = useRouter();
   const search = useSearchParams();
   const [weekEnd, setWeekEnd] = useState(weeks[0]?.weekEnd ?? "");
+  const [style, setStyle] = useState<"classic" | "district">("classic");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export default function WbrPanel({ connectedAs, weeks }: { connectedAs: string |
       const res = await fetch("/api/wbr/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, weekEnd }),
+        body: JSON.stringify({ mode, weekEnd, style }),
       });
       const body = await res.json();
       if (res.status === 409 && body.existing) setExisting(body.existing);
@@ -101,6 +102,20 @@ export default function WbrPanel({ connectedAs, weeks }: { connectedAs: string |
                   {w.label}
                 </option>
               ))}
+            </select>
+            <select
+              value={style}
+              onChange={(e) => {
+                setStyle(e.target.value as "classic" | "district");
+                setExisting(null);
+                setResult(null);
+              }}
+              disabled={busy}
+              aria-label="Layout"
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer"
+            >
+              <option value="classic">Classic layout</option>
+              <option value="district">By district (new)</option>
             </select>
             <button
               onClick={() => generate()}

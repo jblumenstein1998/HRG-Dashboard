@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
 import { NotConnectedError } from "@/lib/google/workspace";
-import { AlreadyExistsError, generateWbr, type GenerateMode } from "@/lib/wbr/generate";
+import { AlreadyExistsError, generateWbr, type GenerateMode, type WbrStyle } from "@/lib/wbr/generate";
 
 // ~4,000 Slides requests across a dozen calls, plus 26 week reads from Postgres.
 export const maxDuration = 120;
@@ -18,7 +18,8 @@ export async function POST(request: NextRequest) {
   const denied = await requireAdminApi();
   if (denied) return denied;
 
-  const body = (await request.json().catch(() => ({}))) as { mode?: string; weekEnd?: string };
+  const body = (await request.json().catch(() => ({}))) as { mode?: string; weekEnd?: string; style?: string };
+  const style: WbrStyle = body.style === "district" ? "district" : "classic";
   const weekEnd = body.weekEnd && /^\d{4}-\d{2}-\d{2}$/.test(body.weekEnd) ? body.weekEnd : undefined;
   const mode: GenerateMode = body.mode === "replace" || body.mode === "copy" ? body.mode : "new";
   // A week end has to be a Sunday that has finished, or the deck would be built
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    return NextResponse.json(await generateWbr({ mode, weekEnd }));
+    return NextResponse.json(await generateWbr({ mode, weekEnd, style }));
   } catch (err) {
     if (err instanceof AlreadyExistsError) {
       return NextResponse.json({ error: err.message, existing: { name: err.file.name, url: err.file.webViewLink } }, { status: 409 });

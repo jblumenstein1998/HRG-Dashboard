@@ -245,7 +245,7 @@ export const LOCATION_NAMES: Record<number, string> = {
  * PAR sales mixes two systems' idea of a week and lands a hair off the store
  * percentages sitting above the total.
  */
-type LocationReport = { actualCostPct: number | null; actualCostDollars: number | null; variancePct: number | null; varianceDollars: number | null; salesBase: number | null };
+export type LocationReport = { actualCostPct: number | null; actualCostDollars: number | null; variancePct: number | null; varianceDollars: number | null; salesBase: number | null };
 const locationReportCache = new Map<string, { report: LocationReport; fetchedAt: number }>();
 
 export async function fetchLocationReport(

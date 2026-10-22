@@ -207,13 +207,38 @@ async function accessToken(): Promise<string> {
 
 // ── API calls ────────────────────────────────────────────────────────────────
 
+/**
+ * One Google API call, retried on what is worth retrying: a dropped connection
+ * ("fetch failed"), 429 rate limiting and 5xx. A deck is a dozen calls in a
+ * row, and losing the whole thing to one blip on the eleventh is the failure
+ * this exists for. Slides batchUpdate is atomic per call, so a retried request
+ * never half-applies; the worst case is a retry after a success whose response
+ * was lost, which surfaces as a duplicate-id 400 rather than a silent dupe.
+ */
 async function google<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { Authorization: `Bearer ${await accessToken()}`, "Content-Type": "application/json", ...init.headers },
-  });
-  if (!res.ok) throw new Error(`Google API ${res.status} on ${url.split("?")[0]}: ${await res.text()}`);
-  return (await res.json()) as T;
+  const where = url.split("?")[0];
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: { Authorization: `Bearer ${await accessToken()}`, "Content-Type": "application/json", ...init.headers },
+      });
+    } catch (err) {
+      if (attempt < 4) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+      const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+      throw new Error(`Couldn't reach Google (${where}): ${cause?.code ?? cause?.message ?? String(err)}`);
+    }
+    if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Google API ${res.status} on ${where}: ${await res.text()}`);
+    return (await res.json()) as T;
+  }
 }
 
 const DRIVE = "https://www.googleapis.com/drive/v3/files";

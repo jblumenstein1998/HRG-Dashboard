@@ -12,6 +12,8 @@
 import { batchUpdate, copyFile, findPresentations, getPresentation, trashFile, type DriveFile } from "@/lib/google/workspace";
 import { buildWbrWeek, type WbrWeek } from "@/lib/wbr/data";
 import { wbrSalesAndProductivity, WBR_SLIDE_PREFIX } from "@/lib/wbr/slides";
+import { wbrByDistrict } from "@/lib/wbr/slidesDistrict";
+import { buildOpsData } from "@/lib/wbr/opsData";
 
 export const WBR_TITLE_PREFIX = "Weekly Business Review (";
 
@@ -19,7 +21,16 @@ export const WBR_TITLE_PREFIX = "Weekly Business Review (";
 export const COPY_SUFFIX = " (dashboard copy)";
 
 /** Decks that look like WBRs but must never be the starting point. */
-const SKIP_SOURCE = /dont use|don't use|\[test\]|\(dashboard copy\)/i;
+const SKIP_SOURCE = /dont use|don't use|\[test\]|\(dashboard copy/i;
+
+/**
+ * classic  — the deck's own layout: sales and productivity slides per district,
+ *            everything else left as it was.
+ * district — sales, labour, food cost and drive-thru regrouped by district
+ *            manager, replacing the by-metric variance, COGS and drive-time
+ *            slides too.
+ */
+export type WbrStyle = "classic" | "district";
 
 /**
  * new     — no deck for this week yet; start from the latest earlier one.
@@ -54,6 +65,16 @@ const isDataSlide = (s: Presentation["slides"][number]) => {
   return t.includes("WEEKLY BUSINESS REVIEW") && (t.includes("AVERAGE CHECK") || t.includes("TPLH"));
 };
 
+/**
+ * The by-metric screenshot slides the district style folds into its own:
+ * Portfolio Variance, TN/VA COGS, and the four "Drive Times – <DM>" slides.
+ * Matched by title text; the SOS rankings slide is deliberately not among them.
+ */
+const isFoldedSlide = (s: Presentation["slides"][number]) => {
+  const t = slideText(s);
+  return t.includes("PORTFOLIO VARIANCE") || /\b(TN|VA) COGS\b/.test(t) || t.includes("DRIVE TIMES");
+};
+
 /** "Weekly Business Review (10.26 - 11.1)" — the meeting week, i.e. the week after the data. */
 export function wbrTitle(wk: WbrWeek): string {
   const d = new Date(wk.week.end + "T12:00:00Z");
@@ -80,10 +101,16 @@ export class AlreadyExistsError extends Error {
   }
 }
 
-export async function generateWbr(opts: { weekEnd?: string; mode?: GenerateMode } = {}): Promise<GenerateResult> {
+export async function generateWbr(
+  opts: { weekEnd?: string; mode?: GenerateMode; style?: WbrStyle } = {},
+): Promise<GenerateResult> {
   const mode = opts.mode ?? "new";
+  const style = opts.style ?? "classic";
   const wk = await buildWbrWeek(opts.weekEnd);
   const title = wbrTitle(wk);
+  // Fetched before anything is copied, so a Net-Chef or Berry outage fails fast
+  // instead of leaving a half-built deck to clean up.
+  const ops = style === "district" ? await buildOpsData(wk, wk.districts.flatMap((d) => d.stores.map((s) => s.label))) : null;
 
   const decks = (await findPresentations(WBR_TITLE_PREFIX)).filter(
     (f) => f.name.startsWith(WBR_TITLE_PREFIX) && !SKIP_SOURCE.test(f.name),
@@ -102,13 +129,16 @@ export async function generateWbr(opts: { weekEnd?: string; mode?: GenerateMode 
     decks.find((f) => f.name !== title && new Date(f.createdTime) < meetingDay);
   if (!source) throw new Error(`No earlier "${WBR_TITLE_PREFIX}…)" deck found to start from.`);
 
-  const copy = await copyFile(source.id, mode === "copy" ? title + COPY_SUFFIX : title);
+  const copyName = title + (mode === "copy" ? (style === "district" ? " (dashboard copy, by district)" : COPY_SUFFIX) : "");
+  const copy = await copyFile(source.id, copyName);
   try {
     const deck = await getPresentation<Presentation>(
       copy.id,
       "slides(objectId,slideProperties.layoutObjectId,pageElements.shape.text.textElements.textRun.content)",
     );
-    const old = deck.slides.map((s, i) => ({ s, i })).filter(({ s }) => isDataSlide(s));
+    const old = deck.slides
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => isDataSlide(s) || (style === "district" && isFoldedSlide(s)));
     if (!old.length) throw new Error(`"${source.name}" has no sales or productivity slides to replace.`);
 
     // New slides go straight after the first old one and reuse its layout: the
@@ -119,7 +149,10 @@ export async function generateWbr(opts: { weekEnd?: string; mode?: GenerateMode 
     if (!layoutId) throw new Error("Couldn't read the layout of the existing sales slides.");
 
     const runId = Date.now().toString(36);
-    for (const slide of wbrSalesAndProductivity(wk, first.i + 1, layoutId, runId)) {
+    const slides = ops
+      ? wbrByDistrict(wk, ops, first.i + 1, layoutId, runId)
+      : wbrSalesAndProductivity(wk, first.i + 1, layoutId, runId);
+    for (const slide of slides) {
       await batchUpdate(copy.id, slide);
     }
     await batchUpdate(
@@ -134,7 +167,7 @@ export async function generateWbr(opts: { weekEnd?: string; mode?: GenerateMode 
   // Only now that the new deck is whole — a failure above leaves the old one standing.
   if (existing && mode === "replace") await trashFile(existing.id);
 
-  const warnings: string[] = [];
+  const warnings: string[] = [...(ops?.gaps ?? [])];
   for (const d of wk.districts) {
     for (const s of d.stores) {
       if (s.missingDays.length) warnings.push(`${s.label}: no PAR data for ${s.missingDays.join(", ")} — its numbers are short.`);

@@ -10,6 +10,7 @@ import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
+import { cogsLevel, varianceLevel, type GoalLevel } from "@/lib/foodCostGoals";
 
 // Derived from the store map rather than typed out, so a new store's Net-Chef
 // location can't be left off this tab while every other tab picks it up.
@@ -126,32 +127,28 @@ function fmtDate(iso: string): string {
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
 
+// The bands themselves live in lib/foodCostGoals, shared with the WBR deck.
+const LEVEL_TEXT: Record<GoalLevel, string> = { good: "text-green-600", warn: "text-yellow-600", bad: "text-red-600" };
+const LEVEL_BG: Record<GoalLevel, string> = { good: "bg-green-50", warn: "bg-yellow-50", bad: "bg-red-50" };
+
 function actualColor(v: number | null): string {
-  if (v === null) return "text-gray-400";
-  if (v <= 28.5) return "text-green-600";
-  if (v <= 30.0) return "text-yellow-600";
-  return "text-red-600";
+  const level = cogsLevel(v);
+  return level ? LEVEL_TEXT[level] : "text-gray-400";
 }
 
 function actualBg(v: number | null): string {
-  if (v === null) return "";
-  if (v <= 28.5) return "bg-green-50";
-  if (v <= 30.0) return "bg-yellow-50";
-  return "bg-red-50";
+  const level = cogsLevel(v);
+  return level ? LEVEL_BG[level] : "";
 }
 
 function varianceColor(v: number | null): string {
-  if (v === null) return "text-gray-400";
-  if (v >= -1.0 && v <= 1.0) return "text-green-600";
-  if (v >= -1.5 && v <= 1.5) return "text-yellow-600";
-  return "text-red-600";
+  const level = varianceLevel(v);
+  return level ? LEVEL_TEXT[level] : "text-gray-400";
 }
 
 function varianceBg(v: number | null): string {
-  if (v === null) return "";
-  if (v >= -1.0 && v <= 1.0) return "bg-green-50";
-  if (v >= -1.5 && v <= 1.5) return "bg-yellow-50";
-  return "bg-red-50";
+  const level = varianceLevel(v);
+  return level ? LEVEL_BG[level] : "";
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────

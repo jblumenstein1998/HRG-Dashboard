@@ -23,6 +23,8 @@ export const C = {
   gray900: "#111827",
   green50: "#f0fdf4",
   green600: "#16a34a",
+  yellow50: "#fefce8",
+  yellow600: "#ca8a04",
   red50: "#fef2f2",
   red600: "#dc2626",
   red700: "#b91c1c",
@@ -145,9 +147,10 @@ export class Canvas {
   }
 }
 
-export type Tone = "good" | "bad" | "neutral";
+export type Tone = "good" | "warn" | "bad" | "neutral";
 export const TONES: Record<Tone, { bg: string; fg: string }> = {
   good: { bg: C.green50, fg: C.green600 },
+  warn: { bg: C.yellow50, fg: C.yellow600 },
   bad: { bg: C.red50, fg: C.red600 },
   neutral: { bg: C.gray100, fg: C.gray500 },
 };

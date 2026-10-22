@@ -18,21 +18,21 @@ const W = 720;
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
-const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-const parts = (iso: string) => iso.split("-").map(Number) as [number, number, number];
+export const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+export const parts = (iso: string) => iso.split("-").map(Number) as [number, number, number];
 
-const usd0 = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
-const usd2 = (v: number) => `$${v.toFixed(2)}`;
-const usdK = (v: number) => `$${(v / 1000).toFixed(1)}K`;
-const count = (v: number) => Math.round(v).toLocaleString("en-US");
+export const usd0 = (v: number) => `$${Math.round(v).toLocaleString("en-US")}`;
+export const usd2 = (v: number) => `$${v.toFixed(2)}`;
+export const usdK = (v: number) => `$${(v / 1000).toFixed(1)}K`;
+export const count = (v: number) => Math.round(v).toLocaleString("en-US");
 
 /** Percent change, or null when there is no base to compare with. */
-const change = (now: number | null, base: number | null | undefined): number | null =>
+export const change = (now: number | null, base: number | null | undefined): number | null =>
   now == null || base == null || base === 0 ? null : ((now - base) / base) * 100;
-const pctLabel = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : "-"}${Math.abs(v).toFixed(1)}%`);
+export const pctLabel = (v: number | null) => (v == null ? "N/A" : `${v >= 0 ? "+" : "-"}${Math.abs(v).toFixed(1)}%`);
 
 /** "OCT 12–18, 2026", or "SEP 28–OCT 4, 2026" across a month boundary. */
-function weekSpan(start: string, end: string): string {
+export function weekSpan(start: string, end: string): string {
   const [, sm, sd] = parts(start);
   const [ey, em, ed] = parts(end);
   const tail = sm === em ? `${ed}` : `${MONTHS[em - 1]} ${ed}`;
@@ -42,11 +42,11 @@ const mdy = (iso: string) => {
   const [y, m, d] = parts(iso);
   return `${m}/${d}/${y}`;
 };
-const md = (iso: string) => {
+export const md = (iso: string) => {
   const [, m, d] = parts(iso);
   return `${m}/${d}`;
 };
-const monDay = (iso: string) => {
+export const monDay = (iso: string) => {
   const [, m, d] = parts(iso);
   return `${MONTHS[m - 1]} ${String(d).padStart(2, "0")}`;
 };
@@ -56,7 +56,7 @@ const monDay = (iso: string) => {
 /** Where a slide goes, and which of the deck's layouts it borrows. */
 export type Placement = { slideId: string; insertionIndex: number; layoutId: string };
 
-function newSlide({ slideId, insertionIndex, layoutId }: Placement): SlidesRequest[] {
+export function newSlide({ slideId, insertionIndex, layoutId }: Placement): SlidesRequest[] {
   return [
     { createSlide: { objectId: slideId, insertionIndex, slideLayoutReference: { layoutId } } },
     {
@@ -82,10 +82,10 @@ function header(c: Canvas, opts: { title: string; subtitle?: string; right: stri
   if (opts.rightSub) c.text(546.5, 33.5, 146.9, 13.5, opts.rightSub, { size: 8, color: C.gray300, align: "END" });
 }
 
-const restaurants = (n: number) => `${n} RESTAURANT${n === 1 ? "" : "S"}`;
+export const restaurants = (n: number) => `${n} RESTAURANT${n === 1 ? "" : "S"}`;
 const pageOf = (i: number, n: number) => `${String(i + 1).padStart(2, "0")} / ${String(n).padStart(2, "0")}`;
 const leaderTitle = (d: DistrictWeek) => d.leader.toUpperCase();
-const marketName = (d: DistrictWeek) => (d.market === "TN" ? "TENNESSEE" : d.market === "VA" ? "VIRGINIA" : "TENNESSEE / VIRGINIA");
+export const marketName = (d: DistrictWeek) => (d.market === "TN" ? "TENNESSEE" : d.market === "VA" ? "VIRGINIA" : "TENNESSEE / VIRGINIA");
 
 // ── Sales / transactions / average check ─────────────────────────────────────
 
@@ -96,7 +96,7 @@ const METRICS: Metric[] = [
   { label: "AVERAGE CHECK", pick: f => f.avgCheck, fmtBig: usd2, fmtRow: usd2 },
 ];
 
-function salesReadout(d: DistrictWeek): string {
+export function salesReadout(d: DistrictWeek): string {
   const wow = (s: StoreWeek) => change(s.current.netSales, s.prior.netSales) ?? 0;
   const mover = [...d.stores].sort((a, b) => Math.abs(wow(b)) - Math.abs(wow(a)))[0];
   const district = `DISTRICT SALES ${pctLabel(change(d.total.current.netSales, d.total.prior.netSales))} WoW`;
@@ -197,29 +197,29 @@ export function salesSlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: nu
 
 // ── Productivity (SPLH) and TPLH ─────────────────────────────────────────────
 
-type Kind = { key: "splh" | "tplh"; fmt: (v: number) => string; delta: (v: number) => string };
-const SPLH: Kind = { key: "splh", fmt: usd2, delta: v => `$${Math.abs(v).toFixed(2)}` };
-const TPLH: Kind = { key: "tplh", fmt: v => v.toFixed(2), delta: v => Math.abs(v).toFixed(2) };
+export type Kind = { key: "splh" | "tplh"; fmt: (v: number) => string; delta: (v: number) => string };
+export const SPLH: Kind = { key: "splh", fmt: usd2, delta: v => `$${Math.abs(v).toFixed(2)}` };
+export const TPLH: Kind = { key: "tplh", fmt: v => v.toFixed(2), delta: v => Math.abs(v).toFixed(2) };
 
-const targetLabel = (k: Kind, t: Target) =>
+export const targetLabel = (k: Kind, t: Target) =>
   k.key === "splh"
     ? t.ceiling ? `$${t.floor}–${t.ceiling}` : `$${t.floor}+`
     : `${t.floor.toFixed(2)}+`;
 
-const latest = (s: StoreWeek, k: Kind) => s[k.key][s[k.key].length - 1];
-const previous = (s: StoreWeek, k: Kind) => s[k.key][s[k.key].length - 2];
-const atTarget = (s: StoreWeek, k: Kind) => {
+export const latest = (s: StoreWeek, k: Kind) => s[k.key][s[k.key].length - 1];
+export const previous = (s: StoreWeek, k: Kind) => s[k.key][s[k.key].length - 2];
+export const atTarget = (s: StoreWeek, k: Kind) => {
   const v = latest(s, k);
   const t = s.targets?.[k.key];
   return v != null && t != null && v >= t.floor;
 };
-const improved = (s: StoreWeek, k: Kind) => {
+export const improved = (s: StoreWeek, k: Kind) => {
   const v = latest(s, k);
   const p = previous(s, k);
   return v != null && p != null && v > p;
 };
 
-function productivityTakeaway(d: DistrictWeek): string {
+export function productivityTakeaway(d: DistrictWeek): string {
   const n = d.stores.length;
   const splhAt = d.stores.filter(s => atTarget(s, SPLH));
   const tplhAt = d.stores.filter(s => atTarget(s, TPLH)).length;
