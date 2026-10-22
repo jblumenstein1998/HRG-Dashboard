@@ -8,6 +8,7 @@ import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFilter } from "@/components/StoreFilter";
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import PosWeeklyTrendChart from "@/components/PosWeeklyTrendChart";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
 import { businessDate } from "@/lib/businessDay";
 
@@ -1149,6 +1150,7 @@ export default function PARClient({
   const avgCheckComp = useAvgCheckComp();
   const salesSnapshot = useSalesSnapshot(snapshotRange);
   const [refreshing, setRefreshing] = useState(false);
+  const [trendRefreshToken, setTrendRefreshToken] = useState(0);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -1162,6 +1164,7 @@ export default function PARClient({
     transactionsComp.refetch();
     avgCheckComp.refetch();
     salesSnapshot.refetch();
+    setTrendRefreshToken(t => t + 1);
     setRefreshing(false);
   };
 
@@ -1239,6 +1242,9 @@ export default function PARClient({
           range={snapshotRange}
           onRangeChange={setSnapshotRange}
         />
+        <div className="mt-6">
+          <PosWeeklyTrendChart filter={storeFilter} refreshToken={trendRefreshToken} />
+        </div>
         <div className="mt-6">
           <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} filter={storeFilter} fmt={fmtDollars} />
         </div>
