@@ -225,9 +225,8 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
   const [toWeek, setToWeek] = useState(options[0]);
   const [fromWeek, setFromWeek] = useState(options[Math.min(DEFAULT_WEEKS - 1, options.length - 1)]);
   const [metricKey, setMetricKey] = useState<MetricKey>("netSales");
-  // Hidden rather than visible, so every line — including stores that only
-  // appear once data lands — starts switched on.
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Opens on the three benchmark lines only; store lines are opt-in.
+  const [visible, setVisible] = useState<Set<string>>(() => new Set(["tn", "va", "hrg"]));
 
   // One week before `fromWeek` rides along so the first plotted week has a
   // "vs LW". The very first week of history has nothing before it.
@@ -278,7 +277,7 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
   const weekCount = data?.weeks.length ?? 0;
   const values: Record<string, SeriesValues> = {};
   for (const s of series) values[s.key] = seriesValues(s.stores, weekCount, m, false);
-  const hrgTotal: SeriesValues | null = m.additive && all.length > 0 && !hidden.has("hrg")
+  const hrgTotal: SeriesValues | null = m.additive && all.length > 0 && visible.has("hrg")
     ? seriesValues(all, weekCount, m, true)
     : null;
 
@@ -290,11 +289,11 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
     return row;
   });
 
-  const shown = series.filter(s => !hidden.has(s.key));
+  const shown = series.filter(s => visible.has(s.key));
   const toggle = (keys: string[], on: boolean) =>
-    setHidden(prev => {
+    setVisible(prev => {
       const n = new Set(prev);
-      for (const k of keys) { if (on) n.delete(k); else n.add(k); }
+      for (const k of keys) { if (on) n.add(k); else n.delete(k); }
       return n;
     });
 
@@ -380,7 +379,7 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
               <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none w-8">
                 <input
                   type="checkbox"
-                  checked={storeKeys.every(k => !hidden.has(k))}
+                  checked={storeKeys.every(k => visible.has(k))}
                   onChange={e => toggle(storeKeys, e.target.checked)}
                   className="rounded border-gray-300"
                 />
@@ -390,7 +389,7 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
                 <label key={s.key} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
                   <input
                     type="checkbox"
-                    checked={!hidden.has(s.key)}
+                    checked={visible.has(s.key)}
                     onChange={e => toggle([s.key], e.target.checked)}
                     style={{ accentColor: s.color }}
                     className="rounded border-gray-300"
@@ -398,14 +397,14 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
                   {s.label}
                 </label>
               ))}
-              <SummaryToggle series={summary} checked={!hidden.has(summary.key)} onChange={on => toggle([summary.key], on)} />
+              <SummaryToggle series={summary} checked={visible.has(summary.key)} onChange={on => toggle([summary.key], on)} />
             </div>
           );
         })}
         {series.some(s => s.key === "hrg") && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="w-8" />
-            <SummaryToggle series={series.find(s => s.key === "hrg")!} checked={!hidden.has("hrg")} onChange={on => toggle(["hrg"], on)} />
+            <SummaryToggle series={series.find(s => s.key === "hrg")!} checked={visible.has("hrg")} onChange={on => toggle(["hrg"], on)} />
           </div>
         )}
       </div>
