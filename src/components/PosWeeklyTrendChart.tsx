@@ -118,6 +118,24 @@ function pctChange(now: number | null | undefined, then: number | null | undefin
   return ((now - then) / then) * 100;
 }
 
+const trading = (t: WeekTotals | null): boolean => t != null && t.transactions > 0;
+
+/**
+ * Same-store % change of week `i` against `then` (the same week last year, or
+ * the week before): both sides are taken over only the stores that rang sales
+ * in both weeks, so a store opening, closing or missing data never reads as
+ * growth or decline. The plotted figure itself still covers every store.
+ */
+function sameStorePct(
+  stores: StoreWeeklyTrend[], i: number, then: { year: "ty" | "ly"; i: number }, m: Metric, total: boolean,
+): number | null {
+  if (then.i < 0) return null;
+  const both = stores.filter(s => trading(s.ty[i]) && trading(s[then.year][then.i]));
+  if (both.length === 0) return null;
+  const value = total ? groupTotal : groupValue;
+  return pctChange(value(both, "ty", i, m), value(both, then.year, then.i, m));
+}
+
 // ── Series ────────────────────────────────────────────────────────────────────
 
 type Series = {
@@ -131,7 +149,16 @@ type Series = {
 
 // Per series, aligned to the fetched weeks (index 0 is the lead-in week, kept
 // only so the first plotted week has a "vs LW").
-type SeriesValues = { ty: (number | null)[]; ly: (number | null)[] };
+type SeriesValues = { ty: (number | null)[]; vsLY: (number | null)[]; vsLW: (number | null)[] };
+
+function seriesValues(stores: StoreWeeklyTrend[], weekCount: number, m: Metric, total: boolean): SeriesValues {
+  const idx = Array.from({ length: weekCount }, (_, i) => i);
+  return {
+    ty: idx.map(i => (total ? groupTotal : groupValue)(stores, "ty", i, m)),
+    vsLY: idx.map(i => sameStorePct(stores, i, { year: "ly", i }, m, total)),
+    vsLW: idx.map(i => sameStorePct(stores, i, { year: "ty", i: i - 1 }, m, total)),
+  };
+}
 
 type ChartRow = { week: string; idx: number } & Record<string, number | string | null>;
 
@@ -161,8 +188,8 @@ function TrendTooltip({ active, payload, metric, series, values, hrgTotal }: {
         </span>
       </td>
       <td className="pr-3 py-0.5 text-right tabular-nums text-gray-800">{v.ty[idx] == null ? "—" : metric.fmt(v.ty[idx]!)}</td>
-      <td className="pr-3 py-0.5 text-right tabular-nums"><PctCell pct={pctChange(v.ty[idx], v.ly[idx])} /></td>
-      <td className="py-0.5 text-right tabular-nums"><PctCell pct={pctChange(v.ty[idx], v.ty[idx - 1])} /></td>
+      <td className="pr-3 py-0.5 text-right tabular-nums"><PctCell pct={v.vsLY[idx]} /></td>
+      <td className="py-0.5 text-right tabular-nums"><PctCell pct={v.vsLW[idx]} /></td>
     </tr>
   );
   const summaries = series.filter(s => s.kind === "summary");
@@ -250,17 +277,9 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
 
   const weekCount = data?.weeks.length ?? 0;
   const values: Record<string, SeriesValues> = {};
-  for (const s of series) {
-    values[s.key] = {
-      ty: Array.from({ length: weekCount }, (_, i) => groupValue(s.stores, "ty", i, m)),
-      ly: Array.from({ length: weekCount }, (_, i) => groupValue(s.stores, "ly", i, m)),
-    };
-  }
+  for (const s of series) values[s.key] = seriesValues(s.stores, weekCount, m, false);
   const hrgTotal: SeriesValues | null = m.additive && all.length > 0 && !hidden.has("hrg")
-    ? {
-        ty: Array.from({ length: weekCount }, (_, i) => groupTotal(all, "ty", i, m)),
-        ly: Array.from({ length: weekCount }, (_, i) => groupTotal(all, "ly", i, m)),
-      }
+    ? seriesValues(all, weekCount, m, true)
     : null;
 
   const firstPlotted = result?.leadIn ? 1 : 0;
@@ -279,12 +298,12 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
       return n;
     });
 
-  // A store trading this year with nothing on the books a year earlier (a
-  // new-build) has no "vs LY", and lifts its market's figure with no
-  // counterpart a year back.
+  // Stores left out of some plotted week's comparison because they had no
+  // sales in one of the two weeks (a new-build has no last year, a store's
+  // first or closed week has no week before) — named in the footnote.
   const plottedIdx = rows.map(r => r.idx);
-  const noPriorYear = visibleStores
-    .filter(s => plottedIdx.some(i => (s.ty[i]?.transactions ?? 0) > 0 && !(s.ly[i]?.transactions) && all.some(o => (o.ly[i]?.transactions ?? 0) > 0)))
+  const excluded = all
+    .filter(s => plottedIdx.some(i => trading(s.ty[i]) && (!trading(s.ly[i]) || (i > 0 && !trading(s.ty[i - 1])))))
     .map(s => s.name);
   const lastShownEnd = data ? addDays(data.weeks[data.weeks.length - 1], 6) : null;
   const partialThrough = data?.rolledUpThrough && lastShownEnd && data.rolledUpThrough < lastShownEnd ? data.rolledUpThrough : null;
@@ -397,13 +416,13 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
           </div>
         )}
       </div>
-      {(m.additive || noPriorYear.length > 0 || partialThrough) && (
-        <div className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-0.5">
-          {m.additive && <p>TN, VA and HRG lines are per-store averages; hover a week for the HRG total.</p>}
-          {noPriorYear.length > 0 && <p>No last-year sales for {noPriorYear.join(", ")} (not yet open), so market and HRG % vs LY are not same-store.</p>}
-          {partialThrough && <p>Data is rolled up through {fmtWithYear(partialThrough)}, so the last week shown is partial.</p>}
-        </div>
-      )}
+      <div className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-0.5">
+        <p>
+          % vs LY and vs LW are same-store: a store counts only when it has sales in both weeks compared
+          {excluded.length > 0 && <> (excluded where missing: {excluded.join(", ")})</>}.
+        </p>
+        {partialThrough && <p>Data is rolled up through {fmtWithYear(partialThrough)}, so the last week shown is partial.</p>}
+      </div>
     </div>
   );
 }
