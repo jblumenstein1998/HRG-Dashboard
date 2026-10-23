@@ -298,13 +298,6 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
       return n;
     });
 
-  // Stores left out of some plotted week's comparison because they had no
-  // sales in one of the two weeks (a new-build has no last year, a store's
-  // first or closed week has no week before) — named in the footnote.
-  const plottedIdx = rows.map(r => r.idx);
-  const excluded = all
-    .filter(s => plottedIdx.some(i => trading(s.ty[i]) && (!trading(s.ly[i]) || (i > 0 && !trading(s.ty[i - 1])))))
-    .map(s => s.name);
   const lastShownEnd = data ? addDays(data.weeks[data.weeks.length - 1], 6) : null;
   const partialThrough = data?.rolledUpThrough && lastShownEnd && data.rolledUpThrough < lastShownEnd ? data.rolledUpThrough : null;
 
@@ -417,10 +410,7 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
         )}
       </div>
       <div className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500 space-y-0.5">
-        <p>
-          % vs LY and vs LW are same-store: a store counts only when it has sales in both weeks compared
-          {excluded.length > 0 && <> (excluded where missing: {excluded.join(", ")})</>}.
-        </p>
+        <p>% vs LY and vs LW are same-store: a store counts only when it has sales in both weeks.</p>
         {partialThrough && <p>Data is rolled up through {fmtWithYear(partialThrough)}, so the last week shown is partial.</p>}
       </div>
     </div>
