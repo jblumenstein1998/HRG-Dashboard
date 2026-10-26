@@ -1,7 +1,6 @@
 import AdminLinksClient from "@/components/AdminLinksClient";
 import { requireTab } from "@/lib/users/access";
 import { listAdminLinkGroups, listAdminLinkGroupTitles } from "@/lib/adminLinksStore";
-import { getConnection } from "@/lib/google/workspace";
 import { todayCentralISO } from "@/lib/parRollup";
 import { recentWbrWeeks } from "@/lib/wbr/weeks";
 
@@ -26,12 +25,7 @@ import { recentWbrWeeks } from "@/lib/wbr/weeks";
  */
 export default async function AdminLinksPage() {
   const viewer = await requireTab("/admin-links");
-  const [groups, groupTitles, google] = await Promise.all([
-    listAdminLinkGroups(),
-    listAdminLinkGroupTitles(),
-    // Only admins see the WBR panel, so only they need to know who's connected.
-    viewer.position.isAdmin ? getConnection() : Promise.resolve(null),
-  ]);
+  const [groups, groupTitles] = await Promise.all([listAdminLinkGroups(), listAdminLinkGroupTitles()]);
 
   return (
     <AdminLinksClient
@@ -39,7 +33,6 @@ export default async function AdminLinksPage() {
       isAdmin={viewer.position.isAdmin}
       groups={groups}
       groupTitles={groupTitles}
-      wbrConnectedAs={google?.email ?? null}
       wbrWeeks={recentWbrWeeks(todayCentralISO(), 26)}
     />
   );

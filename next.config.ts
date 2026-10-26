@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // The WBR template is read from disk at request time, which the tracer can't
+  // see; without this the deployed route has no template to fill.
+  outputFileTracingIncludes: {
+    "/api/wbr/generate": ["./src/lib/wbr/template/**/*"],
+  },
   // The old /smg and /guest-satisfaction tabs were replaced by the survey-data
   // tab, which now carries the "SMG" name. Anyone holding a bookmark to either
   // old page lands on the tab that superseded it rather than a 404. Temporary

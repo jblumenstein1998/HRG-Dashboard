@@ -2,17 +2,13 @@
  * The WBR's per-district sales and productivity slides, drawn from WbrWeek.
  *
  * Layout is the 10.19–10.25 deck's (the format Josh asked to keep), measured off
- * its slides in points; colours are the dashboard's. Each builder appends a
- * createSlide plus everything on it, under object ids prefixed with `slideId`,
- * so a later run can find and replace exactly what an earlier one drew.
+ * its slides in points; colours are the dashboard's. Each builder returns the
+ * slide as a Canvas of shapes.
  */
 
-import { C, Canvas, toneOf, type SlidesRequest, type Tone } from "@/lib/wbr/draw";
+import { C, Canvas, toneOf, type Tone } from "@/lib/wbr/draw";
 import type { DistrictWeek, SalesFigures, StoreWeek, WbrWeek } from "@/lib/wbr/data";
 import type { Target } from "@/lib/wbr/targets";
-
-/** Every slide this module draws has an id starting with this. */
-export const WBR_SLIDE_PREFIX = "wbr";
 
 const W = 720;
 
@@ -53,22 +49,6 @@ export const monDay = (iso: string) => {
 
 // ── Shared chrome ────────────────────────────────────────────────────────────
 
-/** Where a slide goes, and which of the deck's layouts it borrows. */
-export type Placement = { slideId: string; insertionIndex: number; layoutId: string };
-
-export function newSlide({ slideId, insertionIndex, layoutId }: Placement): SlidesRequest[] {
-  return [
-    { createSlide: { objectId: slideId, insertionIndex, slideLayoutReference: { layoutId } } },
-    {
-      updatePageProperties: {
-        objectId: slideId,
-        pageProperties: { pageBackgroundFill: { solidFill: { color: { rgbColor: { red: 0xf9 / 255, green: 0xfa / 255, blue: 0xfb / 255 } } } } },
-        fields: "pageBackgroundFill",
-      },
-    },
-  ];
-}
-
 function header(c: Canvas, opts: { title: string; subtitle?: string; right: string; rightSub?: string }) {
   c.box(0, 0, W, 59, C.gray900);
   c.box(0, 59, W, 3.5, C.red700);
@@ -106,8 +86,8 @@ export function salesReadout(d: DistrictWeek): string {
   return `${mover.label.toUpperCase()} SALES ${pctLabel(wow(mover))} WoW AND TRAFFIC ${traffic}  •  ${district}${yoy}`;
 }
 
-export function salesSlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: number, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function salesSlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: number): Canvas {
+  const c = new Canvas();
   header(c, {
     title: leaderTitle(d),
     subtitle: marketName(d),
@@ -192,7 +172,7 @@ export function salesSlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: nu
   );
   c.text(632, 389.9, 60.1, 9.7, pageOf(page, pages), { size: 7, color: C.gray500, align: "END" });
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
 // ── Productivity (SPLH) and TPLH ─────────────────────────────────────────────
@@ -238,8 +218,8 @@ export function productivityTakeaway(d: DistrictWeek): string {
   return `${first}; ${second}.${third}`;
 }
 
-export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: number, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pages: number): Canvas {
+  const c = new Canvas();
   const n = d.stores.length;
   const [ey, em, ed] = parts(wk.week.end);
 
@@ -339,23 +319,14 @@ export function productivitySlide(wk: WbrWeek, d: DistrictWeek, page: number, pa
   c.text(103, 380.2, 560, 10.8, productivityTakeaway(d), { size: 7, color: C.gray700 });
   c.text(640, 394.2, 53.4, 7, `${page + 1} / ${pages}`, { size: 6, color: C.gray500, align: "END" });
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
-/**
- * Every sales slide, then every productivity slide — the deck's order — as one
- * request list per slide (so callers can send them in batches), inserted from
- * `startIndex` on using `layoutId`.
- */
-export function wbrSalesAndProductivity(wk: WbrWeek, startIndex: number, layoutId: string, runId: string): SlidesRequest[][] {
+/** Every sales slide, then every productivity slide — the deck's order. */
+export function wbrSalesAndProductivity(wk: WbrWeek): Canvas[] {
   const n = wk.districts.length;
-  const at = (kind: "s" | "p", i: number, offset: number): Placement => ({
-    slideId: `${WBR_SLIDE_PREFIX}${runId}${kind}${i}`,
-    insertionIndex: startIndex + offset,
-    layoutId,
-  });
   return [
-    ...wk.districts.map((d, i) => salesSlide(wk, d, i, n, at("s", i, i))),
-    ...wk.districts.map((d, i) => productivitySlide(wk, d, i, n, at("p", i, n + i))),
+    ...wk.districts.map((d, i) => salesSlide(wk, d, i, n)),
+    ...wk.districts.map((d, i) => productivitySlide(wk, d, i, n)),
   ];
 }

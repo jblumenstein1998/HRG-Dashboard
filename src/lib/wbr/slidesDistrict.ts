@@ -10,7 +10,7 @@
  * own thresholds (lib/foodCostGoals, lib/salesTierGoals, lib/wbr/targets).
  */
 
-import { C, Canvas, toneOf, type SlidesRequest, type Tone } from "@/lib/wbr/draw";
+import { C, Canvas, toneOf, type Tone } from "@/lib/wbr/draw";
 import type { DistrictWeek, SalesFigures, WbrWeek } from "@/lib/wbr/data";
 import { totalDrive, totalFood, type DriveThru, type FoodCost, type OpsData } from "@/lib/wbr/opsData";
 import { cogsLevel, varianceLevel, type GoalLevel } from "@/lib/foodCostGoals";
@@ -23,7 +23,6 @@ import {
   latest,
   marketName,
   monDay,
-  newSlide,
   pctLabel,
   previous,
   productivityTakeaway,
@@ -36,9 +35,7 @@ import {
   usd2,
   usdK,
   weekSpan,
-  WBR_SLIDE_PREFIX,
   type Kind,
-  type Placement,
 } from "@/lib/wbr/slides";
 
 const W = 720;
@@ -132,8 +129,8 @@ function sectionLabel(c: Canvas, x: number, y: number, w: number, text: string, 
 
 // ── Portfolio overview ───────────────────────────────────────────────────────
 
-export function overviewSlide(wk: WbrWeek, ops: OpsData, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function overviewSlide(wk: WbrWeek, ops: OpsData): Canvas {
+  const c = new Canvas();
   const stores = wk.districts.flatMap(d => d.stores);
   frame(c, wk, {
     title: "Portfolio overview",
@@ -269,7 +266,7 @@ export function overviewSlide(wk: WbrWeek, ops: OpsData, at: Placement): SlidesR
     small(8, r.drive?.flagged != null ? `${count(r.drive.flagged)} flagged` : "");
   });
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
 // ── Per-DM: Sales ────────────────────────────────────────────────────────────
@@ -284,8 +281,8 @@ const METRICS: Metric[] = [
   { label: "AVERAGE CHECK", pick: f => f.avgCheck, fmt: usd2 },
 ];
 
-export function dmSalesSlide(wk: WbrWeek, d: DistrictWeek, idx: number, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function dmSalesSlide(wk: WbrWeek, d: DistrictWeek, idx: number): Canvas {
+  const c = new Canvas();
   frame(c, wk, {
     title: dmTitle(d),
     subtitle: dmSub(d),
@@ -354,7 +351,7 @@ export function dmSalesSlide(wk: WbrWeek, d: DistrictWeek, idx: number, at: Plac
   c.text(L + 12, ry + 4, 100, 10, "READOUT", { size: 6.5, bold: true, color: C.red700 });
   c.text(L + 12, ry + 15, R - L - 24, 16, salesReadout(d), { size: 8, bold: true, color: C.gray900 });
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
 // ── Per-DM: Labor ────────────────────────────────────────────────────────────
@@ -387,8 +384,8 @@ function trendBars(c: Canvas, x: number, y: number, w: number, h: number, values
   }
 }
 
-export function dmLaborSlide(wk: WbrWeek, d: DistrictWeek, idx: number, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function dmLaborSlide(wk: WbrWeek, d: DistrictWeek, idx: number): Canvas {
+  const c = new Canvas();
   const n = d.stores.length;
   frame(c, wk, {
     title: dmTitle(d),
@@ -477,7 +474,7 @@ export function dmLaborSlide(wk: WbrWeek, d: DistrictWeek, idx: number, at: Plac
   c.text(L + 12, ty + 3, 100, 10, "TAKEAWAY", { size: 6.5, bold: true, color: C.red700 });
   c.text(L + 12, ty + 13, R - L - 24, 14, productivityTakeaway(d), { size: 7.5, color: C.gray700 });
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
 // ── Per-DM: Food cost & drive-thru ───────────────────────────────────────────
@@ -510,8 +507,8 @@ function tableRow(c: Canvas, x: number, y: number, h: number, nameW: number, col
   });
 }
 
-export function dmOpsSlide(wk: WbrWeek, d: DistrictWeek, ops: OpsData, idx: number, at: Placement): SlidesRequest[] {
-  const c = new Canvas(at.slideId);
+export function dmOpsSlide(wk: WbrWeek, d: DistrictWeek, ops: OpsData, idx: number): Canvas {
+  const c = new Canvas();
   frame(c, wk, {
     title: dmTitle(d),
     subtitle: dmSub(d),
@@ -601,18 +598,14 @@ export function dmOpsSlide(wk: WbrWeek, d: DistrictWeek, ops: OpsData, idx: numb
     c.text(L, dy + 26 + n * pitch, R - L, 9, `No BerryAI drive-thru data for ${missing.join(", ")}.`, { size: 6, color: C.gray400 });
   }
 
-  return [...newSlide(at), ...c.requests];
+  return c;
 }
 
-/** Overview, then Sales · Labor · Food & Drive-thru for each district, as per-slide request lists. */
-export function wbrByDistrict(wk: WbrWeek, ops: OpsData, startIndex: number, layoutId: string, runId: string): SlidesRequest[][] {
-  let i = 0;
-  const at = (key: string): Placement => ({ slideId: `${WBR_SLIDE_PREFIX}${runId}${key}`, insertionIndex: startIndex + i++, layoutId });
-  const out: SlidesRequest[][] = [overviewSlide(wk, ops, at("ov"))];
+/** Overview, then Sales · Labor · Food & Drive-thru for each district. */
+export function wbrByDistrict(wk: WbrWeek, ops: OpsData): Canvas[] {
+  const out = [overviewSlide(wk, ops)];
   wk.districts.forEach((d, k) => {
-    out.push(dmSalesSlide(wk, d, k, at(`d${k}s`)));
-    out.push(dmLaborSlide(wk, d, k, at(`d${k}l`)));
-    out.push(dmOpsSlide(wk, d, ops, k, at(`d${k}o`)));
+    out.push(dmSalesSlide(wk, d, k), dmLaborSlide(wk, d, k), dmOpsSlide(wk, d, ops, k));
   });
   return out;
 }

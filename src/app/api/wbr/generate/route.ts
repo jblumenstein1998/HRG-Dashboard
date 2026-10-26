@@ -1,27 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminApi } from "@/lib/users/adminGuard";
-import { NotConnectedError } from "@/lib/google/workspace";
-import { AlreadyExistsError, generateWbr, type GenerateMode, type WbrStyle } from "@/lib/wbr/generate";
+import { requireTabApi } from "@/lib/users/adminGuard";
+import { generateWbr, type WbrStyle } from "@/lib/wbr/generate";
 
-// ~4,000 Slides requests across a dozen calls, plus 26 week reads from Postgres.
+// 26 week reads from Postgres, plus Net-Chef and Berry for the district style.
 export const maxDuration = 120;
 
 /**
- * POST { mode?: "new" | "replace" | "copy", weekEnd?: "YYYY-MM-DD" (a Sunday) }
+ * POST { weekEnd?: "YYYY-MM-DD" (a Sunday), style?: "classic" | "district" }
  *
  * Builds the deck for the week ending `weekEnd` (default: the last completed
- * week). A deck already carrying that week's title is a 409 with its link in
- * "new" mode — pressing the button twice shouldn't leave two decks with the
- * same name in the folder — and the panel then offers replace or copy.
+ * week) and returns it as a .pptx download. Open to anyone with the Admin tab,
+ * since nothing is written anywhere — the file only goes back to the caller.
+ *
+ * The warnings ride along in a header, URI-encoded JSON, so the body can stay
+ * the file itself.
  */
 export async function POST(request: NextRequest) {
-  const denied = await requireAdminApi();
+  const denied = await requireTabApi("/admin-links");
   if (denied) return denied;
 
-  const body = (await request.json().catch(() => ({}))) as { mode?: string; weekEnd?: string; style?: string };
+  const body = (await request.json().catch(() => ({}))) as { weekEnd?: string; style?: string };
   const style: WbrStyle = body.style === "district" ? "district" : "classic";
   const weekEnd = body.weekEnd && /^\d{4}-\d{2}-\d{2}$/.test(body.weekEnd) ? body.weekEnd : undefined;
-  const mode: GenerateMode = body.mode === "replace" || body.mode === "copy" ? body.mode : "new";
   // A week end has to be a Sunday that has finished, or the deck would be built
   // from a partial week.
   if (weekEnd && (new Date(weekEnd + "T12:00:00Z").getUTCDay() !== 0 || weekEnd >= new Date().toISOString().slice(0, 10))) {
@@ -29,14 +29,26 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    return NextResponse.json(await generateWbr({ mode, weekEnd, style }));
+    const deck = await generateWbr({ weekEnd, style });
+    // Streamed in chunks rather than sent whole: the deck is ~8 MB with the
+    // template's screenshots, over Vercel's 4.5 MB cap on a buffered response.
+    const CHUNK = 256 * 1024;
+    let at = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (at >= deck.file.length) return controller.close();
+        controller.enqueue(deck.file.subarray(at, (at += CHUNK)));
+      },
+    });
+    return new Response(body, {
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "Content-Disposition": `attachment; filename="${deck.fileName}"; filename*=UTF-8''${encodeURIComponent(deck.fileName)}`,
+        "X-Wbr-Warnings": encodeURIComponent(JSON.stringify(deck.warnings)),
+        "Cache-Control": "no-store",
+      },
+    });
   } catch (err) {
-    if (err instanceof AlreadyExistsError) {
-      return NextResponse.json({ error: err.message, existing: { name: err.file.name, url: err.file.webViewLink } }, { status: 409 });
-    }
-    if (err instanceof NotConnectedError) {
-      return NextResponse.json({ error: err.message, notConnected: true }, { status: 400 });
-    }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[wbr] generate failed: ${message}`);
     return NextResponse.json({ error: message }, { status: 500 });

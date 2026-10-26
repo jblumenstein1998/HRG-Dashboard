@@ -1,12 +1,11 @@
 /**
- * A tiny drawing kit over Google Slides batchUpdate requests: rectangles, rounded
- * cards and text boxes, positioned in points on the 720×405 page.
+ * A tiny drawing kit: rectangles, rounded cards and text boxes, positioned in
+ * points on the 720×405 page. A Canvas only records shapes; lib/wbr/pptx.ts
+ * turns them into PowerPoint slide XML.
  *
  * Colours are the dashboard's Tailwind palette, so a slide reads like a
  * screenshot of the tab it summarises.
  */
-
-export type SlidesRequest = Record<string, unknown>;
 
 /** Tailwind (v3 hex equivalents) — the classes the dashboard actually uses. */
 export const C = {
@@ -32,68 +31,29 @@ export const C = {
 
 export const FONT = "Geist";
 
-const rgb = (hex: string) => ({
-  red: parseInt(hex.slice(1, 3), 16) / 255,
-  green: parseInt(hex.slice(3, 5), 16) / 255,
-  blue: parseInt(hex.slice(5, 7), 16) / 255,
-});
-const solid = (hex: string) => ({ solidFill: { color: { rgbColor: rgb(hex) } } });
-const pt = (n: number) => ({ magnitude: n, unit: "PT" });
+export type TextStyle = {
+  size: number;
+  color: string;
+  bold?: boolean;
+  align?: "START" | "CENTER" | "END";
+  valign?: "TOP" | "MIDDLE" | "BOTTOM";
+};
 
-/** Accumulates requests for one slide, minting unique object ids as it goes. */
+export type Shape =
+  | { kind: "box"; x: number; y: number; w: number; h: number; fill: string; line?: string; round?: boolean }
+  | { kind: "text"; x: number; y: number; w: number; h: number; content: string; style: TextStyle };
+
+/** One slide's shapes, in drawing order (later ones on top). */
 export class Canvas {
-  readonly requests: SlidesRequest[] = [];
-  private n = 0;
-
-  constructor(readonly slideId: string) {}
-
-  private id(): string {
-    return `${this.slideId}_${++this.n}`;
-  }
-
-  private place(id: string, shapeType: string, x: number, y: number, w: number, h: number) {
-    this.requests.push({
-      createShape: {
-        objectId: id,
-        shapeType,
-        elementProperties: {
-          pageObjectId: this.slideId,
-          size: { width: pt(w), height: pt(h) },
-          transform: { scaleX: 1, scaleY: 1, translateX: x, translateY: y, unit: "PT" },
-        },
-      },
-    });
-  }
+  readonly shapes: Shape[] = [];
 
   /** A filled shape; `line` adds a 0.75pt outline, otherwise none. */
   box(x: number, y: number, w: number, h: number, fill: string, opts: { line?: string; round?: boolean } = {}) {
-    const id = this.id();
-    this.place(id, opts.round ? "ROUND_RECTANGLE" : "RECTANGLE", x, y, w, h);
-    this.requests.push({
-      updateShapeProperties: {
-        objectId: id,
-        shapeProperties: {
-          shapeBackgroundFill: solid(fill),
-          outline: opts.line
-            ? { outlineFill: solid(opts.line), weight: pt(0.75) }
-            : { propertyState: "NOT_RENDERED" },
-        },
-        fields: "shapeBackgroundFill,outline",
-      },
-    });
-    return id;
+    this.shapes.push({ kind: "box", x, y, w, h, fill, ...opts });
   }
 
   /** A transparent text box. */
-  text(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    content: string,
-    style: { size: number; color: string; bold?: boolean; align?: "START" | "CENTER" | "END"; valign?: "TOP" | "MIDDLE" | "BOTTOM" },
-  ) {
-    const id = this.id();
+  text(x: number, y: number, w: number, h: number, content: string, style: TextStyle) {
     // Text boxes keep ~7pt of inset each side, which wraps "-10.9%" inside a
     // 30pt chip. Centred text is widened symmetrically so it keeps its centre
     // but gets the room; the shape underneath sets the visible size anyway.
@@ -101,37 +61,7 @@ export class Canvas {
       x -= 10;
       w += 20;
     }
-    this.place(id, "TEXT_BOX", x, y, w, h);
-    if (!content) return id;
-    this.requests.push(
-      { insertText: { objectId: id, text: content } },
-      {
-        updateTextStyle: {
-          objectId: id,
-          style: {
-            fontFamily: FONT,
-            fontSize: pt(style.size),
-            bold: Boolean(style.bold),
-            foregroundColor: { opaqueColor: { rgbColor: rgb(style.color) } },
-          },
-          fields: "fontFamily,fontSize,bold,foregroundColor",
-        },
-      },
-      {
-        updateShapeProperties: {
-          objectId: id,
-          shapeProperties: { contentAlignment: style.valign ?? "MIDDLE" },
-          fields: "contentAlignment",
-        },
-      },
-    );
-    // START is the text box default, so only centred/right-aligned text needs saying.
-    if (style.align && style.align !== "START") {
-      this.requests.push({
-        updateParagraphStyle: { objectId: id, style: { alignment: style.align }, fields: "alignment" },
-      });
-    }
-    return id;
+    if (content) this.shapes.push({ kind: "text", x, y, w, h, content, style });
   }
 
   /** A rounded chip with centred text — the WoW/YoY and status pills. */
