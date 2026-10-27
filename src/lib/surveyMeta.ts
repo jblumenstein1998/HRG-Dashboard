@@ -16,7 +16,7 @@ export const LOWER_IS_BETTER = /experienced problem/i;
 
 export const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
 export const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
-export const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo Ranch"];
+export const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo"];
 
 export const STORE_LABELS: Record<string, string> = {
   "28901": "Columbia",
@@ -36,7 +36,7 @@ export const STORE_LABELS: Record<string, string> = {
   "53004": "Temple",
   "53005": "Pflugerville",
   "62802": "Cibolo",
-  "62803": "Alamo Ranch",
+  "62803": "Alamo",
   "62804": "Windcrest",
 };
 
@@ -62,7 +62,7 @@ export const STORE_COLOR: Record<string, string> = {
   "Pflugerville":   "#c026d3",
   "Cibolo":         "#059669",
   "Windcrest":      "#b45309",
-  "Alamo Ranch":    "#475569",
+  "Alamo":          "#475569",
 };
 
 export function prettyUnit(name: string, key: string): string {

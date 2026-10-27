@@ -37,14 +37,15 @@ const STORE_CONFIG: {
   { fragment: "125 hillcrest",            label: "Hillcrest",   section: "Virginia",  order: 5 },
   { fragment: "2332 elson green",         label: "Beach",       section: "Virginia",  order: 6 },
   // Texas — in display order, north to south. Acquired October 2026 and not on
-  // BerryAI yet, so like Portland each stands on its city (or, for the two San
-  // Antonio stores, its neighborhood) until Berry's address format is known.
+  // BerryAI yet, so like Portland each stands on its city until Berry's address
+  // format is known — except Alamo, whose city (San Antonio) isn't distinctive,
+  // so it uses its street, 11903 Alamo Ranch Pkwy.
   { fragment: "killeen",                  label: "Killeen",      section: "Texas",     order: 0 },
   { fragment: "temple",                   label: "Temple",       section: "Texas",     order: 1 },
   { fragment: "pflugerville",             label: "Pflugerville", section: "Texas",     order: 2 },
   { fragment: "cibolo",                   label: "Cibolo",       section: "Texas",     order: 3 },
   { fragment: "windcrest",                label: "Windcrest",    section: "Texas",     order: 4 },
-  { fragment: "alamo ranch",              label: "Alamo Ranch",  section: "Texas",     order: 5 },
+  { fragment: "alamo ranch",              label: "Alamo",        section: "Texas",     order: 5 },
 ];
 
 /**

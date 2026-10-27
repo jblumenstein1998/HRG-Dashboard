@@ -13,7 +13,7 @@ import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/comp
 // eleven still get a section, so the page is a roster of HRG rather than of Jolt.
 const TN_STORES = ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield", "Portland"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
-const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo Ranch"];
+const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo"];
 
 // Jolt has no URL for a single list instance — /review/review/review?id=… just
 // bounces away — so every list links to Browse Lists, where a person filters

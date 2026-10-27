@@ -23,12 +23,12 @@ const PROD_LOCATIONS: PARLocation[] = [
   { storeId: "57006", name: "Hillcrest",    state: "VA" },
   { storeId: "57007", name: "Beach",        state: "VA" },
   // Acquired October 2026, arriving with their PAR history back to early 2024.
-  { storeId: "53003", name: "Killeen",      state: "TX" },
-  { storeId: "53004", name: "Temple",       state: "TX" },
-  { storeId: "53005", name: "Pflugerville", state: "TX" },
-  { storeId: "62802", name: "Cibolo",       state: "TX" },
-  { storeId: "62803", name: "Alamo Ranch",  state: "TX" },
-  { storeId: "62804", name: "Windcrest",    state: "TX" },
+  { storeId: "53003", name: "Killeen",      state: "TX" }, // 2150 S Clear Creek Rd, Killeen, TX 76549
+  { storeId: "53004", name: "Temple",       state: "TX" }, // 2002 S 31st St, Temple, TX 76504
+  { storeId: "53005", name: "Pflugerville", state: "TX" }, // 1301 FM 685, Pflugerville, TX 78660
+  { storeId: "62802", name: "Cibolo",       state: "TX" }, // 176 W Borgfeld Rd, Cibolo, TX 78108
+  { storeId: "62803", name: "Alamo",        state: "TX" }, // 11903 Alamo Ranch Pkwy, San Antonio, TX 78253
+  { storeId: "62804", name: "Windcrest",    state: "TX" }, // 7304 N Interstate 35, Windcrest, TX 78218
 ];
 
 /**

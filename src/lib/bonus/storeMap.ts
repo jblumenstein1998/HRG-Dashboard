@@ -122,14 +122,18 @@ export const BONUS_STORES: BonusStore[] = [
   // for HRG's login yet, BerryAI hasn't onboarded them (city fragments, see
   // lib/stores.ts) and Workstream uuids are unconfirmed. Each null reads as "no
   // data" for that vendor until its id is filled in here.
+  //
+  //   53003 Killeen       2150 S Clear Creek Rd, Killeen, TX 76549
+  //   53004 Temple        2002 S 31st St, Temple, TX 76504
+  //   53005 Pflugerville  1301 FM 685, Pflugerville, TX 78660
+  //   62802 Cibolo        176 W Borgfeld Rd, Cibolo, TX 78108
+  //   62803 Alamo         11903 Alamo Ranch Pkwy, San Antonio, TX 78253
+  //   62804 Windcrest     7304 N Interstate 35, Windcrest, TX 78218
   { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "killeen",      netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
   { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "temple",       netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
   { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "pflugerville", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
   { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "cibolo",       netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
-  // The two San Antonio stores, told apart by PAR history: 62804 has no orders
-  // before April 2024, when the Windcrest store (7304 N I-35) opened; 62803 is
-  // the 2022 Alamo Ranch Pkwy store.
-  { storeId: "62803", name: "Alamo Ranch",  state: "TX", berryFragment: "alamo ranch",  netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
+  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "alamo ranch",  netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
   { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "windcrest",    netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
 ];
 
