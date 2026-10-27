@@ -3,7 +3,7 @@
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
 import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
-import { ALL_STORES } from "@/lib/stores";
+import { ALL_STORES, SECTION_SHORT, STORE_SECTIONS, type StoreSection } from "@/lib/stores";
 import { formatSyncStamp } from "@/lib/surveyMeta";
 
 type User = {
@@ -463,7 +463,7 @@ function Leaders({
 }) {
   const [name, setName] = useState("");
 
-  const sections = ["Tennessee", "Virginia"] as const;
+  const sections = STORE_SECTIONS;
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -471,7 +471,7 @@ function Leaders({
         <div className="text-sm font-semibold text-gray-800">Above-store leaders</div>
         <div className="text-xs text-gray-400">
           Which stores each leader covers. They become a filter on the Drive-Thru
-          tab, alongside the VA and TN boxes. Takes effect on its next page load.
+          tab, alongside the TN, VA and TX markets. Takes effect on its next page load.
         </div>
       </div>
 
@@ -532,7 +532,7 @@ function LeaderRow({
   onRemove,
 }: {
   leader: Leader;
-  sections: readonly ("Tennessee" | "Virginia")[];
+  sections: readonly StoreSection[];
   busy: boolean;
   onSave: (patch: { id: string; name?: string; stores?: string[] }) => void;
   onRemove: (id: string) => void;
@@ -581,7 +581,7 @@ function LeaderRow({
             {/* Fixed width so the first checkbox of each state lines up, rather
                 than depending on "TN" and "VA" rendering identically wide. */}
             <span className="w-6 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">
-              {section === "Tennessee" ? "TN" : "VA"}
+              {SECTION_SHORT[section]}
             </span>
             {ALL_STORES.filter((s) => s.section === section).map((s) => (
               <label

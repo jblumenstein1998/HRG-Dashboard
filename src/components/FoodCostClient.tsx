@@ -6,16 +6,15 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
-import { STORE_COLOR } from "@/lib/surveyMeta";
+import { STORE_COLOR, TN_STORES, VA_STORES } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 
 // Derived from the store map rather than typed out, so a new store's Net-Chef
 // location can't be left off this tab while every other tab picks it up.
-const LOCATION_IDS = BONUS_STORES.map((s) => s.netchefLocationId);
-const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
-const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
+// A store with no Net-Chef id yet is left off rather than requested and failed.
+const LOCATION_IDS = BONUS_STORES.flatMap((s) => (s.netchefLocationId === null ? [] : [s.netchefLocationId]));
 
 // Weekly sales are pulled live from PAR (see /api/par/weekly-sales, salesByLocationName)
 // instead of this hand-maintained map — PAR and Net-Chef use identical location names.

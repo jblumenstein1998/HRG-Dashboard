@@ -1,6 +1,16 @@
 import { BranchStore } from "./berry";
 
-export type StoreSection = "Tennessee" | "Virginia";
+export type StoreSection = "Tennessee" | "Virginia" | "Texas";
+
+/** Every section, in the order the tabs list them. */
+export const STORE_SECTIONS: StoreSection[] = ["Tennessee", "Virginia", "Texas"];
+
+/** The two-letter market each section is shown as. */
+export const SECTION_SHORT: Record<StoreSection, "TN" | "VA" | "TX"> = {
+  Tennessee: "TN",
+  Virginia: "VA",
+  Texas: "TX",
+};
 
 const STORE_CONFIG: {
   fragment: string;
@@ -26,6 +36,15 @@ const STORE_CONFIG: {
   { fragment: "2316 chesapeake square",   label: "Chesapeake",  section: "Virginia",  order: 4 },
   { fragment: "125 hillcrest",            label: "Hillcrest",   section: "Virginia",  order: 5 },
   { fragment: "2332 elson green",         label: "Beach",       section: "Virginia",  order: 6 },
+  // Texas — in display order, north to south. Acquired October 2026 and not on
+  // BerryAI yet, so like Portland each stands on its city (or, for the two San
+  // Antonio stores, its neighborhood) until Berry's address format is known.
+  { fragment: "killeen",                  label: "Killeen",      section: "Texas",     order: 0 },
+  { fragment: "temple",                   label: "Temple",       section: "Texas",     order: 1 },
+  { fragment: "pflugerville",             label: "Pflugerville", section: "Texas",     order: 2 },
+  { fragment: "cibolo",                   label: "Cibolo",       section: "Texas",     order: 3 },
+  { fragment: "windcrest",                label: "Windcrest",    section: "Texas",     order: 4 },
+  { fragment: "alamo ranch",              label: "Alamo Ranch",  section: "Texas",     order: 5 },
 ];
 
 /**
@@ -36,9 +55,7 @@ const STORE_CONFIG: {
  * the catalog is derived from the same STORE_CONFIG rather than typed out a
  * second time and left to drift.
  */
-export const ALL_STORES: { label: string; section: StoreSection }[] = (
-  ["Tennessee", "Virginia"] as StoreSection[]
-).flatMap((section) =>
+export const ALL_STORES: { label: string; section: StoreSection }[] = STORE_SECTIONS.flatMap((section) =>
   STORE_CONFIG.filter((c) => c.section === section)
     .sort((a, b) => a.order - b.order)
     .map((c) => ({ label: c.label, section })),
@@ -59,7 +76,7 @@ export function getStoreLabel(branch: BranchStore): string {
   return findConfig(branch)?.label ?? branch.name;
 }
 
-/** Returns the section ("Tennessee" | "Virginia") for a branch, or null if unknown. */
+/** Returns the section ("Tennessee" | "Virginia" | "Texas") for a branch, or null if unknown. */
 export function getStoreSection(branch: BranchStore): StoreSection | null {
   return findConfig(branch)?.section ?? null;
 }
@@ -70,12 +87,11 @@ export type SectionedBranches = {
 }[];
 
 /**
- * Groups and sorts branches into Tennessee then Virginia sections,
- * in the defined display order. Branches not in either section are dropped.
+ * Groups and sorts branches into Tennessee, Virginia then Texas sections,
+ * in the defined display order. Branches in no section are dropped.
  */
 export function groupBranches(branches: BranchStore[]): SectionedBranches {
-  const sections: StoreSection[] = ["Tennessee", "Virginia"];
-  return sections.map((section) => ({
+  return STORE_SECTIONS.map((section) => ({
     section,
     branches: branches
       .filter((b) => getStoreSection(b) === section)

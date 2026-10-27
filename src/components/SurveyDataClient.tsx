@@ -370,6 +370,10 @@ export default function SurveyDataClient({
     () => rows.filter((u) => marketOf(u.key, u.name) === "VA" && inFilter(storeFilter.allowed, u.label)),
     [rows, storeFilter.allowed],
   );
+  const tx = useMemo(
+    () => rows.filter((u) => marketOf(u.key, u.name) === "TX" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
+  );
 
   /** SMG's region-manager rows for whichever window is selected. */
   const publishedRows = useMemo(() => {
@@ -409,10 +413,10 @@ export default function SurveyDataClient({
    */
   const hrgSummary = useMemo(() => {
     // Always store level now that the level picker is gone, so the estate is
-    // simply both markets.
-    const units = [...tn, ...va];
+    // simply every market.
+    const units = [...tn, ...va, ...tx];
     return summarise(units, metrics, matchPublished([...publishedRows, ...combinedRows], units, metrics));
-  }, [tn, va, metrics, publishedRows, combinedRows]);
+  }, [tn, va, tx, metrics, publishedRows, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
@@ -728,6 +732,7 @@ export default function SurveyDataClient({
             dateBasis={DATE_BASIS}
             showTN={marketShown(storeFilter.allowed, "TN")}
             showVA={marketShown(storeFilter.allowed, "VA")}
+            showTX={marketShown(storeFilter.allowed, "TX")}
           />
         </div>
 

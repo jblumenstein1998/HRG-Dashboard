@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { BranchStore } from "@/lib/berry";
-import { groupBranches, getStoreLabel, SectionedBranches } from "@/lib/stores";
+import { groupBranches, getStoreLabel, SectionedBranches, SECTION_SHORT } from "@/lib/stores";
 import { STORE_COLOR } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 
@@ -45,6 +45,12 @@ const GRANULARITY_OPTIONS: { key: Granularity; label: string }[] = [
  * greyscale printing.
  */
 const SUMMARY_COLOR = "#111827";
+/** Market average lines: TN solid, VA dashed, TX dotted — on the chart, and as the legend swatch. */
+const SUMMARY_DASH: Record<"TN" | "VA" | "TX", { line: string; swatch: string } | undefined> = {
+  TN: undefined,
+  VA: { line: "6 4", swatch: "5 3" },
+  TX: { line: "2 3", swatch: "2 2" },
+};
 const SUMMARY_WIDTH = 2.5;
 
 /** Straight (unweighted) mean — each store counts once, regardless of car count. */
@@ -171,14 +177,14 @@ function TrendChart({
   const storeOrder = useMemo(() => sections.flatMap(s => s.branches), [sections]);
 
   // One summary series per market that actually has stores. Virginia is the
-  // dashed one purely so the two never rely on color to be told apart.
+  // dashed one and Texas the dotted one, so they never rely on color to be told apart.
   const summarySeries = useMemo(
     () =>
       sections
         .filter(s => s.branches.length > 0)
         .map(s => {
-          const short = s.section === "Tennessee" ? "TN" : "VA";
-          return { key: `${short} Average`, short, branches: s.branches, dashed: short === "VA" };
+          const short = SECTION_SHORT[s.section];
+          return { key: `${short} Average`, short, branches: s.branches, dash: SUMMARY_DASH[short] };
         }),
     [sections]
   );
@@ -302,7 +308,7 @@ function TrendChart({
                 name={s.key}
                 stroke={SUMMARY_COLOR}
                 strokeWidth={SUMMARY_WIDTH}
-                strokeDasharray={s.dashed ? "6 4" : undefined}
+                strokeDasharray={s.dash?.line}
                 dot={<TrendDot color={SUMMARY_COLOR} lastIndex={rows.length - 1} />}
                 connectNulls
                 isAnimationActive={false}
@@ -315,7 +321,7 @@ function TrendChart({
       <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
         {sections.map(({ section, branches: sectionBranches }) => {
           if (sectionBranches.length === 0) return null;
-          const groupLabel = section === "Tennessee" ? "TN" : "VA";
+          const groupLabel = SECTION_SHORT[section];
           const groupChecked = sectionBranches.every(b => visibleStores.has(getStoreLabel(b)));
           return (
             <div key={section} className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -363,7 +369,7 @@ function TrendChart({
                         x1="0" y1="4" x2="18" y2="4"
                         stroke={SUMMARY_COLOR}
                         strokeWidth={SUMMARY_WIDTH}
-                        strokeDasharray={s.dashed ? "5 3" : undefined}
+                        strokeDasharray={s.dash?.swatch}
                       />
                     </svg>
                     {s.key}

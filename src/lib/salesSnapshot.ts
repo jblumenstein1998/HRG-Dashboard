@@ -53,7 +53,7 @@ function lastYearCutoffMinutes(state: PARLocation["state"], businessDate: string
 }
 
 function nowLabelForState(state: PARLocation["state"], businessDate: string): string {
-  const tzAbbr = state === "TN" ? "CT" : "ET";
+  const tzAbbr = STATE_TIMEZONE[state] === "America/New_York" ? "ET" : "CT";
   if (lastYearCutoffMinutes(state, businessDate) === null) return `close ${tzAbbr}`;
   const { hh, mm } = zonedParts(STATE_TIMEZONE[state]);
   const period = hh < 12 ? "AM" : "PM";

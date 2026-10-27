@@ -6,7 +6,7 @@ const BASE_URL     = process.env.PAR_BASE_URL ?? "https://api-apiint.brinkpos.ne
 
 export const PAR_IS_SANDBOX = BASE_URL.includes("apiint");
 
-export type PARLocation = { storeId: string; name: string; state: "TN" | "VA" };
+export type PARLocation = { storeId: string; name: string; state: "TN" | "VA" | "TX" };
 
 const PROD_LOCATIONS: PARLocation[] = [
   { storeId: "36001", name: "Springfield",  state: "TN" },
@@ -22,6 +22,13 @@ const PROD_LOCATIONS: PARLocation[] = [
   { storeId: "57005", name: "Jefferson",    state: "VA" },
   { storeId: "57006", name: "Hillcrest",    state: "VA" },
   { storeId: "57007", name: "Beach",        state: "VA" },
+  // Acquired October 2026, arriving with their PAR history back to early 2024.
+  { storeId: "53003", name: "Killeen",      state: "TX" },
+  { storeId: "53004", name: "Temple",       state: "TX" },
+  { storeId: "53005", name: "Pflugerville", state: "TX" },
+  { storeId: "62802", name: "Cibolo",       state: "TX" },
+  { storeId: "62803", name: "Alamo Ranch",  state: "TX" },
+  { storeId: "62804", name: "Windcrest",    state: "TX" },
 ];
 
 /**
@@ -260,12 +267,13 @@ export type PARShift = {
 // on them returns the hour in whatever timezone the *server process* happens
 // to be running in (Eastern on a dev machine, UTC on Vercel), which is wrong
 // unless that machine's timezone happens to coincidentally match the store's
-// own timezone. TN stores are Central, VA stores are Eastern, so this must be
+// own timezone. TN and TX stores are Central, VA stores are Eastern, so this must be
 // computed per store, not read off the ambient runtime timezone.
 
 export const STATE_TIMEZONE: Record<PARLocation["state"], string> = {
   TN: "America/Chicago",
   VA: "America/New_York",
+  TX: "America/Chicago",
 };
 
 export function getStoreTimeZone(storeId: string): string {

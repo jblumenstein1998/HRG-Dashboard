@@ -100,6 +100,9 @@ export async function ingestPeriodCosts(
 
   const results = await Promise.all(
     BONUS_STORES.map(async (store) => {
+      // No Net-Chef id yet (a store HRG's login can't see) — nothing to fetch.
+      const locationId = store.netchefLocationId;
+      if (locationId === null) return null;
       const prior = existing.get(store.storeId);
       if (
         !opts.refresh &&
@@ -112,7 +115,7 @@ export async function ingestPeriodCosts(
         return null;
       }
       try {
-        const report = await fetchLocationReport(store.netchefLocationId, bucket.start, bucket.end);
+        const report = await fetchLocationReport(locationId, bucket.start, bucket.end);
 
         // Net-Chef answers with empty summaries often enough that netchef.ts
         // already retries once and then gives up, returning nulls. Writing

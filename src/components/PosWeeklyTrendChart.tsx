@@ -16,7 +16,7 @@ import { STORE_COLOR } from "@/lib/surveyMeta";
 // in the Postgres client at module scope.
 
 type WeekTotals = { netSales: number; transactions: number; laborHours: number };
-type StoreWeeklyTrend = { storeId: string; name: string; state: "TN" | "VA"; ty: (WeekTotals | null)[]; ly: (WeekTotals | null)[] };
+type StoreWeeklyTrend = { storeId: string; name: string; state: "TN" | "VA" | "TX"; ty: (WeekTotals | null)[]; ly: (WeekTotals | null)[] };
 type WeeklyTrend = { weeks: string[]; stores: StoreWeeklyTrend[]; rolledUpThrough: string | null };
 
 // First full Mon–Sun week in par_daily_metrics (the rollup starts Tue 2024-07-23).
@@ -46,7 +46,7 @@ type Metric = (typeof METRICS)[number];
  */
 const SUMMARY_COLOR = "#111827";
 const SUMMARY_WIDTH = 2.5;
-const SUMMARY_DASH: Record<string, string | undefined> = { tn: undefined, va: "6 4", hrg: "2 3" };
+const SUMMARY_DASH: Record<string, string | undefined> = { tn: undefined, va: "6 4", tx: "8 3 2 3", hrg: "2 3" };
 
 // ── Date helpers (local-time, so a Monday never slips a day through UTC) ──────
 
@@ -225,8 +225,8 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
   const [toWeek, setToWeek] = useState(options[0]);
   const [fromWeek, setFromWeek] = useState(options[Math.min(DEFAULT_WEEKS - 1, options.length - 1)]);
   const [metricKey, setMetricKey] = useState<MetricKey>("netSales");
-  // Opens on the three benchmark lines only; store lines are opt-in.
-  const [visible, setVisible] = useState<Set<string>>(() => new Set(["tn", "va", "hrg"]));
+  // Opens on the benchmark lines only; store lines are opt-in.
+  const [visible, setVisible] = useState<Set<string>>(() => new Set(["tn", "va", "tx", "hrg"]));
 
   // One week before `fromWeek` rides along so the first plotted week has a
   // "vs LW". The very first week of history has nothing before it.
@@ -260,7 +260,7 @@ export default function PosWeeklyTrendChart({ filter, refreshToken }: { filter: 
   // chart can't show one leader's stores against a market-wide average. HRG is
   // deliberately not filtered — it's the benchmark, same as the tables below.
   const visibleStores = all.filter(s => inFilter(filter.allowed, s.name));
-  const markets = (["TN", "VA"] as const).filter(st => visibleStores.some(s => s.state === st));
+  const markets = (["TN", "VA", "TX"] as const).filter(st => visibleStores.some(s => s.state === st));
   const avgWord = m.additive ? " Avg" : "";
   const series: Series[] = [
     ...markets.map(st => ({

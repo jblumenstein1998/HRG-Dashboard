@@ -7,7 +7,7 @@ export type { PARDailyRow };
 export type PARLocationResult = {
   storeId:   string;
   name:      string;
-  state:     "TN" | "VA";
+  state:     "TN" | "VA" | "TX";
   startDate: string;
   endDate:   string;
   daily:     PARDailyRow[];

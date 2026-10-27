@@ -169,8 +169,17 @@ async function existingRows(start: string, end: string): Promise<Map<string, Day
  *
  * `dryRun` does every read and comparison but no write, so the same summary can
  * be inspected before letting it touch the table.
+ *
+ * `storeIds` narrows the run to those stores — for backfilling the history of a
+ * store that just came online without re-reading every other store's years too.
  */
-export async function rerollRange(start: string, end: string, dryRun = false): Promise<RerollSummary> {
+export async function rerollRange(
+  start: string,
+  end: string,
+  dryRun = false,
+  storeIds?: string[],
+): Promise<RerollSummary> {
+  const locations = storeIds ? PAR_LOCATIONS.filter(l => storeIds.includes(l.storeId)) : PAR_LOCATIONS;
   const before = await existingRows(start, end);
   const summary: RerollSummary = {
     windowStart: start,
@@ -192,7 +201,7 @@ export async function rerollRange(start: string, end: string, dryRun = false): P
   // pushing PAR past its documented limit.
   for (const businessDate of dateRange(start, end)) {
     const results = await Promise.all(
-      PAR_LOCATIONS.map(async loc => {
+      locations.map(async loc => {
         try {
           // Strict: a PAR failure throws here instead of collapsing to an empty
           // day, which would otherwise overwrite a good row with zeros.

@@ -404,7 +404,7 @@ function WeeklyBreakdown({ daily, rangeStart, rangeEnd, metric }: { daily: PARDa
 
 type RangeField = "yesterday" | "wtd" | "ptd" | "ytd";
 type MetricFigure = { value: number; prior: number; compPct: number | null };
-type StoreMetricComp = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, MetricFigure>;
+type StoreMetricComp = { storeId: string; name: string; state: "TN" | "VA" | "TX" } & Record<RangeField, MetricFigure>;
 
 const COMP_RANGE_COLS: { field: RangeField; label: string }[] = [
   { field: "yesterday", label: "Yesterday" },
@@ -496,6 +496,7 @@ function MetricCompTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -504,10 +505,11 @@ function MetricCompTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are
@@ -582,7 +584,7 @@ type AvgCheckRaw = {
   netSalesTY: number; netSalesLY: number; txTY: number; txLY: number;
   compNetSalesTY?: number; compTxTY?: number;
 };
-type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, AvgCheckRaw>;
+type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" | "TX" } & Record<RangeField, AvgCheckRaw>;
 
 function avgCheck(netSales: number, tx: number): number {
   return tx > 0 ? netSales / tx : 0;
@@ -638,6 +640,7 @@ function AvgCheckCompTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -646,10 +649,11 @@ function AvgCheckCompTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are
@@ -719,7 +723,7 @@ function AvgCheckCompTable({
 // internals that must never end up in a client bundle.
 
 type SnapshotRaw = {
-  storeId: string; name: string; state: "TN" | "VA";
+  storeId: string; name: string; state: "TN" | "VA" | "TX";
   netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number;
   // Only the live "Today" range reports who's on the clock right now.
   clockedInTY: number | null;
@@ -953,6 +957,7 @@ function SnapshotVsLastYearTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -961,10 +966,11 @@ function SnapshotVsLastYearTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are

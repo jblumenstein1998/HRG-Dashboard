@@ -31,9 +31,16 @@ const MARKETS = {
     label: "TN",
     stores: ALL_STORES.filter((s) => s.section === "Tennessee").map((s) => s.label),
   },
+  tx: {
+    label: "TX",
+    stores: ALL_STORES.filter((s) => s.section === "Texas").map((s) => s.label),
+  },
 } as const;
 
-/** "" = everything; "va"/"tn" = a market; "leader:<id>" = one leader's stores. */
+type MarketKey = keyof typeof MARKETS;
+const isMarketKey = (v: string): v is MarketKey => v in MARKETS;
+
+/** "" = everything; "va"/"tn"/"tx" = a market; "leader:<id>" = one leader's stores. */
 export type StoreFilterValue = string;
 
 export type StoreFilter = {
@@ -54,7 +61,7 @@ export function useStoreFilter(leaders: Leader[]): StoreFilter {
   // Resolved on every render rather than stored, so a leader edited on Users &
   // Access can't leave a stale store list pinned in a tab left open.
   const { allowed, label } = useMemo(() => {
-    if (value === "va" || value === "tn") {
+    if (isMarketKey(value)) {
       return { allowed: new Set<string>(MARKETS[value].stores), label: MARKETS[value].label };
     }
     if (value.startsWith("leader:")) {
@@ -91,8 +98,8 @@ export const totalLabelFor = (filter: StoreFilter): string =>
  * market line has anything left to plot. Derived from the filter rather than
  * from loaded rows, so a chart doesn't blank its lines while data is in flight.
  */
-export const marketShown = (allowed: Set<string> | null, market: "TN" | "VA"): boolean =>
-  !allowed || MARKETS[market === "TN" ? "tn" : "va"].stores.some((s) => allowed.has(s));
+export const marketShown = (allowed: Set<string> | null, market: "TN" | "VA" | "TX"): boolean =>
+  !allowed || MARKETS[market.toLowerCase() as MarketKey].stores.some((s) => allowed.has(s));
 
 /**
  * The control. Markets and leaders are separate optgroups because they are
@@ -121,6 +128,7 @@ export function StoreFilterPicker({
       <optgroup label="Market">
         <option value="va">VA</option>
         <option value="tn">TN</option>
+        <option value="tx">TX</option>
       </optgroup>
       {/* Omitted entirely until someone is set up on Users & Access — an empty
           group reads like the list failed to load. */}

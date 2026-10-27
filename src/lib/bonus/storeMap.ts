@@ -28,15 +28,19 @@ export type BonusStore = {
   storeId: string;
   /** Display name. Matches PAR_LOCATIONS, STORE_LABELS and Net-Chef exactly. */
   name: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   /**
    * Lowercase fragment of the street address, matched against a BerryAI
    * branch's `location` field. Copied from STORE_CONFIG in src/lib/stores.ts —
    * BerryAI has no store id at all, so the address is the only join available.
    */
   berryFragment: string;
-  /** Net-Chef's internal location id, for fetchLocationReport(). */
-  netchefLocationId: number;
+  /**
+   * Net-Chef's internal location id, for fetchLocationReport(). Null for a
+   * store HRG's Net-Chef login can't see yet — it has no food cost until the
+   * id lands here, rather than borrowing another store's.
+   */
+  netchefLocationId: number | null;
   /**
    * smg_scores.unit_key. Identical to storeId today, but named separately so a
    * future SMG unit whose key stops matching the PAR id is a one-line fix here
@@ -114,6 +118,19 @@ export const BONUS_STORES: BonusStore[] = [
   // right and the word is wrong; this is the one the evidence saved.
   { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006", workstreamLocationUuid: "51a81a04-d1e9-4746-9520-c92bbdd11bdc" },
   { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007", workstreamLocationUuid: "ab838180-2577-48d7-a77c-c2875a7fe625" },
+  // Texas — acquired October 2026. PAR is connected; Net-Chef doesn't list them
+  // for HRG's login yet, BerryAI hasn't onboarded them (city fragments, see
+  // lib/stores.ts) and Workstream uuids are unconfirmed. Each null reads as "no
+  // data" for that vendor until its id is filled in here.
+  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "killeen",      netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
+  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "temple",       netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
+  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "pflugerville", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
+  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "cibolo",       netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
+  // The two San Antonio stores, told apart by PAR history: 62804 has no orders
+  // before April 2024, when the Windcrest store (7304 N I-35) opened; 62803 is
+  // the 2022 Alamo Ranch Pkwy store.
+  { storeId: "62803", name: "Alamo Ranch",  state: "TX", berryFragment: "alamo ranch",  netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
+  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "windcrest",    netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
 ];
 
 /**
@@ -133,7 +150,9 @@ export const WORKSTREAM_ONLY_LOCATIONS = [
 export const BONUS_STORE_IDS: string[] = BONUS_STORES.map((s) => s.storeId);
 
 const BY_ID = new Map(BONUS_STORES.map((s) => [s.storeId, s]));
-const BY_NETCHEF = new Map(BONUS_STORES.map((s) => [s.netchefLocationId, s]));
+const BY_NETCHEF = new Map(
+  BONUS_STORES.filter((s) => s.netchefLocationId !== null).map((s) => [s.netchefLocationId as number, s]),
+);
 
 export function storeById(storeId: string): BonusStore | null {
   return BY_ID.get(storeId) ?? null;

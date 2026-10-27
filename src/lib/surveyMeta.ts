@@ -16,6 +16,7 @@ export const LOWER_IS_BETTER = /experienced problem/i;
 
 export const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
 export const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
+export const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo Ranch"];
 
 export const STORE_LABELS: Record<string, string> = {
   "28901": "Columbia",
@@ -31,6 +32,12 @@ export const STORE_LABELS: Record<string, string> = {
   "57005": "Jefferson",
   "57006": "Hillcrest",
   "57007": "Beach",
+  "53003": "Killeen",
+  "53004": "Temple",
+  "53005": "Pflugerville",
+  "62802": "Cibolo",
+  "62803": "Alamo Ranch",
+  "62804": "Windcrest",
 };
 
 // Canonical per-store colors — the single source for the SMG, Drive-Thru trend and
@@ -50,6 +57,12 @@ export const STORE_COLOR: Record<string, string> = {
   "Chesapeake":     "#0284c7",
   "Hillcrest":      "#9333ea",
   "Beach":          "#0d9488",
+  "Killeen":        "#4f46e5",
+  "Temple":         "#ca8a04",
+  "Pflugerville":   "#c026d3",
+  "Cibolo":         "#059669",
+  "Windcrest":      "#b45309",
+  "Alamo Ranch":    "#475569",
 };
 
 export function prettyUnit(name: string, key: string): string {
@@ -80,10 +93,11 @@ export function formatSyncStamp(iso: string | null | undefined): string {
   });
 }
 
-export function marketOf(key: string, name: string): "TN" | "VA" | null {
+export function marketOf(key: string, name: string): "TN" | "VA" | "TX" | null {
   const label = prettyUnit(name, key);
   if (TN_STORES.includes(label)) return "TN";
   if (VA_STORES.includes(label)) return "VA";
+  if (TX_STORES.includes(label)) return "TX";
   return null;
 }
 

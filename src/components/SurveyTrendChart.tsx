@@ -9,6 +9,7 @@ import {
   STORE_COLOR,
   TN_STORES,
   VA_STORES,
+  TX_STORES,
   marketOf,
   metricRank,
   pooledScore,
@@ -58,16 +59,17 @@ const GRAIN_OPTIONS: { key: Grain; label: string }[] = [
 /**
  * Market rollups, styled exactly as on the Drive-Thru trend charts: aggregates
  * rather than stores, so they stay out of the categorical store palette instead
- * of claiming extra hues — one neutral ink, TN solid and VA dashed.
+ * of claiming extra hues — one neutral ink, TN solid, VA dashed and TX dotted.
  *
  * Their dash is fixed rather than following the selected metric. There are only
- * two of them and they share a color, so dash is the only thing telling them
+ * three of them and they share a color, so dash is the only thing telling them
  * apart; letting a metric override it would merge them into one line.
  */
 const SUMMARY_COLOR = "#111827";
 const SUMMARY_SERIES = [
   { key: "TN", dash: undefined as string | undefined },
   { key: "VA", dash: "6 4" as string | undefined },
+  { key: "TX", dash: "2 3" as string | undefined },
 ] as const;
 
 const SUMMARY_KEYS = SUMMARY_SERIES.map((s) => s.key) as readonly string[];
@@ -107,7 +109,7 @@ type AnyRow = {
 };
 
 /**
- * One chart point: every store's score plus the TN/VA rollups.
+ * One chart point: every store's score plus the TN/VA/TX rollups.
  *
  * `published` is SMG's region-manager rows for the same window, used for the
  * market lines wherever one covers exactly that market's stores — the table
@@ -116,7 +118,7 @@ type AnyRow = {
  */
 function buildPoint(label: string, rows: AnyRow[], published: AnyRow[] = []): Point {
   const series: Record<string, Record<string, number | null>> = {};
-  const market: Record<string, Record<string, Cell[]>> = { TN: {}, VA: {} };
+  const market: Record<string, Record<string, Cell[]>> = { TN: {}, VA: {}, TX: {} };
 
   for (const r of rows) {
     if (r.unitKey === COMBINED_KEY) continue;
@@ -150,7 +152,7 @@ function buildPoint(label: string, rows: AnyRow[], published: AnyRow[] = []): Po
     }
     let total = 0;
     for (const [store, n] of countByStore) {
-      const list = key === "TN" ? TN_STORES : VA_STORES;
+      const list = key === "TN" ? TN_STORES : key === "VA" ? VA_STORES : TX_STORES;
       if (list.includes(store)) total += n;
     }
     out[SURVEY_COUNT] = total || null;
@@ -215,12 +217,14 @@ export default function SurveyTrendChart({
   dateBasis = "visit",
   showTN = true,
   showVA = true,
+  showTX = true,
 }: {
   dateBasis?: string;
   /** Driven by the market checkboxes in the page ribbon, so the chart shows the
    *  same markets as the table above it. */
   showTN?: boolean;
   showVA?: boolean;
+  showTX?: boolean;
 }) {
   const [grain, setGrain] = useState<Grain>("period");
   // Each grain is fetched once and kept, so flipping between Weeks and Periods
@@ -381,18 +385,21 @@ export default function SurveyTrendChart({
   const sections = useMemo(() => {
     const tn: string[] = [];
     const va: string[] = [];
+    const tx: string[] = [];
     const other: string[] = [];
     for (const n of storeNames) {
       if (TN_STORES.includes(n)) tn.push(n);
       else if (VA_STORES.includes(n)) va.push(n);
+      else if (TX_STORES.includes(n)) tx.push(n);
       else other.push(n);
     }
     return [
       { key: "TN", stores: tn, rollup: "TN" as string | null, shown: showTN },
       { key: "VA", stores: va, rollup: "VA" as string | null, shown: showVA },
+      { key: "TX", stores: tx, rollup: "TX" as string | null, shown: showTX },
       { key: "Other", stores: other, rollup: null as string | null, shown: true },
     ].filter((s) => s.shown && s.stores.length > 0);
-  }, [storeNames, showTN, showVA]);
+  }, [storeNames, showTN, showVA, showTX]);
 
   /** Only what the visible sections contribute — drives the lines and the y-axis. */
   const activeStores = useMemo(() => sections.flatMap((s) => s.stores), [sections]);

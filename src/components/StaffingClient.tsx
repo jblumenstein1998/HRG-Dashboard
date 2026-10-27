@@ -804,9 +804,11 @@ function OpenCloseChart({ data, side }: { data: OpenCloseReport; side: "open" | 
   const markets = useMemo(() => {
     const tn = data.stores.filter((s) => s.state === "TN").map((s) => s.storeName);
     const va = data.stores.filter((s) => s.state === "VA").map((s) => s.storeName);
+    const tx = data.stores.filter((s) => s.state === "TX").map((s) => s.storeName);
     return [
       { key: "TN", stores: tn },
       { key: "VA", stores: va },
+      { key: "TX", stores: tx },
     ];
   }, [data]);
 
@@ -947,11 +949,12 @@ function OvertimeChart({ data, grain }: { data: HoursReport; grain: string }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const markets = useMemo(() => {
-    const of = (state: "TN" | "VA") =>
+    const of = (state: "TN" | "VA" | "TX") =>
       data.stores.filter((s) => s.state === state).map((s) => s.storeName);
     return [
       { key: "TN", stores: of("TN") },
       { key: "VA", stores: of("VA") },
+      { key: "TX", stores: of("TX") },
     ];
   }, [data]);
 

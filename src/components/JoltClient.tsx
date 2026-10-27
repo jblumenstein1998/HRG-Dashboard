@@ -9,22 +9,23 @@ import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 
 // Store order matches lib/stores.ts, so this tab reads in the same sequence as
-// the rest of the dashboard. Jolt runs at eight of the thirteen stores; the other
-// five still get a section, so the page is a roster of HRG rather than of Jolt.
+// the rest of the dashboard. Jolt runs at eight of the nineteen stores; the other
+// eleven still get a section, so the page is a roster of HRG rather than of Jolt.
 const TN_STORES = ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield", "Portland"];
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
+const TX_STORES = ["Killeen", "Temple", "Pflugerville", "Cibolo", "Windcrest", "Alamo Ranch"];
 
 // Jolt has no URL for a single list instance — /review/review/review?id=… just
 // bounces away — so every list links to Browse Lists, where a person filters
 // down to the one they came looking for.
 const JOLT_BROWSE_LISTS = "https://app.joltup.com/review/review/listResultsReporting/lists";
 
-/** Stores keep their own clock: TN is Central, VA is Eastern. */
+/** Stores keep their own clock: TN and TX are Central, VA is Eastern. */
 const STORE_TZ: Record<string, string> = {};
-for (const s of ["Columbia", "Spring Hill", "Brentwood", "White House", "Springfield", "Portland"]) {
+for (const s of [...TN_STORES, ...TX_STORES]) {
   STORE_TZ[s] = "America/Chicago";
 }
-for (const s of ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"]) {
+for (const s of VA_STORES) {
   STORE_TZ[s] = "America/New_York";
 }
 const tzFor = (store: string) => STORE_TZ[store] ?? "America/Chicago";
@@ -903,14 +904,14 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
   const byStore = useMemo(() => new Map((report?.stores ?? []).map(s => [s.store, s])), [report]);
 
   const visible = useMemo(() => {
-    const names = [...TN_STORES, ...VA_STORES].filter(name => inFilter(storeFilter.allowed, name));
+    const names = [...TN_STORES, ...VA_STORES, ...TX_STORES].filter(name => inFilter(storeFilter.allowed, name));
     return names.map(store => ({ store, data: byStore.get(store) ?? null }));
   }, [byStore, storeFilter.allowed]);
 
   // The To Do band has its own rows, so it filters by name rather than by the
   // report's per-store entries.
   const visibleStores = useMemo(
-    () => new Set([...TN_STORES, ...VA_STORES].filter(name => inFilter(storeFilter.allowed, name))),
+    () => new Set([...TN_STORES, ...VA_STORES, ...TX_STORES].filter(name => inFilter(storeFilter.allowed, name))),
     [storeFilter.allowed],
   );
 

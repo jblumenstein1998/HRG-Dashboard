@@ -6,7 +6,7 @@ import TabOptions from "@/components/TabOptions";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
-import { TN_STORES, VA_STORES } from "@/lib/surveyMeta";
+import { TN_STORES, VA_STORES, TX_STORES } from "@/lib/surveyMeta";
 
 /**
  * Zaxby's University — training compliance out of Schoox.
@@ -125,19 +125,20 @@ function fmtFetched(at: number): string {
 
 // ── Store ordering and grouping ───────────────────────────────────────────────
 
-function marketOf(label: string): "TN" | "VA" | null {
+function marketOf(label: string): "TN" | "VA" | "TX" | null {
   if (TN_STORES.includes(label)) return "TN";
   if (VA_STORES.includes(label)) return "VA";
+  if (TX_STORES.includes(label)) return "TX";
   return null;
 }
 
 /**
- * TN then VA, in the order every other tab lists them. Stores Schoox knows
+ * TN, VA then TX, in the order every other tab lists them. Stores Schoox knows
  * about but the shared list doesn't — a new opening, before surveyMeta catches
  * up — fall to the end rather than disappearing.
  */
 function sortStores<T extends { label: string }>(stores: T[]): T[] {
-  const order = [...TN_STORES, ...VA_STORES];
+  const order = [...TN_STORES, ...VA_STORES, ...TX_STORES];
   return [...stores].sort((a, b) => {
     const ia = order.indexOf(a.label);
     const ib = order.indexOf(b.label);

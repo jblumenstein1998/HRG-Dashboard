@@ -266,6 +266,11 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
                   <option key={s.storeId} value={s.storeId}>{s.name}</option>
                 ))}
               </optgroup>
+              <optgroup label="Texas">
+                {BONUS_STORES.filter((s) => s.state === "TX").map((s) => (
+                  <option key={s.storeId} value={s.storeId}>{s.name}</option>
+                ))}
+              </optgroup>
             </select>
 
             <select

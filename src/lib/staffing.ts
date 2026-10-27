@@ -120,7 +120,7 @@ export type WorkstreamFacts = {
 export type StoreRoster = {
   storeId: string;
   storeName: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   timeZone: string;
   /** The query instant as this store's wall clock reads it. */
   localTime: string;
@@ -528,7 +528,7 @@ export type StoreWeekHours = {
 export type StoreHours = {
   storeId: string;
   storeName: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   weeks: StoreWeekHours[];
   error: string | null;
 };
@@ -965,7 +965,7 @@ export type MissedPunch = {
 export type StoreMissedPunches = {
   storeId: string;
   storeName: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   rows: MissedPunch[];
   error: string | null;
 };
@@ -1055,7 +1055,7 @@ export type OpenCloseCell = {
 export type StoreOpenClose = {
   storeId: string;
   storeName: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   open: OpenCloseCell[];
   close: OpenCloseCell[];
   error: string | null;
