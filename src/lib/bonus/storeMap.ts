@@ -104,10 +104,8 @@ export const BONUS_STORES: BonusStore[] = [
   { storeId: "42601", name: "White House", state: "TN", berryFragment: "800 hwy. 76",             netchefLocationId: 1002, smgUnitKey: "42601", workstreamLocationUuid: "4a386af2-6f69-43ac-a8e0-cb89f61a8914" },
   { storeId: "56301", name: "Brentwood",   state: "TN", berryFragment: "471 old hickory",         netchefLocationId: 425,  smgUnitKey: "56301", workstreamLocationUuid: "9b60d4a8-1a7e-4762-946d-94d716a5cf05" },
   { storeId: "61401", name: "Spring Hill", state: "TN", berryFragment: "4882 port royal",         netchefLocationId: 632,  smgUnitKey: "61401", workstreamLocationUuid: "4f95fa9f-247c-4987-8f90-fa39f9eadf87" },
-  // Opened 2026. BerryAI has no branch for it yet (city as the fragment, see
-  // lib/stores.ts) and PAR calls fail with a named error until PAR_TOKEN_75075
-  // is set — both read as "no data", never as zero.
-  { storeId: "75075", name: "Portland",    state: "TN", berryFragment: "portland",                netchefLocationId: 1303, smgUnitKey: "75075", workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
+  // Opened 2026-10-05.
+  { storeId: "75075", name: "Portland",    state: "TN", berryFragment: "409 hwy 52",              netchefLocationId: 1303, smgUnitKey: "75075", workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
   // Virginia
   { storeId: "57001", name: "College",     state: "VA", berryFragment: "6120 college",            netchefLocationId: 465,  smgUnitKey: "57001", workstreamLocationUuid: "741c82a9-3257-418b-a9e2-47549abba51f" },
   { storeId: "57002", name: "Hampton",     state: "VA", berryFragment: "2201 todds",              netchefLocationId: 901,  smgUnitKey: "57002", workstreamLocationUuid: "c27cebfa-4993-4305-8100-62eeb7911432" },
@@ -118,10 +116,9 @@ export const BONUS_STORES: BonusStore[] = [
   // right and the word is wrong; this is the one the evidence saved.
   { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006", workstreamLocationUuid: "51a81a04-d1e9-4746-9520-c92bbdd11bdc" },
   { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007", workstreamLocationUuid: "ab838180-2577-48d7-a77c-c2875a7fe625" },
-  // Texas — acquired October 2026. PAR is connected; Net-Chef doesn't list them
-  // for HRG's login yet, BerryAI hasn't onboarded them (city fragments, see
-  // lib/stores.ts) and Workstream uuids are unconfirmed. Each null reads as "no
-  // data" for that vendor until its id is filled in here.
+  // Texas — acquired October 2026. PAR and BerryAI are connected; Net-Chef
+  // doesn't list them for HRG's login yet and Workstream uuids are unconfirmed.
+  // Each null reads as "no data" for that vendor until its id is filled in here.
   //
   //   53003 Killeen       2150 S Clear Creek Rd, Killeen, TX 76549
   //   53004 Temple        2002 S 31st St, Temple, TX 76504
@@ -129,12 +126,12 @@ export const BONUS_STORES: BonusStore[] = [
   //   62802 Cibolo        176 W Borgfeld Rd, Cibolo, TX 78108
   //   62803 Alamo         11903 Alamo Ranch Pkwy, San Antonio, TX 78253
   //   62804 Windcrest     7304 N Interstate 35, Windcrest, TX 78218
-  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "killeen",      netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
-  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "temple",       netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
-  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "pflugerville", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
-  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "cibolo",       netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
-  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "alamo ranch",  netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
-  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "windcrest",    netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
+  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "2150 s. clear creek",     netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
+  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "2002 s. 31st",            netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
+  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "1301 farm to market 685", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
+  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "176 borgfeld",            netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
+  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "11903 alamo ranch",       netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
+  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "7304 n. interstate 35",   netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
 ];
 
 /**
