@@ -37,9 +37,10 @@ import type { Tab } from "@/lib/users/tabs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import RetentionPanel from "@/components/RetentionPanel";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
-import { currentPeriodLabel } from "@/lib/bonus/periods";
-import { OVERRIDE_PREFIX, categoryOverrideId } from "@/lib/bonus/rules";
+import { currentPeriodLabel, parsePeriodLabel } from "@/lib/bonus/periods";
+import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM, categoryOverrideId } from "@/lib/bonus/rules";
 import {
   POSITION_LABELS,
   type CategoryResult, type ConditionResult, type ConditionUnit, type PositionId, type PositionResult,
@@ -344,6 +345,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
                 values={values}
                 inputsLoading={inputsLoading}
                 locked={locked}
+                period={period}
+                storeId={storeId}
+                onRescored={() => setRefreshKey((k) => k + 1)}
                 onChange={(id, v) => setEdits((prev) => ({ ...prev, [id]: v }))}
               />
             ))}
@@ -397,13 +401,16 @@ function shortDate(iso: string): string {
 // ── One position, with its categories and their entry fields ─────────────────
 
 function PositionScorecard({
-  positionId, result, values, inputsLoading, locked, onChange,
+  positionId, result, values, inputsLoading, locked, period, storeId, onRescored, onChange,
 }: {
   positionId: PositionId;
   result: PositionResult | null;
   values: Record<string, string>;
   inputsLoading: boolean;
   locked: boolean;
+  period: string;
+  storeId: string;
+  onRescored: () => void;
   onChange: (criterionId: string, value: string) => void;
 }) {
   // Closed to start, like the categories inside them. The page opens as the
@@ -449,6 +456,9 @@ function PositionScorecard({
                 positionId={positionId}
                 values={values}
                 locked={locked}
+                period={period}
+                storeId={storeId}
+                onRescored={onRescored}
                 onChange={onChange}
               />
             ))}
@@ -460,12 +470,15 @@ function PositionScorecard({
 }
 
 function CategoryCard({
-  cat, positionId, values, locked, onChange,
+  cat, positionId, values, locked, period, storeId, onRescored, onChange,
 }: {
   cat: CategoryResult;
   positionId: PositionId;
   values: Record<string, string>;
   locked: boolean;
+  period: string;
+  storeId: string;
+  onRescored: () => void;
   onChange: (criterionId: string, value: string) => void;
 }) {
   // Categories start closed. Six positions of several categories each is a very
@@ -610,29 +623,40 @@ function CategoryCard({
                 badge={note}
                 values={values}
                 locked={locked}
+                period={period}
                 onChange={onChange}
               />
             ))}
           </tbody>
         </table>
       )}
+      {open && positionId === "training" && cat.category.id === "retention" &&
+        (parsePeriodLabel(period)?.period ?? 0) >= RETENTION_AUTO_FROM && (
+        <RetentionPanel period={period} storeId={storeId} locked={locked} onRescored={onRescored} />
+      )}
     </div>
   );
 }
 
 function ConditionRow({
-  r, kind, badge, values, locked, onChange,
+  r, kind, badge, values, locked, period, onChange,
 }: {
   r: ConditionResult;
   kind: "condition" | "disqualifier" | "multiplier";
   badge?: string;
   values: Record<string, string>;
   locked: boolean;
+  period: string;
   onChange: (criterionId: string, value: string) => void;
 }) {
   const unit = r.condition.unit;
   const tone = STATUS_TONE[r.status];
-  const editable = r.condition.source === "manual" && !locked;
+  // A condition computed only from a given period on is typed in before it.
+  const autoFrom = r.condition.autoFromPeriod;
+  const enteredHere =
+    r.condition.source === "manual" ||
+    (autoFrom !== undefined && (parsePeriodLabel(period)?.period ?? 0) < autoFrom);
+  const editable = enteredHere && !locked;
 
   // Compared as rendered text rather than as gates: a two-sided "between" and
   // a one-sided gate can print the same thing, and what matters here is only
@@ -644,7 +668,7 @@ function ConditionRow({
   // Results are corrected on the category now, not here. The per-metric
   // mechanism still exists in the engine, so a value entered before the switch
   // would still apply — surfaced, rather than left to work invisibly.
-  const legacyOverrideId = r.condition.source === "auto" ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
+  const legacyOverrideId = !enteredHere ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
   const overridden = legacyOverrideId ? (values[legacyOverrideId] ?? "").trim() !== "" : false;
 
   return (
@@ -655,7 +679,7 @@ function ConditionRow({
           {kind === "disqualifier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-400">disqualifier</span>}
           {kind === "multiplier" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-green-600">multiplier {badge}</span>}
           {r.condition.advisory && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-400">not scored</span>}
-          {r.condition.source === "manual" && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-blue-400">entered</span>}
+          {enteredHere && <span className="ml-1.5 text-[10px] uppercase tracking-wide text-blue-400">entered</span>}
           {r.condition.note && (
             <div className="text-[10px] leading-snug text-gray-400 max-w-xl">{r.condition.note}</div>
           )}

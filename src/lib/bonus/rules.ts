@@ -33,6 +33,13 @@
 import { ZCASE_GOALS } from "./goals";
 import type { Condition, PositionRules, PositionId } from "./types";
 
+/**
+ * First fiscal period new-hire retention is computed for (workstreamRetention.ts).
+ * Earlier periods are entered by hand: retention needs our synced Workstream copy,
+ * which remembers a leaver's store, and its first sync was 2026-10-04.
+ */
+export const RETENTION_AUTO_FROM = 11;
+
 // ── Shared conditions ────────────────────────────────────────────────────────
 
 /**
@@ -738,9 +745,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_30",
           label: "30-day new hire retention",
           metric: "t_retention_30",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 70 },
           target: { cmp: "gte", value: 80 },
         },
@@ -748,9 +756,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_60",
           label: "60-day new hire retention",
           metric: "t_retention_60",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 60 },
           target: { cmp: "gte", value: 70 },
         },
@@ -758,9 +767,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_90",
           label: "90-day new hire retention",
           metric: "t_retention_90",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 60 },
           target: { cmp: "gte", value: 70 },
         },
@@ -776,9 +786,10 @@ const TRAINING: PositionRules = {
               id: "t_retention_90_95",
               label: "90-day retention ≥95%",
               metric: "t_retention_90",
-              source: "manual",
+              source: "auto",
+              autoFromPeriod: RETENTION_AUTO_FROM,
               unit: "percent",
-              grain: "entered",
+              grain: "period",
               threshold: { cmp: "gte", value: 95 },
               target: { cmp: "gte", value: 95 },
             },
@@ -793,9 +804,10 @@ const TRAINING: PositionRules = {
               id: "t_retention_60_95",
               label: "60-day retention ≥95%",
               metric: "t_retention_60",
-              source: "manual",
+              source: "auto",
+              autoFromPeriod: RETENTION_AUTO_FROM,
               unit: "percent",
-              grain: "entered",
+              grain: "period",
               threshold: { cmp: "gte", value: 95 },
               target: { cmp: "gte", value: 95 },
             },

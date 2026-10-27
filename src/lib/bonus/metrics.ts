@@ -30,8 +30,9 @@ import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
 import { fetchCompletionByLocation } from "../jolt";
 import { fetchZuReport, fetchZuTestReport, SERVSAFE_MANAGER_TEST_ID } from "../schoox";
+import { getRetention, retentionMetrics, RETENTION_METRIC_IDS } from "../workstreamRetention";
 import { BONUS_ZCASE_TYPES } from "./goals";
-import { BONUS_RULES } from "./rules";
+import { BONUS_RULES, RETENTION_AUTO_FROM } from "./rules";
 import { passesGate, resolveGates, type MetricValues } from "./engine";
 import type { Condition } from "./types";
 
@@ -111,6 +112,11 @@ export type ResolveDiagnostics = {
   joltStores: number;
   /** Stores the ZU snapshot resolved for. */
   zuStores: number;
+  /**
+   * Metrics this run answered for definitively, so an absent value means
+   * "pending on purpose" and must not be carried forward from an earlier run.
+   */
+  authoritative: string[];
   warnings: string[];
 };
 
@@ -401,9 +407,40 @@ export async function resolvePeriodMetrics(
     warnings.push(`ZU fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // ── New-hire retention (Workstream + PAR) ──────────────────────────────────
+  // Computed from the first period our synced Workstream copy fully covers;
+  // earlier periods are entered by hand (autoFromPeriod in rules.ts).
+  //
+  // Unlike every other source here, an absent retention value after a good run
+  // is deliberate — somebody in the cohort still has to be checked against PAR
+  // — so the metrics are reported as authoritative and compute.ts never papers
+  // over the gap with the previous run's figure.
+  const authoritative: string[] = [];
+  if (window.period.period >= RETENTION_AUTO_FROM) {
+    try {
+      const report = await getRetention(window.start, window.end);
+      for (const [storeId, values] of retentionMetrics(report)) {
+        const v = byStore.get(storeId);
+        if (!v) continue;
+        for (const [key, value] of values) put(v, key, value);
+      }
+      authoritative.push(...RETENTION_METRIC_IDS);
+      const pending = report.stores.filter((s) => Object.values(s.byDay).some((d) => d.unverified > 0));
+      if (pending.length > 0) {
+        warnings.push(
+          `Retention pending review at ${pending.map((s) => s.storeName).join(", ")} — ` +
+            `new hires with no matching PAR record`,
+        );
+      }
+    } catch (err) {
+      warnings.push(`Retention failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   return {
     byStore,
     diagnostics: {
+      authoritative,
       weeks: weeks.length,
       zuStores,
       smgPeriodRows: periodRows.length,
