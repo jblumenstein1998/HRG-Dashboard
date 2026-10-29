@@ -126,6 +126,20 @@ async function createBonusSchema(): Promise<void> {
       PRIMARY KEY (store_id, period_label)
     )
   `;
+  // Who held each position on a store's scorecard for a period. See
+  // assignments.ts — a period with no rows reads the previous period's.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bonus_assignments (
+      store_id        TEXT        NOT NULL,
+      period_label    TEXT        NOT NULL,
+      position_id     TEXT        NOT NULL,
+      name            TEXT        NOT NULL,
+      workstream_uuid TEXT,
+      changed_by      TEXT,
+      changed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (store_id, period_label, position_id)
+    )
+  `;
   await sql`
     CREATE TABLE IF NOT EXISTS netchef_costs (
       store_id     TEXT        NOT NULL,

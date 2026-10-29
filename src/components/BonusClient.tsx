@@ -39,6 +39,7 @@ import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import RetentionPanel from "@/components/RetentionPanel";
 import InventoryCountsPanel from "@/components/InventoryCountsPanel";
+import BonusTeamCard, { type Assignment } from "@/components/BonusTeamCard";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel, parsePeriodLabel } from "@/lib/bonus/periods";
 import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM, categoryOverrideId } from "@/lib/bonus/rules";
@@ -212,6 +213,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
   const locked = data?.locked ?? false;
   const storeLocked = !isOpen || opened.locked;
   const readOnly = locked || storeLocked;
+
+  // Who holds each position, owned by the Team card and shown on each header.
+  const [team, setTeam] = useState<Map<PositionId, Assignment>>(() => new Map());
 
   const byPosition = useMemo(() => {
     const map = new Map<PositionId, StoredResult>();
@@ -506,6 +510,14 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
           <div className="rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-700 px-3 py-2">{saveStatus}</div>
         )}
 
+        <BonusTeamCard
+          period={period}
+          storeId={storeId}
+          storeName={store.name}
+          payLocked={locked || opened.payLocked}
+          onAssignments={setTeam}
+        />
+
         {!loading && scored === 0 ? (
           <div className="bg-white rounded-xl border border-gray-200 px-4 py-10 text-center text-sm text-gray-400">
             Nothing computed for {store.name} in {period} yet — the nightly rollup hasn&apos;t run for this period.
@@ -518,6 +530,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
                 // criterion switched to manual reset along with the entries.
                 key={`${positionId}|${openKey}`}
                 positionId={positionId}
+                holder={team.get(positionId)?.name ?? null}
                 result={byPosition.get(positionId)?.detail ?? null}
                 values={values}
                 inputsLoading={inputsLoading}
@@ -588,10 +601,11 @@ function shortDate(iso: string): string {
 // ── One position, with its categories and their entry fields ─────────────────
 
 function PositionScorecard({
-  positionId, result, values, inputsLoading, locked, period, storeId, onRescored, onChange,
+  positionId, holder, result, values, inputsLoading, locked, period, storeId, onRescored, onChange,
   openSections, onToggleSection,
 }: {
   positionId: PositionId;
+  holder: string | null;
   result: PositionResult | null;
   values: Record<string, string>;
   inputsLoading: boolean;
@@ -618,6 +632,7 @@ function PositionScorecard({
         className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${TONE_BG[tone]} ${result ? "hover:brightness-95" : ""} transition disabled:cursor-default`}
       >
         <span className="text-sm font-semibold text-gray-900">{POSITION_LABELS[positionId]}</span>
+        {holder && <span className="text-sm text-gray-600">· {holder}</span>}
         {result?.kickerFired && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-900 text-white">×1.25 kicker</span>
         )}
