@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, Fragment } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Customized, LabelList, usePlotArea, useXAxisTicks, useYAxisScale } from "recharts";
 import TabOptions from "@/components/TabOptions";
@@ -15,6 +15,10 @@ import { BONUS_STORES } from "@/lib/bonus/storeMap";
 // location can't be left off this tab while every other tab picks it up.
 const LOCATION_IDS = BONUS_STORES.map((s) => s.netchefLocationId);
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
+
+/** Net-Chef vs PAR sales gap that triggers a recheck — see the sales cross-check. */
+const SALES_GAP_PCT = 3;
+const MAX_RECHECKS = 2;
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 // Weekly sales are pulled live from PAR (see /api/par/weekly-sales, salesByLocationName)
@@ -2186,6 +2190,70 @@ export default function FoodCostClient({
   // table that shows them so the range only gets fetched once.
   const salesRange = reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null;
   const salesByName = useSalesForRange(salesRange);
+
+  // ── Sales cross-check ──────────────────────────────────────────────────────
+  // Net-Chef's own sales figure (salesBase) and PAR's net sales describe the
+  // same store and the same days, so they should agree: across all 13 stores
+  // and five windows from one week to YTD the gap was 0.2% typical, 1.28% at
+  // worst. An answer for the wrong window — a two-week cost once appeared under
+  // a one-week heading — or the wrong store is far outside that. A store more
+  // than SALES_GAP_PCT apart is re-asked fresh from Net-Chef, up to
+  // MAX_RECHECKS times, then flagged on screen rather than retried forever:
+  // a real gap (a day missing from one system) would never converge.
+  const rangeKey = reportMeta ? `${reportMeta.startDate}|${reportMeta.endDate}` : "";
+  const [rechecks, setRechecks] = useState<{ key: string; tries: Record<number, number> }>({ key: "", tries: {} });
+  const recheckTries = useMemo(() => (rechecks.key === rangeKey ? rechecks.tries : {}), [rechecks, rangeKey]);
+  const recheckInFlight = useRef(new Set<string>());
+  const currentRange = useRef(rangeKey);
+  useEffect(() => { currentRange.current = rangeKey; }, [rangeKey]);
+
+  const salesGaps = useMemo(
+    () => loading || Object.keys(salesByName).length === 0
+      ? []
+      : Object.values(locMap).flatMap(l => {
+          const par = salesByName[l.locationName];
+          if (l.salesBase == null || !par) return [];
+          const pct = ((l.salesBase - par) / par) * 100;
+          return Math.abs(pct) > SALES_GAP_PCT ? [{ id: l.locationId, name: l.locationName, nc: l.salesBase, par, pct }] : [];
+        }),
+    [loading, salesByName, locMap],
+  );
+
+  useEffect(() => {
+    if (!rangeKey) return;
+    const [start, end] = rangeKey.split("|");
+    for (const g of salesGaps) {
+      const n = recheckTries[g.id] ?? 0;
+      const flightKey = `${rangeKey}|${g.id}|${n}`;
+      if (n >= MAX_RECHECKS || recheckInFlight.current.has(flightKey)) continue;
+      recheckInFlight.current.add(flightKey);
+      fetch(`/api/netchef/data?start=${start}&end=${end}&locationId=${g.id}&fresh=1`)
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((json: LocationData | null) => {
+          // The range may have changed while this was in flight; its answer
+          // must not land in someone else's table.
+          if (currentRange.current !== rangeKey) return;
+          if (json) setLocMap(prev => ({ ...prev, [g.id]: json }));
+          setRechecks(prev => {
+            const t = prev.key === rangeKey ? prev.tries : {};
+            return { key: rangeKey, tries: { ...t, [g.id]: (t[g.id] ?? 0) + 1 } };
+          });
+        });
+    }
+  }, [rangeKey, salesGaps, recheckTries]);
+
+  // Quiet by design (Josh, 2026-10-28): nothing on screen. A store still apart
+  // after its rechecks is only noted in the browser console.
+  useEffect(() => {
+    for (const g of salesGaps) {
+      if ((recheckTries[g.id] ?? 0) < MAX_RECHECKS) continue;
+      console.warn(
+        `[FoodCost] ${g.name}: Net-Chef sales ${fmtDollars(g.nc)} vs PAR ${fmtDollars(g.par)} ` +
+          `(${g.pct.toFixed(2)}%) after ${MAX_RECHECKS} fresh rechecks, ${rangeKey}`,
+      );
+    }
+  }, [salesGaps, recheckTries, rangeKey]);
 
   return (
     <div className="min-h-screen bg-gray-50">
