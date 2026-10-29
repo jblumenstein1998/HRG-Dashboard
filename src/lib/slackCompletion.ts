@@ -21,7 +21,7 @@ export type StoreSlackReport = {
 };
 
 /** A connection that dropped before any answer — worth another try. */
-function isTransient(err: unknown): boolean {
+export function isTransient(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|Error connecting to database/i.test(msg);
 }
@@ -35,7 +35,7 @@ function isTransient(err: unknown): boolean {
  * came back "fetch failed", a different handful each time, from both Slack
  * and Neon. Retries plus loading a few stores at a time (mapLimit) cleared it.
  */
-async function labelled<T>(source: string, run: () => Promise<T>): Promise<T> {
+export async function labelled<T>(source: string, run: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await run();

@@ -33,7 +33,7 @@ import { parseReportFields, type ReportFields } from "./slackFields";
 import {
   addDays, fetchChannelHistory, localMidnight, placeMessage, type SlackMessage, type SlackSlot,
 } from "./slackReports";
-import { mapLimit, STORE_CONCURRENCY } from "./slackCompletion";
+import { labelled, mapLimit, STORE_CONCURRENCY } from "./slackCompletion";
 import { saveChecks } from "./slackAccuracyStore";
 
 export type FieldKey =
@@ -99,15 +99,6 @@ function clockSecs(v: string | null | undefined): number | null {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** One fetch per (kind, day), shared by every report that needs it. */
-function memo<T>(fn: (day: string) => Promise<T>): (day: string) => Promise<T | null> {
-  const cache = new Map<string, Promise<T | null>>();
-  return (day) => {
-    if (!cache.has(day)) cache.set(day, fn(day).catch(() => null));
-    return cache.get(day)!;
-  };
-}
-
 function check(
   out: FieldCheck[], key: FieldKey, label: string, unit: FieldCheck["unit"],
   posted: number | null, actual: number | null, tolerance: number,
@@ -130,6 +121,11 @@ function check(
  * Each day in the range costs a PAR orders pull (14 cold days took 72s), so
  * this runs nightly for the days just gone (runNightlyChecks, stored in
  * slack_report_checks) and live only for today.
+ *
+ * `strict` is for those stored checks: a source that still fails after its
+ * retries throws, so the store's day is reported failed and left to re-run
+ * instead of being saved with "couldn't check" in place of real numbers. The
+ * live check for today is lenient and shows what it could get.
  */
 export async function checkStoreReports(
   store: BonusStore,
@@ -137,29 +133,52 @@ export async function checkStoreReports(
   messages: SlackMessage[],
   start: string,
   end: string,
+  opts: { strict?: boolean } = {},
 ): Promise<Map<string, ReportCheck>> {
   const placed = messages
     .map((m) => ({ m, p: placeMessage(m, timeZone) }))
     .filter((x): x is { m: SlackMessage; p: NonNullable<typeof x.p> } => !!x.p && x.p.date >= start && x.p.date <= end);
   if (placed.length === 0) return new Map();
 
+  /** One fetch per (source, day), shared by every report that needs it, retried on a dropped connection. */
+  function memo<T>(source: string, fn: (day: string) => Promise<T>): (day: string) => Promise<T | null> {
+    const cache = new Map<string, Promise<T | null>>();
+    return (day) => {
+      if (!cache.has(day)) {
+        cache.set(day, labelled(source, () => fn(day)).catch((err) => {
+          if (opts.strict) throw err;
+          return null;
+        }));
+      }
+      return cache.get(day)!;
+    };
+  }
+
   // ── System figures, fetched once per day ────────────────────────────────
-  const totals = memo((day) => getTotalsForRange(store.storeId, day, day));
-  const priorTotals = memo((day) => {
+  const totals = memo("PAR totals", (day) => getTotalsForRange(store.storeId, day, day));
+  const priorTotals = memo("PAR prior year", (day) => {
     const py = getPriorYearRange(day, day);
     return getTotalsForRange(store.storeId, py.start, py.end);
   });
-  const hourly = memo((day) => getHourlyBreakdown(store.storeId, day));
-  const cash = memo((day) => getCashSummary(store.storeId, day));
-  const jolt = memo(async (day) => {
+  const hourly = memo("PAR hourly", async (day) => {
+    const buckets = await getHourlyBreakdown(store.storeId, day);
+    // getHourlyBreakdown answers a failed orders pull with empty hours; a day
+    // with reports in it and no sales at all is that, not a closed store.
+    if (!buckets.some((b) => b.netSales > 0)) throw new Error(`fetch failed (no orders for ${day})`);
+    return buckets;
+  });
+  const cash = memo("PAR tills", (day) => getCashSummary(store.storeId, day));
+  const jolt = memo("Jolt", async (day) => {
     const report = await fetchCompletionByLocation(day, day);
     return report.locations.find((l) => l.store === store.name)?.completePct ?? null;
   });
-  let berryToken: Promise<string | null> | null = null;
-  const drive = memo(async (day): Promise<DriveThruPayload["stores"][number] | null> => {
-    berryToken ??= loginBerryService().catch(() => null);
-    const token = await berryToken;
-    if (!token) return null;
+  let berryToken: Promise<string> | null = null;
+  const drive = memo("BerryAI", async (day): Promise<DriveThruPayload["stores"][number] | null> => {
+    berryToken ??= loginBerryService();
+    const token = await berryToken.catch((err) => {
+      berryToken = null;
+      throw err;
+    });
     const range = resolveSupersetTimeRange({ startDate: day, endDate: day });
     if ("error" in range) return null;
     const payload = await getDriveThruMetrics(token, range.timeRange, range.label, {
@@ -258,13 +277,11 @@ export async function runNightlyChecks(start: string, end: string): Promise<Nigh
       if (!channel) return { store: store.name, saved: 0, error: "no Slack channel" };
       const timeZone = storeTimeZone(store);
       // Catch-up reports for these days can arrive up to a few days later.
-      const messages = await fetchChannelHistory(
-        channel,
-        localMidnight(start, timeZone),
-        localMidnight(addDays(end, 3), timeZone),
+      const messages = await labelled("Slack", () =>
+        fetchChannelHistory(channel, localMidnight(start, timeZone), localMidnight(addDays(end, 3), timeZone)),
       );
-      const checks = await checkStoreReports(store, timeZone, messages, start, end);
-      return { store: store.name, saved: await saveChecks(store.storeId, checks) };
+      const checks = await checkStoreReports(store, timeZone, messages, start, end, { strict: true });
+      return { store: store.name, saved: await labelled("Postgres", () => saveChecks(store.storeId, checks)) };
     } catch (err) {
       return { store: store.name, saved: 0, error: err instanceof Error ? err.message : String(err) };
     }
