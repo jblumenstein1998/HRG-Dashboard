@@ -147,6 +147,42 @@ export default function BonusClient({
   // it bumps openNonce. Saves and rescores only bump refreshKey, which re-reads
   // results without reopening, or a save would clear what it had just saved.
   const [openNonce, setOpenNonce] = useState(0);
+
+  /**
+   * Refresh. For an admin on a period that isn't locked for pay it first
+   * recalculates the whole period from every source — the same thing the
+   * early-morning bonus-rollup does — so scores can be brought current at any
+   * time (Josh, 2026-10-29). Everyone else, and a locked period, just reloads.
+   */
+  const [recompute, setRecompute] = useState<{ busy: boolean; note: string | null; failed: boolean }>(
+    { busy: false, note: null, failed: false }
+  );
+  async function refresh() {
+    if (isAdmin && !locked) {
+      setRecompute({ busy: true, note: "Pulling every source — about a minute…", failed: false });
+      try {
+        const res = await fetch("/api/bonus/recompute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ period }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error ?? `Recalculation failed (${res.status})`);
+        const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+        setRecompute({
+          busy: false,
+          note: json.berry === "unavailable"
+            ? `Recalculated ${time} — BerryAI unavailable, drive-thru left as it was`
+            : `Recalculated ${time}`,
+          failed: false,
+        });
+      } catch (err) {
+        setRecompute({ busy: false, note: err instanceof Error ? err.message : String(err), failed: true });
+      }
+    }
+    setOpenNonce((n) => n + 1);
+    setRefreshKey((k) => k + 1);
+  }
   const openKey = `${period}|${storeId}|${openNonce}`;
   const [opened, setOpened] = useState<{ key: string; locked: boolean; payLocked: boolean; cleared: number }>(
     { key: "", locked: true, payLocked: false, cleared: 0 }
@@ -409,12 +445,20 @@ export default function BonusClient({
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-900 text-white">Approved for pay</span>
             )}
 
+            {recompute.note && (
+              <span className={`ml-auto text-xs ${recompute.failed ? "text-red-600" : "text-gray-500"}`}>{recompute.note}</span>
+            )}
             <button
-              onClick={() => { setOpenNonce((n) => n + 1); setRefreshKey((k) => k + 1); }}
-              disabled={loading}
-              className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+              onClick={refresh}
+              disabled={loading || recompute.busy}
+              title={
+                isAdmin && !locked
+                  ? "Recalculate this period from every source now (what the early-morning job does), then reload. About a minute."
+                  : "Reload the latest scores."
+              }
+              className={`${recompute.note ? "" : "ml-auto "}text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50`}
             >
-              {loading ? "Refreshing…" : "Refresh"}
+              {recompute.busy ? "Recalculating…" : loading ? "Refreshing…" : "Refresh"}
             </button>
 
             {isOpen && !locked && (
