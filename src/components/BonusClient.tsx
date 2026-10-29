@@ -283,7 +283,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
       // and it looks as though the save was lost.
       setLoadedInputs((prev) => ({ key: prev.key, values: { ...prev.values, ...edits } }));
       setEdits({});
-      setSaveStatus(json.recomputed ? "Saved and rescored." : `Saved, but rescoring failed: ${json.recomputeError}`);
+      // Success says nothing — the scores moving is the confirmation. A failed
+      // rescore still says so, since the numbers on screen would then be stale.
+      setSaveStatus(json.recomputed ? null : `Saved, but rescoring failed: ${json.recomputeError}`);
       setRefreshKey((k) => k + 1);
       return true;
     } catch (err) {
