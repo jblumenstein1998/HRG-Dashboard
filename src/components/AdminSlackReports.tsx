@@ -229,7 +229,6 @@ export default function AdminSlackReports() {
   }, [data, sort]);
 
   const failing = data?.stores.filter((s) => s.error) ?? [];
-  const graceTotal = data?.stores.reduce((n, s) => n + s.inGrace, 0) ?? 0;
 
   // Only periods that can be shown whole: finished, and starting inside
   // Slack's 90 days. The period in progress is what PTD is for.
@@ -416,12 +415,7 @@ export default function AdminSlackReports() {
             </table>
           </div>
           <div className="px-4 py-2.5 border-t border-gray-100 text-[11px] text-gray-500 space-y-0.5">
-            <p>
-              * On time includes a {data.graceMinutes}-minute grace: a report posted up to {data.graceMinutes} minutes
-              after its deadline counts as on time ({graceTotal} in this range, marked * in a store&apos;s days).
-              Later than that is late: it counts toward % Completed but not % On time, which is what
-              the GM bonus scores.
-            </p>
+            <p>* On time includes a {data.graceMinutes}-minute grace window</p>
             {data.clampedFrom && (
               <p>
                 Slack keeps {HISTORY_DAYS} days of history, so this starts at {shortDate(data.historyStart)} rather than{" "}
