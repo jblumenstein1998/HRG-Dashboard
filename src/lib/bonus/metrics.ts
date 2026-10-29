@@ -26,7 +26,7 @@ import { getTrend, getDailyTrend, type TrendPoint, type TrendStorePoint } from "
 import { queryScores } from "../smgStore";
 import { getPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
-import { storeSlackReport } from "../slackCompletion";
+import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "../slackCompletion";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
 import { fetchCompletionByLocation } from "../jolt";
@@ -390,8 +390,8 @@ export async function resolvePeriodMetrics(
   // The admin tab's Slack table runs the same storeSlackReport.
   let slackStores = 0;
   const slackErrors = new Map<string, string[]>();
-  await Promise.all(
-    BONUS_STORES.map(async (store) => {
+  await mapLimit(BONUS_STORES, STORE_CONCURRENCY,
+    async (store) => {
       try {
         const { result } = await storeSlackReport(store, window.start, window.end);
         const v = vals(store.storeId);
@@ -404,7 +404,7 @@ export async function resolvePeriodMetrics(
         const reason = err instanceof Error ? err.message : String(err);
         slackErrors.set(reason, [...(slackErrors.get(reason) ?? []), store.name]);
       }
-    }),
+    },
   );
   for (const [reason, stores] of slackErrors) {
     warnings.push(`Slack reports unreadable for ${stores.join(", ")}: ${reason} — left pending`);

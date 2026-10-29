@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminApi } from "@/lib/users/adminGuard";
 import { BONUS_STORES, storeById } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel, listBonusPeriods, resolveBonusWindow } from "@/lib/bonus/periods";
-import { storeSlackReport } from "@/lib/slackCompletion";
+import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "@/lib/slackCompletion";
 import { fetchUserNames, localParts, placeMessage, SLACK_SLOTS } from "@/lib/slackReports";
 
 /**
@@ -41,8 +41,8 @@ export async function GET(req: NextRequest) {
   const one = storeParam ? storeById(storeParam) : null;
   if (storeParam && !one) return NextResponse.json({ error: `Unknown store "${storeParam}"` }, { status: 400 });
 
-  const stores = await Promise.all(
-    (one ? [one] : BONUS_STORES).map(async (store) => {
+  const stores = await mapLimit(one ? [one] : BONUS_STORES, STORE_CONCURRENCY,
+    async (store) => {
       try {
         const { timeZone, channelId, messages, result } = await storeSlackReport(store, window.start, window.end);
         const postedAt = (ts: string | null) => {
@@ -91,7 +91,7 @@ export async function GET(req: NextRequest) {
           error: err instanceof Error ? err.message : String(err),
         };
       }
-    }),
+    },
   );
 
   return NextResponse.json({
