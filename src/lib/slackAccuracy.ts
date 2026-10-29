@@ -259,8 +259,8 @@ export async function checkStoreReports(
         check(checks, "tplh", "TPLH", "num", f.tplh, t && hours > 0 ? t.orderCount / hours : null, TOLERANCE.tplh);
         check(checks, "avgCheck", "Avg check", "$", f.avgCheck,
           t && t.orderCount > 0 ? t.netSales / t.orderCount : null, TOLERANCE.avgCheck);
-        check(checks, "windowSecs", "Total window", "secs", f.windowSecs, clockSecs(d?.overall.window_service), TOLERANCE.windowSecs);
-        check(checks, "laneSecs", "Total lane", "secs", f.laneSecs, clockSecs(d?.overall.lane_total), TOLERANCE.laneSecs);
+        check(checks, "windowSecs", "Total window", "secs", f.windowSecs, d?.overall.total_cars ? clockSecs(d.overall.window_service) : null, TOLERANCE.windowSecs);
+        check(checks, "laneSecs", "Total lane", "secs", f.laneSecs, d?.overall.total_cars ? clockSecs(d.overall.lane_total) : null, TOLERANCE.laneSecs);
         check(checks, "joltPct", "Jolt", "%", f.joltPct, j, TOLERANCE.joltPct);
         check(checks, "cashOverShort", "Cash over/short", "$", f.cashOverShort, c?.overShort ?? null, TOLERANCE.cashOverShort, {
           note: c?.uncountedTills
@@ -295,7 +295,10 @@ export async function checkStoreReports(
           sofar && sofar.hours > 0 ? sofar.orders / sofar.hours : null, TOLERANCE.tplh, running);
         check(checks, "avgCheck", "Avg check", "$", f.avgCheck,
           sofar && sofar.orders > 0 ? sofar.netSales / sofar.orders : null, TOLERANCE.avgCheck);
-        const part = d?.dayparts.find((x) => x.index === w.daypart) ?? null;
+        // No cars in the daypart means BerryAI hasn't caught up yet (it lags a few
+        // hours; at 5:20 PM on 10/29 every store's 2–5 daypart read 0 cars,
+        // "00:00"), so there is nothing to compare — not a lane time of zero.
+        const part = d?.dayparts.find((x) => x.index === w.daypart && x.total_cars) ?? null;
         check(checks, "laneSecs", "Lane", "secs", f.laneSecs, clockSecs(part?.lane_total), TOLERANCE.laneSecs);
         // No window check: leadership dropped window time from the 2/5/8 PM
         // reports on 2026-09-18 (#all-hudson-restaurant-group), so a window
