@@ -3,8 +3,9 @@
 /**
  * The people on a store's scorecard, at the foot of the page.
  *
- * One row per person: a position and a name. It starts as the six positions —
- * GM, AGM and the four Directors — and rows can be added or removed, so a store
+ * One row per person: a position and a name. The six positions — GM, AGM and
+ * the four Directors — are fixed rows that can't be moved or removed (Josh,
+ * 2026-10-29); added rows pick their position and can be removed, so a store
  * with two GMs lists both. **Two named people in one position split that
  * position's bonus**, and the rows say so.
  *
@@ -40,10 +41,29 @@ type TeamMember = { positionId: PositionId; name: string; workstreamUuid: string
 type Team = { members: TeamMember[]; fromPeriod: string | null };
 type Candidate = { workstreamUuid: string; name: string; title: ManagerTitle };
 
-/** A row on screen; `key` keeps React's inputs attached to the right row as rows come and go. */
-type Row = TeamMember & { key: number };
+/**
+ * A row on screen. `base` rows are the six positions every store has — always
+ * present, fixed position, never removed. Added rows carry a position picker
+ * and can be removed. `key` keeps React's inputs attached to the right row as
+ * added rows come and go.
+ */
+type Row = TeamMember & { key: number; base: boolean };
 
-const withKeys = (members: TeamMember[]): Row[] => members.map((m, i) => ({ ...m, key: i }));
+/**
+ * Lay a saved team out as rows: the first person in each position fills its
+ * base row (blank if nobody), and everyone else follows as added rows.
+ */
+function toRows(members: TeamMember[]): Row[] {
+  const rest = [...members];
+  const base = TEAM_ORDER.map((positionId): TeamMember => {
+    const i = rest.findIndex((m) => m.positionId === positionId);
+    return i < 0 ? { positionId, name: "", workstreamUuid: null } : rest.splice(i, 1)[0];
+  });
+  return [
+    ...base.map((m, i) => ({ ...m, key: i, base: true })),
+    ...rest.map((m, i) => ({ ...m, key: TEAM_ORDER.length + i, base: false })),
+  ];
+}
 const nextKey = (rows: Row[]) => rows.reduce((max, r) => Math.max(max, r.key), -1) + 1;
 const strip = (rows: Row[]): TeamMember[] =>
   rows.map(({ positionId, name, workstreamUuid }) => ({ positionId, name: name.trim(), workstreamUuid }));
@@ -94,16 +114,9 @@ export default function BonusTeamCard({
     return () => { cancelled = true; };
   }, [key, period, storeId]);
 
-  // What is on screen before any edit: the saved team, or the six positions
-  // empty for a store that has never saved one.
-  const baseline = useMemo<Row[]>(
-    () => withKeys(
-      loaded.team.fromPeriod === null
-        ? TEAM_ORDER.map((positionId) => ({ positionId, name: "", workstreamUuid: null }))
-        : loaded.team.members
-    ),
-    [loaded.team]
-  );
+  // What is on screen before any edit: the six base positions, filled from
+  // the saved team where it names someone, then any added rows.
+  const baseline = useMemo<Row[]>(() => toRows(loaded.team.members), [loaded.team]);
   const rows = draft ?? baseline;
 
   useEffect(() => {
@@ -200,27 +213,28 @@ export default function BonusTeamCard({
       {error && <p className="px-3 pt-2 text-xs text-red-600">{error}</p>}
 
       <div className={`px-3 py-2.5 space-y-1.5 transition-opacity ${loading ? "opacity-50" : ""}`}>
-        {rows.length === 0 && (
-          <p className="text-xs text-gray-400">Nobody on the team for this period.</p>
-        )}
         {rows.map((r) => {
           const listId = `bonus-team-${r.key}`;
           const shared = r.name.trim() ? holders.get(r.positionId) ?? 0 : 0;
           return (
             <div key={r.key} className="flex items-center gap-2 min-w-0">
-              <select
-                value={r.positionId}
-                onChange={(e) => {
-                  const positionId = e.target.value as PositionId;
-                  edit((rs) => rs.map((x) => (x.key === r.key ? { ...x, positionId } : x)));
-                }}
-                disabled={!editable}
-                className="w-44 shrink-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 disabled:bg-gray-50 disabled:text-gray-600"
-              >
-                {TEAM_ORDER.map((id) => (
-                  <option key={id} value={id}>{POSITION_LABELS[id]}</option>
-                ))}
-              </select>
+              {r.base ? (
+                <span className="w-44 shrink-0 text-xs text-gray-700 px-2">{POSITION_LABELS[r.positionId]}</span>
+              ) : (
+                <select
+                  value={r.positionId}
+                  onChange={(e) => {
+                    const positionId = e.target.value as PositionId;
+                    edit((rs) => rs.map((x) => (x.key === r.key ? { ...x, positionId } : x)));
+                  }}
+                  disabled={!editable}
+                  className="w-44 shrink-0 text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 disabled:bg-gray-50 disabled:text-gray-600"
+                >
+                  {TEAM_ORDER.map((id) => (
+                    <option key={id} value={id}>{POSITION_LABELS[id]}</option>
+                  ))}
+                </select>
+              )}
               <input
                 list={listId}
                 value={r.name}
@@ -241,7 +255,9 @@ export default function BonusTeamCard({
                     ? "typed"
                     : ""}
               </span>
-              {editable && (
+              {/* Base rows keep a spacer so every name field lines up. */}
+              {editable && r.base && <span className="shrink-0 w-6" />}
+              {editable && !r.base && (
                 <button
                   onClick={() => edit((rs) => rs.filter((x) => x.key !== r.key))}
                   title="Remove this row"
@@ -257,7 +273,7 @@ export default function BonusTeamCard({
 
         {editable && (
           <button
-            onClick={() => edit((rs) => [...rs, { positionId: "gm", name: "", workstreamUuid: null, key: nextKey(rs) }])}
+            onClick={() => edit((rs) => [...rs, { positionId: "gm", name: "", workstreamUuid: null, key: nextKey(rs), base: false }])}
             className="text-xs px-2.5 py-1 rounded-lg border border-dashed border-gray-300 text-gray-600 hover:bg-gray-50 transition"
           >
             + Add position
