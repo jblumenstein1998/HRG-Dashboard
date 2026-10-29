@@ -330,16 +330,30 @@ export async function fetchLocationReport(
   let totals = (data.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
   const isBlank = (t: Record<string, unknown> | undefined): t is undefined =>
     !t || (Number(t.actualCost) === 0 && Number(t.actualCostPercent) === 0);
+  // Incomplete is a total that carries the dollars but not the percentages.
+  // Net-Chef sends that now and then — Brentwood's P9 came back with actualCost
+  // and valueVariance filled in and both percents null, and so did Beach's in
+  // another batch — and it was cached for the hour as if complete, so the store
+  // sat at "—" on the COGS and Variance tables until someone pressed Refresh.
+  // It is retried like a blank one; if the retry is no better, the percentages
+  // are worked out from Net-Chef's own denominator below.
+  const isIncomplete = (t: Record<string, unknown>) =>
+    (t.actualCost != null && t.actualCostPercent == null) ||
+    (t.valueVariance != null && t.valueVariancePercent == null);
 
-  if (isBlank(totals)) {
-    console.log("[NC] blank/missing totalSummaries for location", locationId, "— retrying in 1s");
+  if (isBlank(totals) || isIncomplete(totals)) {
+    console.log("[NC] blank/incomplete totalSummaries for location", locationId, "— retrying in 1s");
     await new Promise(r => setTimeout(r, 1000));
     const retry = await ncFetch("/resource/actualvstheoretical/location/details", {
       extraCriteriaMap: { startDate: toMMDDYYYY(startDate), endDate: toMMDDYYYY(endDate), locationIdFilter: locationId, isConsolidated: false },
       pagingInfo: { page: 1, start: 0, limit: 1000000 },
     }) as Record<string, unknown>;
-    payload = retry;
-    totals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
+    const retryTotals = (retry.totalSummaries as Record<string, unknown>[] | undefined)?.[0];
+    // Keep the retry unless it is emptier than what we already had.
+    if (!isBlank(retryTotals) || isBlank(totals)) {
+      payload = retry;
+      totals = retryTotals;
+    }
     if (isBlank(totals)) {
       console.log("[NC] blank/missing totalSummaries for location", locationId, "after retry — giving up");
       return { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null, salesBase: null };
@@ -359,10 +373,17 @@ export async function fetchLocationReport(
       ` summaries=${(payload.totalSummaries as unknown[])?.length ?? 0}`,
   );
 
-  const actualCostPct     = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : null;
   const actualCostDollars = totals.actualCost           != null ? Number(totals.actualCost)           : null;
-  const variancePct       = totals.valueVariancePercent != null ? Number(totals.valueVariancePercent) : null;
   const varianceDollars   = totals.valueVariance        != null ? Number(totals.valueVariance)        : null;
+
+  // A percent Net-Chef left out is its own dollars over its own denominator —
+  // the row-level divisorValue. Checked against a complete answer for the same
+  // window: Brentwood P9 $43,378.03 / $145,405.02 = 29.8326%, Net-Chef 29.832553.
+  const divisor = Number(firstRow?.divisorValue);
+  const fromDivisor = (dollars: number | null) =>
+    dollars != null && divisor > 0 ? (dollars / divisor) * 100 : null;
+  const actualCostPct = totals.actualCostPercent    != null ? Number(totals.actualCostPercent)    : fromDivisor(actualCostDollars);
+  const variancePct   = totals.valueVariancePercent != null ? Number(totals.valueVariancePercent) : fromDivisor(varianceDollars);
 
   // divisorValue is the denominator NetChef itself divided by, so prefer it.
   // When the rows come back empty but the totals do not, recover the same
@@ -384,7 +405,10 @@ export async function fetchLocationReport(
       : ratioBase(actualCostDollars, actualCostPct) ?? ratioBase(varianceDollars, variancePct);
 
   const report: LocationReport = { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
-  locationReportCache.set(cKey, { report, fetchedAt: Date.now() });
+  // An answer still missing a percent is shown but not cached, so the next
+  // load asks Net-Chef again rather than repeating the gap for an hour.
+  const complete = (actualCostDollars == null || actualCostPct != null) && (varianceDollars == null || variancePct != null);
+  if (complete) locationReportCache.set(cKey, { report, fetchedAt: Date.now() });
   return report;
 }
 
