@@ -722,16 +722,9 @@ export default function SurveyDataClient({
           answered.
         </p>
 
-        {/* Follows the period picker and store filter like the table above;
-            its rating columns are Google's lifetime figures regardless. */}
-        <GoogleReviewsSection
-          start={range?.start ?? null}
-          end={range?.end ?? null}
-          label={selectedLabel}
-          stores={zcaseStores}
-          totalLabel={summaryLabel}
-          refreshKey={refreshKey}
-        />
+        {/* Current Google ratings — follows the store filter, not the period
+            picker, since Google has no notion of a period. */}
+        <GoogleReviewsSection stores={zcaseStores} refreshKey={refreshKey} />
 
         {/* Always store-level with its own grain and range, so it can span a
             longer history than whichever single period the table is showing. */}
