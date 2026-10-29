@@ -9,12 +9,24 @@
  *
  * ── Stores come from the headers ─────────────────────────────────────────────
  *
- * Every store column is headed with its city and **PAR store number** —
- * "Suffolk 57001", "Chesapeake 57006" — and the number is the only part to
- * trust. The cities are the legal entity's, not the restaurant's: 57001 is
- * College, and "Chesapeake 57006" is Hillcrest, not Chesapeake. Columns with no
- * store number we know (the real-estate LLC, the corporate entity, Total) are
- * reported and skipped.
+ * Two exports exist, and they head their columns differently:
+ *
+ *   Location Side by Side      city + **PAR store number** — "Suffolk 57001",
+ *                              "Chesapeake 57006". Only the number is to be
+ *                              trusted: the cities are the legal entity's, so
+ *                              57001 is College and "Chesapeake 57006" is
+ *                              Hillcrest, not Chesapeake.
+ *   Legal Entity Side by Side  the LLC — "HRG Brentwood LLC" — with no number.
+ *                              Each restaurant's LLC is "HRG <store name> LLC"
+ *                              (the VA bonus workbook pairs them the same way:
+ *                              HRG Chesapeake LLC is Chesapeake, 57004), and it
+ *                              is matched whole, so "HRG Portland RE LLC" — the
+ *                              real-estate entity — is not Portland.
+ *
+ * Headers are merged across a store's amount and % columns, so the same name
+ * appears twice; the first column is the amount. Columns naming no store we
+ * know (real estate, corporate, Total) are reported and skipped. A file that
+ * covers only some stores fills those and leaves the rest as they were.
  *
  * ── What is pulled (Josh, 2026-10-29) ────────────────────────────────────────
  *
@@ -33,7 +45,7 @@
 import ExcelJS from "exceljs";
 import { PERIODS } from "../fiscal";
 import { periodLabel } from "./periods";
-import { storeById } from "./storeMap";
+import { BONUS_STORES, storeById } from "./storeMap";
 
 /** The P&L lines read, keyed as stored. Labels are matched case- and space-insensitively. */
 export const PNL_LINES = {
@@ -107,6 +119,15 @@ function cellNumber(v: ExcelJS.CellValue): number | null {
 
 const STORE_NUMBER = /\b(\d{5})\b/;
 
+const BY_ENTITY = new Map(BONUS_STORES.map((s) => [norm(`HRG ${s.name} LLC`), s.storeId]));
+
+/** The store a column header names — by PAR store number, or by its LLC. */
+function storeForHeader(text: string): string | null {
+  const m = text.match(STORE_NUMBER);
+  if (m && storeById(m[1])) return m[1];
+  return BY_ENTITY.get(norm(text)) ?? null;
+}
+
 /** The fiscal period whose last day is `iso`, if any. */
 function periodEndingOn(iso: string): string | null {
   const p = PERIODS.find((x) => x.end === iso);
@@ -136,20 +157,22 @@ export async function parsePnl(file: ArrayBuffer | Buffer): Promise<ParsedPnl> {
   sheet.eachRow((row) => {
     if (headerRow) return;
     row.eachCell((c) => {
-      const m = cellText(c.value).match(STORE_NUMBER);
-      if (m && storeById(m[1])) headerRow = row;
+      if (storeForHeader(cellText(c.value).trim())) headerRow = row;
     });
   });
   if (!headerRow) {
-    throw new Error("No column header names a store number (e.g. \"Suffolk 57001\").");
+    throw new Error(
+      "No column header names one of our stores — expected a store number (\"Suffolk 57001\") or an LLC (\"HRG Brentwood LLC\")."
+    );
   }
   const header: ExcelJS.Row = headerRow;
 
+  // Title rows are merged across the sheet, so each cell repeats the text.
   const title: string[] = [];
   for (let r = 1; r < header.number; r++) {
     const text = sheet.getRow(r).values as ExcelJS.CellValue[];
-    const line = (Array.isArray(text) ? text : []).map(cellText).filter(Boolean).join(" ").trim();
-    if (line) title.push(line);
+    const parts = [...new Set((Array.isArray(text) ? text : []).map((v) => cellText(v).trim()).filter(Boolean))];
+    if (parts.length) title.push(parts.join(" "));
   }
   const titleText = title.join(" ");
   const ending = titleText.match(/ending\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i);
@@ -162,9 +185,13 @@ export async function parsePnl(file: ArrayBuffer | Buffer): Promise<ParsedPnl> {
   header.eachCell((c, col) => {
     const text = cellText(c.value).trim();
     if (!text) return;
-    const m = text.match(STORE_NUMBER);
-    if (m && storeById(m[1])) columns.push({ col, storeId: m[1], header: text });
-    else skippedColumns.push(text);
+    const storeId = storeForHeader(text);
+    // A merged header repeats over the % column; the first column is the amount.
+    if (storeId) {
+      if (!columns.some((x) => x.storeId === storeId)) columns.push({ col, storeId, header: text });
+    } else if (!skippedColumns.includes(text)) {
+      skippedColumns.push(text);
+    }
   });
 
   // Each line's row, found by label in any column left of the first store.

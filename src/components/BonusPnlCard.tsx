@@ -117,7 +117,8 @@ export default function BonusPnlCard({ period, onSaved }: { period: string; onSa
               {busy === "reading" ? "Reading…" : <>Drop the {period} P&amp;L here, or <span className="underline underline-offset-2">choose a file</span></>}
             </p>
             <p className="text-[11px] text-gray-400 mt-0.5">
-              The &ldquo;Profit &amp; Loss – Location Side by Side&rdquo; export, as .xlsx. Stores are matched by the store number in each column header.
+              The Profit &amp; Loss side-by-side export (by location or by legal entity), as .xlsx. Stores are matched by
+              the store number or LLC name in each column header; a file with only some stores fills just those.
             </p>
             <input
               ref={inputRef}
