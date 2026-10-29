@@ -73,15 +73,19 @@ try {
   check("CT lunch 3:17 PM ET = 2:17 CT, on time",
     pick(S.placeMessage(msg("2026-10-28 15:17:12", "10/28 lunch \nNet sales- $1547\n11-12 $376\n12-1 $540\n1-2 $406"), CT)),
     { date: "2026-10-28", slot: "lunch", onTime: true });
-  check("CT full day 9:40 AM ET = 8:40 CT, late",
+  check("CT full day 9:40 AM ET = 8:40 CT, ten minutes late, within grace",
     pick(S.placeMessage(msg("2026-10-28 09:40:12", "10/27/26 Full Day \n\nNet sales- $4,247.22\nComp- +17.9%"), CT)),
-    { date: "2026-10-28", slot: "previous_day", onTime: false });
+    { date: "2026-10-28", slot: "previous_day", onTime: true });
+  check("grace ends at 15 minutes: 8:46 CT is late",
+    S.placeMessage(msg("2026-10-28 09:46:00", "10/27/26 Full Day \nNet sales- $4,247.22\nComp- +17.9%"), CT).onTime, false);
+  check("8:45 CT is the last minute of grace",
+    [S.placeMessage(msg("2026-10-28 09:45:00", "10/27/26 Full Day \nNet sales- $4,247.22\nComp- +17.9%"), CT)].map((p) => [p.onTime, p.inGrace])[0], [true, true]);
   check("ET full day 7:34 AM, on time",
     pick(S.placeMessage(msg("2026-10-29 07:34:23", "*Total net sales:$11,306.91*\n*Comp%18.60*"), ET)),
     { date: "2026-10-29", slot: "previous_day", onTime: true });
   check("typo'd date on an on-time post uses the posting date",
     pick(S.placeMessage(msg("2026-10-27 21:38:28", "10/22 dinner \nNet sales- $3936\nSph-\n5-6 $286\n6-7 $573\n7-8 $598"), CT)),
-    { date: "2026-10-27", slot: "dinner", onTime: false });
+    { date: "2026-10-27", slot: "dinner", onTime: true });
   check("typo'd month ignored",
     pick(S.placeMessage(msg("2026-10-21 15:15:39", "11/21 lunch\nNet 1357\n11-12 453\n12-1 404\n1-2 384"), CT)),
     { date: "2026-10-21", slot: "lunch", onTime: true });
@@ -99,8 +103,17 @@ try {
     msg("2026-10-21 09:50:58", "<!channel>\n\nNo 5pm or 8pm slack\n\nCan someone please explain why we can't figure out something this simple?"),
   ];
   const day = S.scoreSlackReports(brentwood, { timeZone: CT, start: "2026-10-20", end: "2026-10-20" });
-  check("10/20 slots (lunch posted 2:36 CT, six minutes late)", day.days[0].slots, { previous_day: "on_time", lunch: "late", midday: "missed", dinner: "missed" });
-  check("10/20 totals", [day.required, day.onTime, day.late, day.missed, day.pct], [4, 1, 1, 2, 25]);
+  check("10/20 slots (lunch posted 2:36 CT, six minutes late, within grace)", day.days[0].slots, { previous_day: "on_time", lunch: "on_time", midday: "missed", dinner: "missed" });
+  check("10/20 totals", [day.required, day.onTime, day.inGrace, day.late, day.missed, day.pct], [4, 2, 1, 0, 2, 50]);
+
+  // A range running through today: at 3:00 PM CT on 10/20, the 2:30 report is
+  // due (and in), the 5:30 and 8:30 aren't yet.
+  const midday = S.scoreSlackReports(brentwood, {
+    timeZone: CT, start: "2026-10-20", end: "2026-10-20", now: { date: "2026-10-20", minutes: 15 * 60 },
+  });
+  check("today: not-yet-due slots are upcoming, not missed",
+    midday.days[0].slots, { previous_day: "on_time", lunch: "on_time", midday: "upcoming", dinner: "upcoming" });
+  check("today: upcoming slots aren't counted", [midday.required, midday.missed, midday.pct], [2, 0, 100]);
 
   const closed = S.scoreSlackReports(brentwood, {
     timeZone: CT, start: "2026-10-20", end: "2026-10-21", openDays: new Set(["2026-10-19", "2026-10-20"]),

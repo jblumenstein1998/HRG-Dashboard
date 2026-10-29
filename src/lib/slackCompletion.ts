@@ -9,7 +9,7 @@
 import { getDailyRowsForRange } from "./parRollup";
 import { SLACK_CHANNEL_IDS, storeTimeZone, type BonusStore } from "./bonus/storeMap";
 import {
-  addDays, fetchChannelHistory, localMidnight, scoreSlackReports,
+  addDays, fetchChannelHistory, localMidnight, localParts, scoreSlackReports,
   type SlackCompletion, type SlackMessage,
 } from "./slackReports";
 
@@ -91,9 +91,15 @@ export async function storeSlackReport(store: BonusStore, start: string, end: st
     labelled("PAR", () => getDailyRowsForRange(store.storeId, addDays(start, -1), end)),
   ]);
 
-  // No reports are owed for a day the store didn't trade. Where PAR has nothing
-  // at all for a store (Portland before its token), every day counts.
-  const openDays = rows.length > 0 ? new Set(rows.filter((r) => r.netSales > 0).map((r) => r.date)) : null;
+  // No reports are owed for a day the store didn't trade — including every day
+  // before it opened. (An earlier version counted every day when PAR had no
+  // rows at all, and Portland showed 60 missed reports for an August it wasn't
+  // open.) A PAR gap therefore reads as "nothing due", which is visible as an
+  // empty row rather than a false run of misses.
+  const openDays = new Set(rows.filter((r) => r.netSales > 0).map((r) => r.date));
 
-  return { timeZone, channelId, messages, result: scoreSlackReports(messages, { timeZone, start, end, openDays }) };
+  // The store's own clock, so a range reaching today only counts what's due.
+  const now = localParts(String(Date.now() / 1000), timeZone);
+
+  return { timeZone, channelId, messages, result: scoreSlackReports(messages, { timeZone, start, end, openDays, now }) };
 }

@@ -12,9 +12,10 @@
  *   by 5:30 PM  2–5 window,  with hourly sales 2-3 / 3-4 / 4-5
  *   by 8:30 PM  5–8 window,  with hourly sales 5-6 / 6-7 / 7-8
  *
- * Completion is reports posted by their deadline ÷ reports required. A late
- * report is counted and shown, but does not count as complete — the doc says
- * "by", and leadership calls out late reports in the channels as misses.
+ * Completion is reports posted by their deadline ÷ reports required, with a
+ * 15-minute grace (GRACE_MINUTES). A report later than that is counted and
+ * shown, but does not count as complete — the doc says "by", and leadership
+ * calls out late reports in the channels as misses.
  *
  * Nobody posts these from a template. The same report arrives as "10/26
  * lunch / Net 1296 / 11-12 389 …", as "*Total net sales: $3,325.50* /
@@ -43,6 +44,13 @@ const DEADLINE_MINUTES: Record<SlackSlot, number> = Object.fromEntries(
     return [s.id, h * 60 + m];
   }),
 ) as Record<SlackSlot, number>;
+
+/**
+ * How long after a deadline a report still counts as on time. Josh, 2026-10-29:
+ * in P10 a third of late reports were within 15 minutes. Shown as a footnote
+ * on the admin table so the number isn't mistaken for the doc's own deadline.
+ */
+export const GRACE_MINUTES = 15;
 
 /** When each report's window closes — the earliest it could sensibly be posted. */
 const SLOT_OPENS: Record<SlackSlot, number> = {
@@ -178,7 +186,8 @@ export function writtenDate(text: string, postedDate: string): string | null {
 
 // ── Scoring ──────────────────────────────────────────────────────────────────
 
-export type SlotStatus = "on_time" | "late" | "missed";
+/** "upcoming": today's slot whose deadline hasn't passed and has no report yet — not counted. */
+export type SlotStatus = "on_time" | "late" | "missed" | "upcoming";
 
 export type SlackDay = {
   date: string;
@@ -186,11 +195,16 @@ export type SlackDay = {
   slots: Record<SlackSlot, SlotStatus | null>;
   /** The Slack ts of the message that filled each slot, if any. */
   posts: Record<SlackSlot, string | null>;
+  /** Slots counted on time only because of the grace period. */
+  grace: Record<SlackSlot, boolean>;
 };
 
 export type SlackCompletion = {
   required: number;
+  /** Includes the reports in `inGrace`. */
   onTime: number;
+  /** On time only by the grace period — posted up to GRACE_MINUTES late. */
+  inGrace: number;
   late: number;
   missed: number;
   /** On-time ÷ required × 100; null when nothing was required. */
@@ -206,7 +220,10 @@ export type SlackCompletion = {
 export type Placement = {
   date: string;
   slot: SlackSlot;
+  /** By the deadline plus the grace period. */
   onTime: boolean;
+  /** Past the deadline but inside the grace period. */
+  inGrace: boolean;
   /** Whether the content said which report this is, or the posting time had to. */
   by: "content" | "time";
   /** Local posting date and minutes after midnight. */
@@ -247,8 +264,9 @@ export function placeMessage(msg: SlackMessage, timeZone: string): Placement | n
     date = written ?? (posted.minutes < 3 * 60 ? addDays(posted.date, -1) : posted.date);
   }
 
-  const onTime = posted.date < date || (posted.date === date && posted.minutes <= DEADLINE_MINUTES[slot]);
-  return { date, slot, onTime, by: byContent ? "content" : "time", posted };
+  const strict = posted.date < date || (posted.date === date && posted.minutes <= DEADLINE_MINUTES[slot]);
+  const onTime = strict || (posted.date === date && posted.minutes <= DEADLINE_MINUTES[slot] + GRACE_MINUTES);
+  return { date, slot, onTime, inGrace: onTime && !strict, by: byContent ? "content" : "time", posted };
 }
 
 /**
@@ -258,14 +276,25 @@ export function placeMessage(msg: SlackMessage, timeZone: string): Placement | n
  * above zero). The three shift reports are required on an open day, and the
  * morning report on a day whose previous day was open — so Thanksgiving and
  * Christmas don't count as misses. Without it every day is required.
+ *
+ * `now`, the store's local date and minutes, lets a range run through today:
+ * a slot whose deadline (plus grace) hasn't passed is "upcoming" and not
+ * counted, unless its report is already in.
  */
 export function scoreSlackReports(
   messages: SlackMessage[],
-  opts: { timeZone: string; start: string; end: string; openDays?: Set<string> | null },
+  opts: {
+    timeZone: string;
+    start: string;
+    end: string;
+    openDays?: Set<string> | null;
+    now?: { date: string; minutes: number } | null;
+  },
 ): SlackCompletion {
-  // The message that fills each `${date}|${slot}`: the earliest on-time one,
-  // else the earliest late one.
-  const best = new Map<string, { ts: string; onTime: boolean }>();
+  // The message that fills each `${date}|${slot}`: the earliest by the
+  // deadline, else the earliest in the grace period, else the earliest late.
+  const rank = (p: Placement) => (p.onTime ? (p.inGrace ? 1 : 0) : 2);
+  const best = new Map<string, { ts: string; placed: Placement }>();
   for (const msg of messages) {
     const placed = placeMessage(msg, opts.timeZone);
     if (!placed) continue;
@@ -273,36 +302,49 @@ export function scoreSlackReports(
     const prior = best.get(key);
     const better =
       !prior ||
-      (placed.onTime && !prior.onTime) ||
-      (placed.onTime === prior.onTime && Number(msg.ts) < Number(prior.ts));
-    if (better) best.set(key, { ts: msg.ts, onTime: placed.onTime });
+      rank(placed) < rank(prior.placed) ||
+      (rank(placed) === rank(prior.placed) && Number(msg.ts) < Number(prior.ts));
+    if (better) best.set(key, { ts: msg.ts, placed });
   }
 
   const isOpen = (d: string) => !opts.openDays || opts.openDays.has(d);
   const days: SlackDay[] = [];
-  let required = 0, onTime = 0, late = 0;
+  let required = 0, onTime = 0, inGrace = 0, late = 0;
   for (let date = opts.start; date <= opts.end; date = addDays(date, 1)) {
     const slots = {} as Record<SlackSlot, SlotStatus | null>;
     const posts = {} as Record<SlackSlot, string | null>;
+    const grace = {} as Record<SlackSlot, boolean>;
     for (const { id } of SLACK_SLOTS) {
       const hit = best.get(`${date}|${id}`);
       posts[id] = hit?.ts ?? null;
+      grace[id] = false;
       const needed = id === "previous_day" ? isOpen(addDays(date, -1)) : isOpen(date);
       if (!needed) {
         slots[id] = null;
         continue;
       }
+      const now = opts.now;
+      const notYetDue =
+        !!now && (date > now.date || (date === now.date && now.minutes <= DEADLINE_MINUTES[id] + GRACE_MINUTES));
+      if (notYetDue && !hit) {
+        slots[id] = "upcoming";
+        continue;
+      }
       required++;
-      if (hit?.onTime) { slots[id] = "on_time"; onTime++; }
-      else if (hit) { slots[id] = "late"; late++; }
+      if (hit?.placed.onTime) {
+        slots[id] = "on_time";
+        onTime++;
+        if (hit.placed.inGrace) { grace[id] = true; inGrace++; }
+      } else if (hit) { slots[id] = "late"; late++; }
       else slots[id] = "missed";
     }
-    days.push({ date, slots, posts });
+    days.push({ date, slots, posts, grace });
   }
 
   return {
     required,
     onTime,
+    inGrace,
     late,
     missed: required - onTime - late,
     pct: required > 0 ? Math.round((onTime / required) * 1000) / 10 : null,

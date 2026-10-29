@@ -1119,7 +1119,7 @@ const GM: PositionRules = {
           grain: "period",
           threshold: { cmp: "gte", value: 95 },
           target: { cmp: "gte", value: 95 },
-          note: "Reports posted by deadline (8:30 AM, 2:30, 5:30, 8:30 PM local) ÷ reports due. Late posts don't count.",
+          note: "Reports posted by deadline (8:30 AM, 2:30, 5:30, 8:30 PM local) ÷ reports due. Up to 15 minutes late counts as on time; later posts don't count.",
         },
       ],
       disqualifiers: [
