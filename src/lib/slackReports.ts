@@ -79,18 +79,33 @@ const RANGE_SLOT: Record<number, SlackSlot> = {
   5: "dinner", 6: "dinner", 7: "dinner",
 };
 
-/** Is this a sales report at all, rather than chatter? Every report leads with net sales. */
+/**
+ * Is this a sales report at all, rather than chatter? Every report leads with
+ * a sales figure: "Net sales- $1547", "Netsales: 1,954.10", "Net 1296",
+ * "Sales- $4334". The figure is what keeps out a leader's blank template ("Total
+ * net sales:* / Comp % :*") and talk about sales ("sales for Tuesday I see as…").
+ */
 export function isReport(text: string): boolean {
-  return /\bnet\b/i.test(text) && /\d/.test(text);
+  // At least three digits, so a blank template's "Net Sales: $ • 5-6: $" —
+  // posted and never filled in — doesn't read the hour as the figure.
+  if (/(?:\bnet\s*sales?|\bnet|\bsales?)\b\W{0,6}\d[\d,]{2,}/i.test(text)) return true;
+  // Or the hourly figures are filled in even though the total was left off
+  // ("NET SALES: 2-3: 384 3-4: 795 4-5: 887").
+  const filledHours = [...text.matchAll(RANGE_RE)].filter((m) =>
+    /^\W{0,4}\d{2,}/.test(text.slice((m.index ?? 0) + m[0].length)),
+  );
+  return filledHours.length >= 2;
 }
 
 /**
  * The report a message is, from its content alone, or null when the content
  * doesn't say (the caller then falls back to the posting time).
+ *
+ * Hourly ranges are read first: only the shift reports carry them, while the
+ * full-day words turn up in a shift report's sign-off ("getting set to comp
+ * up!").
  */
 export function classifyByContent(text: string): SlackSlot | null {
-  if (FULL_DAY_RE.test(text)) return "previous_day";
-
   const votes = new Map<SlackSlot, number>();
   for (const m of text.matchAll(RANGE_RE)) {
     const from = Number(m[1]);
@@ -102,6 +117,7 @@ export function classifyByContent(text: string): SlackSlot | null {
   }
   if (votes.size > 0) return [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
 
+  if (FULL_DAY_RE.test(text)) return "previous_day";
   if (/\blunch\b/i.test(text)) return "lunch";
   if (/\bmid\s*-?\s*day\b/i.test(text)) return "midday";
   if (/\bdinner\b/i.test(text)) return "dinner";
@@ -203,7 +219,17 @@ export function placeMessage(msg: SlackMessage, timeZone: string): Placement | n
   if (!isReport(text)) return null;
 
   const posted = localParts(msg.ts, timeZone);
-  const byContent = classifyByContent(text);
+  let byContent = classifyByContent(text);
+  // A shift report can't be posted before its window has nearly run: "5-6"
+  // at 5:09 PM, or "2-3" at 2:27 PM, is the earlier report with the wrong
+  // template pasted in, and the clock is the better witness. Afternoons only:
+  // shift ranges posted in the morning are yesterday's report caught up.
+  if (
+    byContent && byContent !== "previous_day" &&
+    posted.minutes >= 12 * 60 && posted.minutes < SLOT_OPENS[byContent] - 60
+  ) {
+    byContent = null;
+  }
   const slot = byContent ?? classifyByTime(posted.minutes);
 
   // The posting date wins whenever the posting time fits the slot. Typed dates

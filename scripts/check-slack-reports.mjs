@@ -56,6 +56,19 @@ try {
   check("chatter is not a report", S.isReport("Sorry for late slack"), false);
   check("drive-time follow-up is not a report", S.isReport("Dt 3:26"), false);
 
+  // From the P10 audit on the admin tab (2026-10-29).
+  check("'Netsales' with no space is a report", S.isReport("Netsales: 1,954.10\n11-12: 654.90\n12-1 446.91"), true);
+  check("'Sales-' without 'net' is a report", S.isReport("10/8 whole day\nSales- $4334\nComp- +13.3%"), true);
+  check("a leader's blank template is not a report", S.isReport("*Taking care of the little things*\n*Total net sales:* \n*Comp % :* \n*Catering: 0"), false);
+  check("filled hours with no total is a report", S.isReport("NET SALES:\n2-3: 384\n3-4: 795\n4-5: 887\nPROD: 55.97"), true);
+  check("an unfilled template is not a report", S.isReport("Net Sales: $ • 5-6: $ • 6-7: $ • 7-8: $ • Productivity: $"), false);
+  check("talk about sales is not a report", S.isReport("I used the calculation for SPLH...sales for Tuesday I see as $7548"), false);
+  check("ranges beat a 'comp' sign-off",
+    S.classifyByContent("Total net sales: $4433\nHourly breakdown:\n2-3 $626\n3-4 $587\n4-5 $524\n\nThursday night showdown!! Getting set to comp up!@"), "midday");
+  check("'5-6' pasted into a 5:09 PM report is read by the clock",
+    pick(S.placeMessage(msg("2026-10-11 17:09:00", "*Net Sales $5905.94*\n*5-6 $984.80*\n*6-7 $853*"), ET)),
+    { date: "2026-10-11", slot: "midday", onTime: true });
+
   // ── Placement (date, slot, on time) ────────────────────────────────────────
   check("CT lunch 3:17 PM ET = 2:17 CT, on time",
     pick(S.placeMessage(msg("2026-10-28 15:17:12", "10/28 lunch \nNet sales- $1547\n11-12 $376\n12-1 $540\n1-2 $406"), CT)),
