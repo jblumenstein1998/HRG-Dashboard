@@ -57,6 +57,9 @@ import {
  * score is derived from theirs, and compute.ts depends on that. This is purely
  * how the page reads.
  */
+/** Browser storage key for which positions and categories are open. */
+const OPEN_SECTIONS_KEY = "hrg.bonus.openSections";
+
 const SCORECARD_ORDER: PositionId[] = [
   "gm",
   "agm",
@@ -101,6 +104,36 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
 
   const cardRef = useRef<HTMLDivElement>(null);
   const store = BONUS_STORES.find((s) => s.storeId === storeId) ?? BONUS_STORES[0];
+
+  /**
+   * Which positions and categories are open, kept in this browser so they stay
+   * open through a refresh or a reload and the numbers inside can be watched
+   * changing (Josh, 2026-10-28). Keys are "pos:<position>" and
+   * "cat:<position>:<category>" — the same for every store and period, so the
+   * layout follows you as you switch. Storage can be missing or blocked, in
+   * which case everything simply starts closed.
+   */
+  const [openSections, setOpenSections] = useState<Set<string>>(() => {
+    try {
+      if (typeof window === "undefined") return new Set();
+      return new Set(JSON.parse(window.localStorage.getItem(OPEN_SECTIONS_KEY) ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleSection = (key: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        window.localStorage.setItem(OPEN_SECTIONS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Not remembered this time; the section still opens.
+      }
+      return next;
+    });
+  };
 
   /**
    * Loading is derived from a request key rather than set at the top of the
@@ -495,6 +528,8 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
                 storeId={storeId}
                 onRescored={() => setRefreshKey((k) => k + 1)}
                 onChange={(id, v) => setEdits((prev) => ({ ...prev, [id]: v }))}
+                openSections={openSections}
+                onToggleSection={toggleSection}
               />
             ))}
           </div>
@@ -556,6 +591,7 @@ function shortDate(iso: string): string {
 
 function PositionScorecard({
   positionId, result, values, inputsLoading, locked, period, storeId, onRescored, onChange,
+  openSections, onToggleSection,
 }: {
   positionId: PositionId;
   result: PositionResult | null;
@@ -566,18 +602,20 @@ function PositionScorecard({
   storeId: string;
   onRescored: () => void;
   onChange: (criterionId: string, value: string) => void;
+  openSections: Set<string>;
+  onToggleSection: (key: string) => void;
 }) {
-  // Closed to start, like the categories inside them. The page opens as the
-  // six positions with their scores, which is the question being asked most of
-  // the time; opening one is how you ask why.
-  const [open, setOpen] = useState(false);
+  // Closed until opened, like the categories inside them, and remembered by the
+  // page rather than here so a refresh — which remounts this card — keeps it.
+  const open = openSections.has(`pos:${positionId}`);
+  const setOpen = () => onToggleSection(`pos:${positionId}`);
   const tone = bonusTone(result?.score ?? null);
   const note = result ? coverageNote(result.scoreableWeight, result.pendingCount) : null;
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={setOpen}
         disabled={!result}
         className={`w-full flex items-center gap-2.5 px-3 py-2 text-left ${TONE_BG[tone]} ${result ? "hover:brightness-95" : ""} transition disabled:cursor-default`}
       >
@@ -596,10 +634,11 @@ function PositionScorecard({
         </span>
       </button>
 
-      {open && (
-        result === null ? (
-          <p className="px-3 py-3 text-sm text-gray-400">Not computed for this period.</p>
-        ) : inputsLoading ? (
+      {/* Only with a result: the button can't open a position without one, and
+          a remembered open section must not render before the data has
+          arrived, or the first browser render differs from the server's. */}
+      {open && result !== null && (
+        inputsLoading ? (
           <p className="px-3 py-3 text-sm text-gray-400 animate-pulse">Loading entries…</p>
         ) : (
           <div className="px-3 py-2 space-y-2 border-t border-gray-100">
@@ -614,6 +653,8 @@ function PositionScorecard({
                 storeId={storeId}
                 onRescored={onRescored}
                 onChange={onChange}
+                open={openSections.has(`cat:${positionId}:${cat.category.id}`)}
+                onToggle={() => onToggleSection(`cat:${positionId}:${cat.category.id}`)}
               />
             ))}
           </div>
@@ -624,7 +665,7 @@ function PositionScorecard({
 }
 
 function CategoryCard({
-  cat, positionId, values, locked, period, storeId, onRescored, onChange,
+  cat, positionId, values, locked, period, storeId, onRescored, onChange, open, onToggle,
 }: {
   cat: CategoryResult;
   positionId: PositionId;
@@ -634,11 +675,13 @@ function CategoryCard({
   storeId: string;
   onRescored: () => void;
   onChange: (criterionId: string, value: string) => void;
+  /** Kept by the page, so it survives a refresh. */
+  open: boolean;
+  onToggle: () => void;
 }) {
   // Categories start closed. Six positions of several categories each is a very
   // long page open, and the header already carries the score, the weight and
   // the override — which is all that is wanted until something looks wrong.
-  const [open, setOpen] = useState(false);
   const overrideId = categoryOverrideId(positionId, cat.category.id);
   // Saved inputs with unsaved edits over the top — the same source every other
   // field on the card reads from, so a click shows immediately rather than
@@ -665,7 +708,7 @@ function CategoryCard({
     <div className="rounded-lg border border-gray-200 overflow-hidden bg-white">
       <div className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 bg-gray-50 border-b border-gray-100">
         <button
-          onClick={() => setOpen((o) => !o)}
+          onClick={onToggle}
           className="flex items-center gap-2 text-left min-w-0"
         >
           <span className="text-sm font-semibold text-gray-800">{cat.category.label}</span>
