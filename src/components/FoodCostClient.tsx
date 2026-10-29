@@ -436,6 +436,18 @@ function InventoryCompletionTable({
     return () => { cancelled = true; };
   }, [key]);
 
+  // Same three-click cycle as RankTable: best first, then reversed, then back
+  // to the default order (critical counts, then full counts, best first).
+  const [sort, setSort] = useState<{ col: "location" | "full" | "critical"; dir: "asc" | "desc" } | null>(null);
+  const firstDir = (col: "location" | "full" | "critical") => (col === "location" ? "asc" : "desc");
+  const toggleSort = (col: "location" | "full" | "critical") => {
+    setSort((prev) => {
+      if (!prev || prev.col !== col) return { col, dir: firstDir(col) };
+      if (prev.dir === firstDir(col)) return { col, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return null;
+    });
+  };
+
   if (!range) return null;
 
   const current = rows.key === key ? rows.byId : {};
@@ -449,6 +461,39 @@ function InventoryCompletionTable({
       const fb = pctOf(b.weeksOnTime, b.weeksJudged) ?? -1;
       return (b.criticalPct ?? -1) - (a.criticalPct ?? -1) || fb - fa;
     });
+  const sortValue = (r: InventoryCompletion): string | number | null =>
+    sort?.col === "location" ? r.locationName
+      : sort?.col === "full" ? pctOf(r.weeksOnTime, r.weeksJudged)
+        : r.criticalPct;
+  if (sort) {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    shown.sort((a, b) => {
+      const va = sortValue(a);
+      const vb = sortValue(b);
+      // A store with nothing to judge sinks whichever way the column points.
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
+      return (va - vb) * dir || a.locationName.localeCompare(b.locationName);
+    });
+  }
+  const sortHeader = (col: "location" | "full" | "critical", label: string, align: "left" | "right", width = "") => {
+    const active = sort?.col === col;
+    return (
+      <th className={`${align === "right" ? "text-right" : "text-left"} px-4 py-2 text-xs font-semibold uppercase tracking-wide ${active ? "text-gray-600" : "text-gray-400"} ${width}`}>
+        <button
+          type="button"
+          onClick={() => toggleSort(col)}
+          title={`Sort by ${label}`}
+          className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition ${align === "right" ? "flex-row-reverse" : ""}`}
+        >
+          {label}
+          <span className="w-2 text-[9px] leading-none">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+        </button>
+      </th>
+    );
+  };
 
   const tot = shown.reduce(
     (t, r) => ({ cd: t.cd + r.criticalDone, cs: t.cs + r.criticalSlots, wo: t.wo + r.weeksOnTime, wj: t.wj + r.weeksJudged }),
@@ -485,9 +530,9 @@ function InventoryCompletionTable({
         <thead>
           <tr className="border-b border-gray-100">
             <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
-            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-48">Full Counts</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-48">Critical Counts</th>
+            {sortHeader("location", "Location", "left")}
+            {sortHeader("full", "Full Counts", "right", "w-48")}
+            {sortHeader("critical", "Critical Counts", "right", "w-48")}
           </tr>
         </thead>
         <tbody>
