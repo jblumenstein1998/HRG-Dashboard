@@ -114,7 +114,39 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
     { key: "", data: null, error: null }
   );
 
+  /**
+   * Opening a scorecard comes first: it rescores from the latest nightly
+   * metrics so computed values are current, and — if this store's scorecard
+   * was left unlocked — clears every manual entry so it starts again from
+   * computed values (Josh, 2026-10-28). Results and entries are only read once
+   * that has finished, or they would show what was just cleared.
+   */
+  const openKey = `${period}|${storeId}`;
+  const [opened, setOpened] = useState<{ key: string; locked: boolean; payLocked: boolean; cleared: number }>(
+    { key: "", locked: true, payLocked: false, cleared: 0 }
+  );
+  const isOpen = opened.key === openKey;
+
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/bonus/store-lock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period, storeId, action: "open" }),
+    })
+      .then((r) => r.json())
+      .then((json: { locked?: boolean; payLocked?: boolean; cleared?: number }) => {
+        if (!cancelled) {
+          setOpened({ key: openKey, locked: json.locked ?? true, payLocked: json.payLocked ?? false, cleared: json.cleared ?? 0 });
+        }
+      })
+      // A failed open must not leave the page blank; read what is stored, locked.
+      .catch(() => { if (!cancelled) setOpened({ key: openKey, locked: true, payLocked: false, cleared: 0 }); });
+    return () => { cancelled = true; };
+  }, [openKey, period, storeId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
     const qs = `period=${encodeURIComponent(period)}&store=${encodeURIComponent(storeId)}`;
     fetch(`/api/bonus/attainment?${qs}`)
@@ -132,12 +164,17 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
         if (!cancelled) setState({ key: requestKey, data: null, error: String(err?.message ?? err) });
       });
     return () => { cancelled = true; };
-  }, [requestKey, period, storeId, router]);
+  }, [requestKey, period, storeId, router, isOpen]);
 
   const loading = state.key !== requestKey;
   const data = state.data;
   const error = state.error;
+  // Two locks. `locked` is the pay lock: the whole period frozen as approved.
+  // `storeLocked` is this scorecard's edit lock: entries kept and read-only,
+  // computed values still refreshing.
   const locked = data?.locked ?? false;
+  const storeLocked = !isOpen || opened.locked;
+  const readOnly = locked || storeLocked;
 
   const byPosition = useMemo(() => {
     const map = new Map<PositionId, StoredResult>();
@@ -158,6 +195,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
     fetch(`/api/bonus/inputs?period=${encodeURIComponent(period)}&store=${storeId}`)
       .then((r) => r.json())
@@ -169,7 +207,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
       })
       .catch(() => { if (!cancelled) setLoadedInputs({ key: inputsKey, values: {} }); });
     return () => { cancelled = true; };
-  }, [inputsKey, period, storeId]);
+  }, [inputsKey, period, storeId, isOpen]);
 
   // A store or period switch must not carry the previous one's unsaved edits
   // onto a different scorecard, where they would be saved against the wrong
@@ -184,7 +222,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
   const values = useMemo(() => ({ ...loadedInputs.values, ...edits }), [loadedInputs, edits]);
   const dirty = Object.keys(edits).length > 0;
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     setSaving(true);
     setSaveStatus(null);
     // Only what was actually touched is sent. "" means "still not entered" and
@@ -209,11 +247,57 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
       setEdits({});
       setSaveStatus(json.recomputed ? "Saved and rescored." : `Saved, but rescoring failed: ${json.recomputeError}`);
       setRefreshKey((k) => k + 1);
+      return true;
     } catch (err) {
       setSaveStatus(String(err instanceof Error ? err.message : err));
+      return false;
     } finally {
       setSaving(false);
     }
+  };
+
+  const setStoreLock = async (action: "lock" | "unlock"): Promise<boolean> => {
+    const res = await fetch("/api/bonus/store-lock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period, storeId, action }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSaveStatus(json.error ?? `Could not ${action}`);
+      return false;
+    }
+    setOpened((prev) => ({ ...prev, locked: action === "lock", cleared: 0 }));
+    return true;
+  };
+
+  // The pay lock: freezes every store's results for the period as approved.
+  // Admin-only, here and on the server.
+  const [payLockBusy, setPayLockBusy] = useState(false);
+  const togglePayLock = async () => {
+    setPayLockBusy(true);
+    setSaveStatus(null);
+    try {
+      const res = await fetch("/api/bonus/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(locked ? { period, unlock: true } : { period }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Failed");
+      setSaveStatus(locked ? `${period} reopened.` : `${period} approved and locked for pay.`);
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setSaveStatus(String(err instanceof Error ? err.message : err));
+    } finally {
+      setPayLockBusy(false);
+    }
+  };
+
+  // Locking is what keeps entries, so it saves whatever is still unsaved first.
+  const lockScorecard = async () => {
+    if (dirty && !(await save())) return;
+    if (await setStoreLock("lock")) setSaveStatus("Locked — entries kept. Computed values will keep refreshing.");
   };
 
   const windowLabel = data?.window?.label ?? period;
@@ -287,7 +371,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
               </span>
             )}
             {locked && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-900 text-white">Locked</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-900 text-white">Approved for pay</span>
             )}
 
             <button
@@ -297,6 +381,46 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
             >
               {loading ? "Refreshing…" : "Refresh"}
             </button>
+
+            {isOpen && !locked && (
+              storeLocked ? (
+                <button
+                  onClick={() => setStoreLock("unlock")}
+                  disabled={saving || loading}
+                  title="Unlocked, this scorecard's manual entries can be changed. Reopening it while unlocked clears them all."
+                  className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition disabled:opacity-50"
+                >
+                  🔒 Unlock to edit
+                </button>
+              ) : (
+                <button
+                  onClick={lockScorecard}
+                  disabled={saving}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-gray-700 transition disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "🔓 Lock"}
+                </button>
+              )
+            )}
+
+            {isAdmin && data && (
+              <button
+                onClick={togglePayLock}
+                disabled={payLockBusy || loading || (!locked && !storeLocked)}
+                title={
+                  locked
+                    ? "Reopen this period. The nightly job will recompute it again."
+                    : !storeLocked
+                      ? "Lock this scorecard first."
+                      : "Freeze every store's scores for this period as approved for pay. The nightly job stops changing them."
+                }
+                className={`text-xs px-3 py-1.5 rounded-lg border transition disabled:opacity-50 ${
+                  locked ? "border-gray-300 text-gray-700 hover:bg-gray-50" : "border-green-300 text-green-800 bg-green-50 hover:bg-green-100"
+                }`}
+              >
+                {payLockBusy ? "Working…" : locked ? "Reopen period" : "Approve & lock period"}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -325,7 +449,21 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
 
         {locked && (
           <div className="rounded-lg bg-gray-900 text-white text-xs px-3 py-2">
-            {period} is locked — these are the figures the period was approved on. Unlock it to make changes.
+            {period} is approved for pay — these are the figures it was approved on, for every store, and
+            nothing changes them. {isAdmin ? "Reopen the period to make changes." : "An admin can reopen it."}
+          </div>
+        )}
+        {!locked && isOpen && !storeLocked && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
+            Unlocked — enter values, or switch a computed criterion to manual. <strong>Lock</strong> to keep your
+            entries: reopening or refreshing this scorecard while it is unlocked clears every manual entry and
+            starts again from computed values.
+          </div>
+        )}
+        {opened.cleared > 0 && isOpen && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
+            This scorecard was left unlocked, so its {opened.cleared} manual{" "}
+            {opened.cleared === 1 ? "entry was" : "entries were"} cleared and it shows computed values.
           </div>
         )}
         {saveStatus && (
@@ -345,7 +483,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
                 result={byPosition.get(positionId)?.detail ?? null}
                 values={values}
                 inputsLoading={inputsLoading}
-                locked={locked}
+                locked={readOnly}
                 period={period}
                 storeId={storeId}
                 onRescored={() => setRefreshKey((k) => k + 1)}
@@ -366,7 +504,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
       {/* One save for the whole store: entries are stored per store and period,
           and a category on the GM's card and one on a Director's can both be
           waiting on the same number. */}
-      {dirty && !locked && (
+      {dirty && !readOnly && (
         <div className="sticky bottom-0 z-20 border-t border-gray-200 bg-white/95 backdrop-blur">
           <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3">
             <span className="text-xs text-gray-600">
@@ -382,9 +520,17 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
             <button
               onClick={save}
               disabled={saving}
-              className="text-xs px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-gray-700 transition disabled:opacity-50"
+              title="Rescore with these entries. They are only kept once the scorecard is locked."
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save & rescore"}
+            </button>
+            <button
+              onClick={lockScorecard}
+              disabled={saving}
+              className="text-xs px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-gray-700 transition disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save & lock"}
             </button>
           </div>
         </div>
@@ -669,11 +815,17 @@ function ConditionRow({
   const targetText = fmtGateValue(r.targetUsed, unit);
   const oneGate = thresholdText === targetText;
 
-  // Results are corrected on the category now, not here. The per-metric
-  // mechanism still exists in the engine, so a value entered before the switch
-  // would still apply — surfaced, rather than left to work invisibly.
+  // A computed criterion can be switched to manual while the scorecard is
+  // unlocked (Josh, 2026-10-28): the typed value is stored as an override of
+  // the metric, which the engine applies over the vendor's figure, and
+  // switching back to computed clears it.
   const legacyOverrideId = !enteredHere ? `${OVERRIDE_PREFIX}${r.condition.metric}` : null;
   const overridden = legacyOverrideId ? (values[legacyOverrideId] ?? "").trim() !== "" : false;
+  // "manual" is picked before a figure is typed, so it has to show while the
+  // value is still blank — the same reason the category override keeps one.
+  const [manualPicked, setManualPicked] = useState(false);
+  const manual = overridden || manualPicked;
+  const canSwitch = legacyOverrideId !== null && !locked && !r.condition.advisory;
 
   return (
     <>
@@ -692,12 +844,40 @@ function ConditionRow({
           colSpan={unit === "tenPoint" ? 3 : 1}
           className="px-3 py-1.5 text-right align-top"
         >
+          {canSwitch && (
+            <select
+              value={manual ? "manual" : "computed"}
+              onChange={(e) => {
+                const toManual = e.target.value === "manual";
+                setManualPicked(toManual);
+                if (!toManual && legacyOverrideId) onChange(legacyOverrideId, "");
+              }}
+              title="Use the computed figure, or enter one by hand"
+              className={`mb-1 text-[11px] rounded-md py-0.5 pl-2 pr-6 focus:outline-none focus:ring-2 focus:ring-gray-200 ${
+                manual
+                  ? "border border-amber-300 bg-amber-50 text-amber-800"
+                  : "border border-dashed border-gray-300 bg-white text-gray-500"
+              }`}
+            >
+              <option value="computed">computed</option>
+              <option value="manual">manual</option>
+            </select>
+          )}
           {editable ? (
             <UnitField
               unit={unit}
               value={values[r.condition.id] ?? ""}
               onChange={(v) => onChange(r.condition.id, v)}
             />
+          ) : canSwitch && manual && legacyOverrideId ? (
+            <div>
+              <UnitField
+                unit={unit}
+                value={values[legacyOverrideId] ?? ""}
+                onChange={(v) => onChange(legacyOverrideId, v)}
+                title={`Computed: ${fmtValue(r.value, unit)}`}
+              />
+            </div>
           ) : (
             <span
               className={`tabular-nums ${overridden ? "text-amber-700 font-medium" : TONE_TEXT[tone]}`}
