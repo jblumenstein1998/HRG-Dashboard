@@ -3,6 +3,7 @@ import { requireAdminApi } from "@/lib/users/adminGuard";
 import { BONUS_STORES, storeById } from "@/lib/bonus/storeMap";
 import { businessDateISO } from "@/lib/businessDay";
 import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "@/lib/slackCompletion";
+import { ACCURACY_MAX_DAYS, checkStoreReports } from "@/lib/slackAccuracy";
 import { addDays, fetchUserNames, GRACE_MINUTES, localParts, placeMessage, SLACK_SLOTS } from "@/lib/slackReports";
 
 /**
@@ -84,8 +85,18 @@ export async function GET(req: NextRequest) {
         }));
 
         let detail = null;
+        let accuracy = null;
         if (one) {
-          const names = await fetchUserNames(messages.map((m) => m.user).filter((u): u is string => !!u));
+          const [names, checks] = await Promise.all([
+            fetchUserNames(messages.map((m) => m.user).filter((u): u is string => !!u)),
+            checkStoreReports(store, timeZone, messages, start, end),
+          ]);
+          const decided = [...checks.values()].filter((c) => c.accurate !== null);
+          accuracy = {
+            checked: decided.length,
+            accurate: decided.filter((c) => c.accurate).length,
+            fromDate: addDays(end, -(ACCURACY_MAX_DAYS - 1)) > start ? addDays(end, -(ACCURACY_MAX_DAYS - 1)) : start,
+          };
           detail = messages
             .slice()
             .sort((a, b) => Number(a.ts) - Number(b.ts))
@@ -104,6 +115,7 @@ export async function GET(req: NextRequest) {
                   date: placed.date, slot: placed.slot, onTime: placed.onTime,
                   inGrace: placed.inGrace, by: placed.by,
                 },
+                check: checks.get(m.ts) ?? null,
               };
             });
         }
@@ -112,13 +124,13 @@ export async function GET(req: NextRequest) {
           storeId: store.storeId, name: store.name, channelId, timeZone,
           required: result.required, onTime: result.onTime, inGrace: result.inGrace,
           late: result.late, missed: result.missed, pct: result.pct,
-          days, messages: detail, error: null,
+          days, messages: detail, accuracy, error: null,
         };
       } catch (err) {
         return {
           storeId: store.storeId, name: store.name, channelId: null, timeZone: null,
           required: 0, onTime: 0, inGrace: 0, late: 0, missed: 0, pct: null,
-          days: [], messages: null,
+          days: [], messages: null, accuracy: null,
           error: err instanceof Error ? err.message : String(err),
         };
       }

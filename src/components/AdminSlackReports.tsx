@@ -17,6 +17,55 @@ type Status = "on_time" | "late" | "missed" | "upcoming" | null;
 type Post = { ts: string; date: string; time: string } | null;
 type Range = { start: string; end: string };
 
+type FieldCheck = {
+  key: string;
+  label: string;
+  unit: "$" | "%" | "secs" | "num";
+  posted: number;
+  actual: number | null;
+  ok: boolean | null;
+  tolerance: number;
+  note?: string;
+};
+type ReportCheck = { accurate: boolean | null; checks: FieldCheck[] };
+
+function fmtValue(v: number, unit: FieldCheck["unit"]): string {
+  if (unit === "$") return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (unit === "%") return `${v.toFixed(1)}%`;
+  if (unit === "secs") return `${Math.floor(v / 60)}:${String(Math.round(v % 60)).padStart(2, "0")}`;
+  return v.toFixed(2);
+}
+
+/**
+ * Each number the report posted, against the dashboard's own figure for it.
+ * Green within tolerance, red outside it (with the system's number), grey
+ * when the system had nothing to compare.
+ */
+function Checks({ check }: { check: ReportCheck }) {
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {check.checks.map((c) => (
+        <span
+          key={c.key}
+          title={
+            (c.actual === null
+              ? "No system figure to compare"
+              : `Posted ${fmtValue(c.posted, c.unit)} · dashboard ${fmtValue(c.actual, c.unit)} · allowed ±${fmtValue(c.tolerance, c.unit)}`) +
+            (c.note ? `\n${c.note}` : "")
+          }
+          className={`rounded px-1.5 py-0.5 text-[11px] ${
+            c.ok === null ? "bg-gray-50 text-gray-400" : c.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-700"
+          }`}
+        >
+          {c.label}
+          {c.ok === false && c.actual !== null && <> · should be {fmtValue(c.actual, c.unit)}</>}
+          {c.note && " †"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 type StoreRow = {
   storeId: string;
   name: string;
@@ -28,6 +77,8 @@ type StoreRow = {
   missed: number;
   pct: number | null;
   error: string | null;
+  /** Only on a single store's detail load. */
+  accuracy?: { checked: number; accurate: number; fromDate: string } | null;
   days: { date: string; slots: Record<SlotId, { status: Status; post: Post; grace: boolean }> }[];
   messages:
     | {
@@ -38,6 +89,7 @@ type StoreRow = {
         text: string;
         files: number;
         placed: { date: string; slot: SlotId; onTime: boolean; inGrace: boolean; by: "content" | "time" } | null;
+        check: ReportCheck | null;
       }[]
     | null;
 };
@@ -489,7 +541,18 @@ function StoreDetail({
 
       <div className="min-w-0">
         <div className="flex items-center gap-3 mb-1">
-          <div className="text-[11px] text-gray-400">Messages in the channel, and how each was read</div>
+          <div className="text-[11px] text-gray-400">
+            Messages in the channel, and how each was read
+            {row.accuracy && row.accuracy.checked > 0 && (
+              <>
+                {" · "}
+                <span className={row.accuracy.accurate === row.accuracy.checked ? "text-green-700" : "text-gray-600"}>
+                  {row.accuracy.accurate} of {row.accuracy.checked} reports accurate
+                </span>
+                {row.accuracy.fromDate > row.days[0]?.date && ` (checked from ${shortDate(row.accuracy.fromDate)})`}
+              </>
+            )}
+          </div>
           <label className="ml-auto flex items-center gap-1 text-[11px] text-gray-500">
             <input type="checkbox" checked={reportsOnly} onChange={(e) => setReportsOnly(e.target.checked)} />
             reports only
@@ -521,8 +584,11 @@ function StoreDetail({
                     )}
                   </div>
                 </div>
-                <div className="whitespace-pre-wrap break-words text-gray-700">
-                  {m.text || <span className="text-gray-300">{m.files ? `${m.files} file(s), no text` : "(empty)"}</span>}
+                <div className="min-w-0">
+                  <div className="whitespace-pre-wrap break-words text-gray-700">
+                    {m.text || <span className="text-gray-300">{m.files ? `${m.files} file(s), no text` : "(empty)"}</span>}
+                  </div>
+                  {m.check && m.check.checks.length > 0 && <Checks check={m.check} />}
                 </div>
               </div>
             ))}

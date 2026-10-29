@@ -20,11 +20,12 @@ try {
   const tsc = join(dirname(require.resolve("typescript")), "tsc.js");
   execFileSync(
     process.execPath,
-    [tsc, "src/lib/slackReports.ts", "--outDir", out, "--module", "commonjs",
+    [tsc, "src/lib/slackReports.ts", "src/lib/slackFields.ts", "--outDir", out, "--module", "commonjs",
      "--target", "es2022", "--moduleResolution", "node", "--skipLibCheck"],
     { stdio: "inherit" }
   );
   const S = require(join(out, "slackReports.js"));
+  const F = require(join(out, "slackFields.js"));
 
   let pass = 0;
   let fail = 0;
@@ -126,6 +127,36 @@ try {
   check("CT midnight", S.localMidnight("2026-10-20", CT), Date.parse("2026-10-20T05:00:00Z") / 1000);
   check("ET midnight", S.localMidnight("2026-10-20", ET), Date.parse("2026-10-20T04:00:00Z") / 1000);
   check("ET midnight after DST ends", S.localMidnight("2026-11-02", ET), Date.parse("2026-11-02T05:00:00Z") / 1000);
+
+  // ── Field parsing (src/lib/slackFields.ts) ─────────────────────────────────
+  const brentwoodDay = F.parseReportFields(
+    "10/22 whole day \nNet sales- $4319\nComp- +8\nCatering- 0 \nProd- 66.25\nTPLH- 4.17\nAvg- 15.88\nThird party- 17.68%\nTW- 2:06 \nTL- 6:04\nJolt- 85.7%\nSales projection- $4375\nProd projection- 55.08",
+  );
+  check("brentwood full day",
+    [brentwoodDay.netSales, brentwoodDay.compPct, brentwoodDay.splh, brentwoodDay.tplh, brentwoodDay.avgCheck,
+     brentwoodDay.windowSecs, brentwoodDay.laneSecs, brentwoodDay.joltPct],
+    [4319, 8, 66.25, 4.17, 15.88, 126, 364, 85.7]);
+  check("negative comp after a separator dash", F.parseReportFields("Net sales- $3851\nComp- -10%").compPct, -10);
+  check("negative comp written against the number", F.parseReportFields("Net 3417\nComp -9.7").compPct, -9.7);
+  check("cash: separator dash is not a sign", F.parseReportFields("Net Sales - $4,247.22\nCash - $0.37").cashOverShort, 0.37);
+  check("cash over", F.parseReportFields("Net sales- $4031\nCash over- $3.47").cashOverShort, 3.47);
+  check("cash plus", F.parseReportFields("Net sales- $3851\nCash- +1.09").cashOverShort, 1.09);
+  const hampton = F.parseReportFields(
+    "*Total net sales:$11,306.91*\n*Comp%18.60*\n*Catering: 0*\n*Productivity: :$74.34*\n*TPLH:4.10*\n*Average check: $17.69*\n*% of third party:24.13*\n*Total window: 1:01*\n*Total lane(w/PF): 3:46*\n*ArrowStream submissions: 0*\n*Cash over/short: 11.23*\n*Current Day:*\n*Sales projection$11.054.28*\n*Productivity projections 75.78*",
+  );
+  check("hampton full day, bold",
+    [hampton.netSales, hampton.compPct, hampton.splh, hampton.tplh, hampton.avgCheck, hampton.windowSecs, hampton.laneSecs, hampton.cashOverShort],
+    [11306.91, 18.6, 74.34, 4.1, 17.69, 61, 226, 11.23]);
+  const hamptonMid = F.parseReportFields(
+    "Total net sales: $5.119.90\nHourly breakdown:\n•2:3: 797.79\n•3-4: 655.53\n•4-5: 812.72\nProductivity(SPLH): $65.25\nTPLH: 4.0\nAverage check: $15.80\nTotal Window: .59\nTotal time(PF): 2:59",
+  );
+  check("hampton midday hours, typed 2:3", hamptonMid.hourly, { 14: 797.79, 15: 655.53, 16: 812.72 });
+  check("hampton midday SPLH / window / lane", [hamptonMid.splh, hamptonMid.windowSecs, hamptonMid.laneSecs], [65.25, 59, 179]);
+  const oyster = F.parseReportFields("Netsales -2,023.68\nHourly 11-12/341.48 12-1/ 719.79 1-2/ 359.09\nProductivity -58.36\nTPLH-3.5");
+  check("oyster: 'Netsales -' and slashed hours", [oyster.netSales, oyster.splh, oyster.tplh, oyster.hourly],
+    [2023.68, 58.36, 3.5, { 11: 341.48, 12: 719.79, 13: 359.09 }]);
+  check("projection lines don't read as productivity",
+    F.parseReportFields("Net sales: $100\nSales Projection: $6,014.65\nProductivity Projection: $85.07").splh, null);
 
   console.log(`${pass} passed, ${fail} failed`);
   if (fail > 0) process.exitCode = 1;

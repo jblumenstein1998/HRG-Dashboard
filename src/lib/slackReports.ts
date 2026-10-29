@@ -79,7 +79,7 @@ const FULL_DAY_RE =
  * keeps it off dollar amounts and dates, and the look-ahead stops a lane time
  * like "3:27" reading as 3-2.
  */
-const RANGE_RE = /(?<![\d$.,/:])(11|12|[1-7])\s*[-–:]\s*(12|[1-8])(?![\d.,/]|:\d)/g;
+const RANGE_RE = /(?<![\d$.,/:])(11|12|[1-7])\s*[-–:]\s*(12|[1-8])(?![\d.,]|:\d)/g;
 
 const RANGE_SLOT: Record<number, SlackSlot> = {
   11: "lunch", 12: "lunch", 1: "lunch",
