@@ -159,6 +159,8 @@ try {
   check("thousands comma still thousands", F.parseReportFields("Netsales: 1,954.10\nNet sales: 11,306").netSales, 1954.1);
   check("a weekly recap isn't a daily report",
     S.isReport("Gdm!!!  As you know we have completed the first week of period 10\n\nTotal net sales: 55316\nComp % : -1.33 (period)\nSales projections for the week: $52,343.00"), false);
+  check("a daily report mentioning the week is still a report",
+    S.isReport("Total NET SALES: $9123.55\nComp %: +20.22\nProductivity: 82.68\n\nDrive thru times were high, we are still on track for the week"), true);
   check("projection lines don't read as productivity",
     F.parseReportFields("Net sales: $100\nSales Projection: $6,014.65\nProductivity Projection: $85.07").splh, null);
 

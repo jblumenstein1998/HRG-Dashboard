@@ -87,7 +87,11 @@ const RANGE_SLOT: Record<number, SlackSlot> = {
   5: "dinner", 6: "dinner", 7: "dinner",
 };
 
-const WEEKLY_RECAP_RE = /week of period|for the week\b|\bweek to date\b|\bperiod to date\b|\bWTD\b|\bPTD\b/i;
+/**
+ * Phrases only a weekly recap uses. Not a bare "for the week": College's 9/4
+ * morning report signs off "we are still on track for the week".
+ */
+const WEEKLY_RECAP_RE = /week of period|projections? for the week|\bweek to date\b|\bperiod to date\b|\bWTD\b|\bPTD\b/i;
 
 /**
  * Is this a sales report at all, rather than chatter? Every report leads with
