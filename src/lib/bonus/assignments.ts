@@ -183,18 +183,20 @@ function tidyName(s: string): string {
 }
 
 /**
- * Everyone currently employed with a GM, AGM or Director title, company-wide.
+ * One store's current staff with a GM, AGM or Director title.
  *
- * Company-wide rather than one store's, because the person running a store is
- * not always on its Workstream location — managers cover and move — and the
- * tab puts the store's own people first anyway.
+ * This store's people only (Josh, 2026-10-29). A store that is short a
+ * Director has nobody to suggest for it, and offering someone from another
+ * store would put a name in that slot that doesn't belong there. Anyone else
+ * can still be typed.
  */
-export async function listCandidates(): Promise<Candidate[]> {
+export async function listCandidates(storeId: string): Promise<Candidate[]> {
   await ensureWorkstreamEmployeeSchema();
   const rows = (await sql`
     SELECT uuid, first_name, last_name, preferred_name, store_id, job_title
     FROM workstream_employees
     WHERE status = 'active' AND termination_date IS NULL
+      AND store_id = ${storeId}
       AND job_title = ANY(${MANAGER_TITLES}::text[])
     ORDER BY last_name, first_name
   `) as {

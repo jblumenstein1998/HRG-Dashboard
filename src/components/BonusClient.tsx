@@ -58,9 +58,6 @@ import {
  * score is derived from theirs, and compute.ts depends on that. This is purely
  * how the page reads.
  */
-/** Browser storage key for which positions and categories are open. */
-const OPEN_SECTIONS_KEY = "hrg.bonus.openSections";
-
 const SCORECARD_ORDER: PositionId[] = [
   "gm",
   "agm",
@@ -107,31 +104,19 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
   const store = BONUS_STORES.find((s) => s.storeId === storeId) ?? BONUS_STORES[0];
 
   /**
-   * Which positions and categories are open, kept in this browser so they stay
-   * open through a refresh or a reload and the numbers inside can be watched
-   * changing (Josh, 2026-10-28). Keys are "pos:<position>" and
+   * Which positions and categories are open. Held by the page, so they stay
+   * open through the Refresh button and the numbers inside can be watched
+   * changing, but not stored anywhere — reloading the page starts with every
+   * section collapsed (Josh, 2026-10-29). Keys are "pos:<position>" and
    * "cat:<position>:<category>" — the same for every store and period, so the
-   * layout follows you as you switch. Storage can be missing or blocked, in
-   * which case everything simply starts closed.
+   * layout follows you as you switch.
    */
-  const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    try {
-      if (typeof window === "undefined") return new Set();
-      return new Set(JSON.parse(window.localStorage.getItem(OPEN_SECTIONS_KEY) ?? "[]") as string[]);
-    } catch {
-      return new Set();
-    }
-  });
+  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set());
   const toggleSection = (key: string) => {
     setOpenSections((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      try {
-        window.localStorage.setItem(OPEN_SECTIONS_KEY, JSON.stringify([...next]));
-      } catch {
-        // Not remembered this time; the section still opens.
-      }
       return next;
     });
   };

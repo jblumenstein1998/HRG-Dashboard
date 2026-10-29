@@ -3,9 +3,9 @@
 /**
  * The people on a store's scorecard — GM, AGM and the four Directors.
  *
- * Each position is a free-text field with Workstream's people offered as
- * suggestions: the store's own staff with the matching title first, then the
- * same title elsewhere, since managers cover and move. Workstream calls all four
+ * Each position is a free-text field with this store's Workstream staff of the
+ * matching title offered as suggestions — never another store's, so a store
+ * short a Director simply has nothing to suggest there. Workstream calls all four
  * Directors "Director", so for those this card is where they are told apart,
  * and it lists the store's Directors nobody has been given a position yet.
  *
@@ -100,11 +100,11 @@ export default function BonusTeamCard({
   const field = (id: PositionId): Field =>
     edits[id] ?? { name: saved.get(id)?.name ?? "", workstreamUuid: saved.get(id)?.workstreamUuid ?? null };
 
-  // Suggestions per title, this store's people first. A Director already in
-  // another slot here sinks below the ones still to be placed. Recomputed each
-  // render — it is a sort of sixty-odd people.
+  // Suggestions per title, from this store's people only (the API sends no
+  // one else). A Director already in another slot sinks below the ones still
+  // to be placed.
   const taken = new Set(TEAM_ORDER.map((id) => norm(field(id).name)).filter(Boolean));
-  const rank = (c: Candidate) => (c.storeId === storeId ? (taken.has(norm(c.name)) ? 1 : 0) : 2);
+  const rank = (c: Candidate) => (taken.has(norm(c.name)) ? 1 : 0);
   const suggestions = new Map<ManagerTitle, Candidate[]>(
     (["General Manager", "AGM", "Director"] as ManagerTitle[]).map((t) => [
       t,
@@ -112,9 +112,7 @@ export default function BonusTeamCard({
     ])
   );
 
-  const unplacedDirectors = (suggestions.get("Director") ?? []).filter(
-    (c) => c.storeId === storeId && !taken.has(norm(c.name))
-  );
+  const unplacedDirectors = (suggestions.get("Director") ?? []).filter((c) => !taken.has(norm(c.name)));
 
   /** Typing a name that matches a Workstream person links them; anything else stays a typed name. */
   function setName(id: PositionId, name: string) {
@@ -205,7 +203,7 @@ export default function BonusTeamCard({
               <datalist id={listId}>
                 {(suggestions.get(TITLE_FOR_POSITION[id]) ?? []).map((c) => (
                   <option key={c.workstreamUuid} value={c.name}>
-                    {c.title}{c.storeName ? ` · ${c.storeName}` : ""}
+                    {c.title}
                   </option>
                 ))}
               </datalist>

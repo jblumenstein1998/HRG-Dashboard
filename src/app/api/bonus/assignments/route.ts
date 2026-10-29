@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       getAssignments(period!, storeId!),
       // The suggestions are a convenience. An unsynced roster leaves the names
       // typed by hand rather than the whole card failing.
-      listCandidates().catch((err) => {
+      listCandidates(storeId!).catch((err) => {
         console.error("[Bonus] assignment candidates failed:", err instanceof Error ? err.message : err);
         return [];
       }),
