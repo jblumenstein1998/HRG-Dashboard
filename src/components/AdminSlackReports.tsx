@@ -149,9 +149,9 @@ const count = (n: number) => (n === 0 ? "—" : n);
 
 export default function AdminSlackReports() {
   const [data, setData] = useState<Payload | null>(null);
-  const [quick, setQuick] = useState<string | null>("ptd");
-  const [start, setStart] = useState(() => ptd().start);
-  const [end, setEnd] = useState(() => ptd().end);
+  const [quick, setQuick] = useState<string | null>("today");
+  const [start, setStart] = useState(() => today());
+  const [end, setEnd] = useState(() => today());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -180,9 +180,9 @@ export default function AdminSlackReports() {
     }
   }
 
-  // Period to date on arrival — the window the scorecard is scoring right now.
+  // Today on arrival, to see which of today's reports are in so far.
   useEffect(() => {
-    load(ptd());
+    load({ start: today(), end: today() });
   }, []);
 
   function apply(r: Range, key: string | null) {
