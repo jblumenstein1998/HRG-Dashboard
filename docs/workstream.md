@@ -416,83 +416,60 @@ for everyone — so the app keeps deriving it from `OVERTIME_MULTIPLIER` in
 policy ever stops being uniform, read the rate and delete the constant; do one
 or the other, not both.
 
-## Retention — computed, deliberately not wired in
+## Retention — scored from P11 FY2026
 
 `src/lib/workstreamRetention.ts` computes 30/60/90-day new-hire retention per
-store. `scripts/workstream-retention-check.mjs` prints it for any window.
+store, and the Training Director's `t_retention_*` criteria are computed from it
+from P11 FY2026 on (`RETENTION_AUTO_FROM` in `src/lib/bonus/rules.ts`). Earlier
+periods are still entered by hand. The bonus tab lists every name behind each
+figure, under Training → Retention & Engagement.
 
 **The cohort is pinned to the anniversary, not the hire date.** A period's
 30-day figure covers people whose 30th day fell inside it. Scoring by hire date
 instead would mean a period's number could not be known until thirty days after
 it closed, and would keep moving after the bonus had been paid.
 
-The scorecard still has `t_retention_30/60/90` as `source: "manual"`, and they
-should stay that way until these figures have been checked against a period
-somebody scored by hand. This drives pay; "the computer says 78%" is not a
-reason to believe it.
+**A hire is a Workstream record that clocked time in PAR** — Josh's rule,
+2026-10-26. Workstream creates a record when a candidate is moved to "Hired", so
+it holds people unwound at Hiring Complete, no-shows and re-entries. Matched by
+name (first or preferred name, plus any word of the surname or PAR's initial),
+with a shift from two weeks before the start date onward. A confirmed link from
+the Staffing review queue counts as a match.
 
-### Why they are not trustworthy yet
+What is left out, and what holds a figure:
 
-Roughly a quarter of each cohort carries **no store**, because a terminated
-Workstream record usually loses its job assignment — and the assignment is what
-names the location. Measured over the 90 days to 2026-09-20:
+- **Never worked** — PAR has them but no shift, or PAR has nobody by the name
+  and Workstream ended them on or before their start date (Josh, 2026-10-27).
+  Left out.
+- **Duplicates and transfers** — by termination note, and any two records that
+  clocked in under one PAR clock number (Hampton P10 had two of those, each
+  reading as a leaver). Left out.
+- **Unverified** — no PAR record by that name. The store's figure stays
+  **pending** until someone marks them on the bonus tab (`retention_hire_reviews`).
+  Before the start-date rule above P10 had 40 across the estate; about 18 of
+  those are now settled by it, and Portland's opening crew was 10 more.
+- **No store from either system** — listed under every store's panel and held
+  by none, since they could belong to any.
 
-| 90-day cohort | Stayed | Left | Retention |
-| --- | --- | --- | --- |
-| With a store | 132 | 97 | **57.6%** |
-| No store | 10 | 49 | **16.9%** |
+The store comes from our synced copy, which keeps a leaver's last known store
+(see "Last known store is never forgotten"). Its first sync was 2026-10-04,
+which is why scoring starts at P11: before it, about a quarter of each cohort —
+mostly leavers — had no store, and dropping them overstated company retention
+by about eight points (57.6% vs 49.3% over the 90 days to 2026-09-20).
 
-The storeless group is overwhelmingly leavers, so dropping it flatters every
-store. Company-wide the true figure is 49.3%, not 57.6% — an eight-point
-overstatement, and worse for stores whose leavers happen to lose their
-assignment more often.
+There is **no minimum cohort size** (Josh's call): 0 of 1 scores 0%, 1 of 1
+scores 100%. Most stores have 1–7 people reach day 90 in a period.
 
-Two things to settle before this can gate a bonus:
+`scripts/workstream-retention-check.mjs` is the original standalone checker
+and still implements the old rule (every record counts, live API) — useful for
+the raw numbers, not as a check on the scored ones.
 
-1. **Recover the store for terminated records.** Nothing in the API offers it
-   once the assignment is gone. The practical fix may be to snapshot each
-   person's store *while they are still employed*, which is the argument for the
-   snapshot table below.
-2. **Transfers.** Workstream creates a new record when somebody moves store, so
-   a transfer reads as a departure plus a hire unless the old record is closed.
+### Still open
 
-Portland also reports 7.7% at 30 days (1 of 13), which is either a real story
-about a new store or a data problem, and is worth a human look either way.
-
-## Retention plumbing still to build
-
-Workstream is the only system that knows hire and termination dates, so it is
-the only possible source for retention — which is why the bonus scorecard wants
-it.
-
-The one design decision already made, in `employedOn()`: retention is answered
-as a **date test**, never by reading `status`. `status` is only ever the present
-tense, and "how many people did we have in P3" is a question about the past.
-
-The date filters are live-verified and each assignment carries its store, so
-**per-store retention is available today** — which is what the bonus gate needs.
-
-The one caveat is coverage: 868 of 1,224 employees carry an assignment, so the
-356 without one have no store. They are overwhelmingly offboarded people, which
-matters precisely because turnover counts leavers. Whoever writes the metric has
-to decide what a terminated employee with no surviving assignment belongs to,
-rather than let them fall out of every store's denominator unnoticed.
-
-Still to design:
-
-- a snapshot table, so a period's headcount stays answerable after Workstream's
-  current state has moved on
-- turnover as a flat number the bonus engine can gate on — `src/lib/bonus/types.ts`
-  requires every condition to be a single numeric gate against a single metric
-- 90-day retention of new hires, which is the recruiting-side number
-- a daily cron, a seventh entry in `vercel.json`, gated on `CRON_SECRET` like the
-  other six
-
-And a decision to make deliberately rather than by default: whether turnover
-counts against the store on the assignment at the time of leaving, or the store
-someone spent most of their tenure at. Workstream keeps one current assignment
-per person, not a posting history, so a transfer in month eleven currently lands
-the whole departure on the receiving store.
+- Whether turnover counts against the store at the time of leaving or the store
+  of most tenure. Workstream keeps one current assignment, not a posting history.
+- A snapshot table, so a period's headcount stays answerable after Workstream's
+  current state has moved on.
 
 ## Prerequisites
 

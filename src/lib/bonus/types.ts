@@ -124,6 +124,14 @@ export type Condition = {
   /** Which metric supplies the value. Auto metrics are computed; manual ones are typed in. */
   metric: string;
   source: "auto" | "manual";
+  /**
+   * For an auto condition whose source only became trustworthy partway
+   * through the year: the first fiscal period it is computed for. Earlier
+   * periods treat it as manual and take a typed value. Retention is the case —
+   * it needs our synced Workstream copy (first sync 2026-10-04), so it is
+   * computed from P11 FY2026 on.
+   */
+  autoFromPeriod?: number;
   unit: ConditionUnit;
   grain: MetricGrain;
   /** Gate for 50% payout. */

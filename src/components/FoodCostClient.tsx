@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, Fragment } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, Customized, LabelList, usePlotArea, useXAxisTicks, useYAxisScale } from "recharts";
 import TabOptions from "@/components/TabOptions";
@@ -15,6 +15,10 @@ import { BONUS_STORES } from "@/lib/bonus/storeMap";
 // location can't be left off this tab while every other tab picks it up.
 const LOCATION_IDS = BONUS_STORES.map((s) => s.netchefLocationId);
 const TN_STORES = ["Springfield", "White House", "Brentwood", "Spring Hill", "Columbia", "Portland"];
+
+/** Net-Chef vs PAR sales gap that triggers a recheck — see the sales cross-check. */
+const SALES_GAP_PCT = 3;
+const MAX_RECHECKS = 2;
 const VA_STORES = ["Jefferson", "Oyster", "Hampton", "College", "Chesapeake", "Hillcrest", "Beach"];
 
 // Weekly sales are pulled live from PAR (see /api/par/weekly-sales, salesByLocationName)
@@ -364,6 +368,211 @@ function RecentWeeksTable({ allowed, totalLabel }: { allowed: Set<string> | null
               </tr>
             );
           })()}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Inventory count completion ───────────────────────────────────────────────
+
+type InventoryCompletion = {
+  locationId: number;
+  locationName: string;
+  criticalDone: number;
+  criticalSlots: number;
+  criticalPct: number | null;
+  weeksOnTime: number;
+  weeksJudged: number;
+  lateWeeks: string[];
+  missedWeeks: string[];
+};
+
+// Coloured against the Quality Director's bonus goal: a full count every
+// Monday at both levels, and critical counts at 95% for half, 100% for full.
+// The full count has no middle band — the goal has no partial credit for it.
+function fullCountColor(onTime: number, judged: number): string {
+  if (judged === 0) return "text-gray-400";
+  return onTime === judged ? "text-green-600" : "text-red-600";
+}
+function criticalColor(pct: number | null): string {
+  if (pct === null) return "text-gray-400";
+  if (pct >= 100) return "text-green-600";
+  if (pct >= 95) return "text-yellow-600";
+  return "text-red-600";
+}
+const pctOf = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
+
+function InventoryCompletionTable({
+  range, allowed, totalLabel,
+}: {
+  range: { start: string; end: string } | null;
+  allowed: Set<string> | null;
+  totalLabel: string;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const key = range ? `${range.start}|${range.end}` : "";
+  const [rows, setRows] = useState<{ key: string; byId: Record<number, InventoryCompletion | "error"> }>({ key: "", byId: {} });
+
+  // Keyed on the date strings, not the range object, which is rebuilt on every
+  // render of the page and would refetch thirteen stores each time.
+  useEffect(() => {
+    if (!key) return;
+    const [start, end] = key.split("|");
+    let cancelled = false;
+    // Responses for an older range are dropped by keying the stored rows;
+    // results land one store at a time, as each store's Net-Chef login
+    // completes, rather than waiting on the slowest of thirteen.
+    const land = (id: number, row: InventoryCompletion | "error") => {
+      if (cancelled) return;
+      setRows((prev) => ({ key, byId: { ...(prev.key === key ? prev.byId : {}), [id]: row } }));
+    };
+    for (const id of LOCATION_IDS) {
+      fetch(`/api/netchef/inventory-counts?locationId=${id}&start=${start}&end=${end}`)
+        .then(async (r) => {
+          const json = await r.json();
+          if (!r.ok) throw new Error(json.error ?? "failed");
+          return json as InventoryCompletion;
+        })
+        .then((row) => land(id, row))
+        .catch(() => land(id, "error"));
+    }
+    return () => { cancelled = true; };
+  }, [key]);
+
+  // Same three-click cycle as RankTable: best first, then reversed, then back
+  // to the default order (critical counts, then full counts, best first).
+  const [sort, setSort] = useState<{ col: "location" | "full" | "critical"; dir: "asc" | "desc" } | null>(null);
+  const firstDir = (col: "location" | "full" | "critical") => (col === "location" ? "asc" : "desc");
+  const toggleSort = (col: "location" | "full" | "critical") => {
+    setSort((prev) => {
+      if (!prev || prev.col !== col) return { col, dir: firstDir(col) };
+      if (prev.dir === firstDir(col)) return { col, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return null;
+    });
+  };
+
+  if (!range) return null;
+
+  const current = rows.key === key ? rows.byId : {};
+  const loaded = Object.values(current).filter((r): r is InventoryCompletion => r !== "error");
+  const failed = LOCATION_IDS.filter((id) => current[id] === "error").length;
+  const pending = LOCATION_IDS.length - Object.keys(current).length;
+  const shown = loaded
+    .filter((r) => inFilter(allowed, r.locationName))
+    .sort((a, b) => {
+      const fa = pctOf(a.weeksOnTime, a.weeksJudged) ?? -1;
+      const fb = pctOf(b.weeksOnTime, b.weeksJudged) ?? -1;
+      return (b.criticalPct ?? -1) - (a.criticalPct ?? -1) || fb - fa;
+    });
+  const sortValue = (r: InventoryCompletion): string | number | null =>
+    sort?.col === "location" ? r.locationName
+      : sort?.col === "full" ? pctOf(r.weeksOnTime, r.weeksJudged)
+        : r.criticalPct;
+  if (sort) {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    shown.sort((a, b) => {
+      const va = sortValue(a);
+      const vb = sortValue(b);
+      // A store with nothing to judge sinks whichever way the column points.
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
+      return (va - vb) * dir || a.locationName.localeCompare(b.locationName);
+    });
+  }
+  const sortHeader = (col: "location" | "full" | "critical", label: string, align: "left" | "right", width = "") => {
+    const active = sort?.col === col;
+    return (
+      <th className={`${align === "right" ? "text-right" : "text-left"} px-4 py-2 text-xs font-semibold uppercase tracking-wide ${active ? "text-gray-600" : "text-gray-400"} ${width}`}>
+        <button
+          type="button"
+          onClick={() => toggleSort(col)}
+          title={`Sort by ${label}`}
+          className={`inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-700 transition ${align === "right" ? "flex-row-reverse" : ""}`}
+        >
+          {label}
+          <span className="w-2 text-[9px] leading-none">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+        </button>
+      </th>
+    );
+  };
+
+  const tot = shown.reduce(
+    (t, r) => ({ cd: t.cd + r.criticalDone, cs: t.cs + r.criticalSlots, wo: t.wo + r.weeksOnTime, wj: t.wj + r.weeksJudged }),
+    { cd: 0, cs: 0, wo: 0, wj: 0 },
+  );
+
+  const fullCell = (onTime: number, judged: number) =>
+    judged === 0 ? "—" : `${pctOf(onTime, judged)}% (${onTime}/${judged})`;
+  const critCell = (done: number, slots: number) =>
+    slots === 0 ? "—" : `${pctOf(done, slots)}% (${done}/${slots})`;
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <CopyableTitle title="Inventory Count Completion" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        <span className="text-xs text-gray-400">
+          Full count:{" "}
+          <span className="text-green-600 font-medium">every Monday</span>
+          {" / "}
+          <span className="text-red-600 font-medium">any missed or late</span>
+          <span className="text-gray-300"> · </span>
+          Critical (AM + PM, Mondays excused):{" "}
+          <span className="text-green-600 font-medium">100%</span>
+          {" / "}
+          <span className="text-yellow-600 font-medium">≥95%</span>
+          {" / "}
+          <span className="text-red-600 font-medium">&lt;95%</span>
+        </span>
+        {pending > 0 && (
+          <span className="text-xs text-gray-400 animate-pulse ml-auto">Loading {LOCATION_IDS.length - pending}/{LOCATION_IDS.length}…</span>
+        )}
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+            {sortHeader("location", "Location", "left")}
+            {sortHeader("full", "Full Counts", "right", "w-48")}
+            {sortHeader("critical", "Critical Counts", "right", "w-48")}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r, i) => {
+            const notes = [
+              ...r.missedWeeks.map((w) => `missed week of ${fmtDate(w)}`),
+              ...r.lateWeeks.map((w) => `late for week of ${fmtDate(w)}`),
+            ];
+            return (
+              <tr key={r.locationId} className="border-b border-[#ececec]">
+                <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                <td className="px-4 py-3 font-medium text-gray-900">{r.locationName}</td>
+                <td className={`px-4 py-3 text-right tabular-nums font-semibold ${fullCountColor(r.weeksOnTime, r.weeksJudged)}`} title={notes.join("\n") || undefined}>
+                  {fullCell(r.weeksOnTime, r.weeksJudged)}
+                </td>
+                <td className={`px-4 py-3 text-right tabular-nums font-semibold ${criticalColor(r.criticalPct)}`}>
+                  {critCell(r.criticalDone, r.criticalSlots)}
+                </td>
+              </tr>
+            );
+          })}
+          {shown.length > 0 && (
+            <tr className="border-t-2 border-gray-200 bg-gray-50">
+              <td className="px-3 py-3" />
+              <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${fullCountColor(tot.wo, tot.wj)}`}>{fullCell(tot.wo, tot.wj)}</td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${criticalColor(pctOf(tot.cd, tot.cs))}`}>{critCell(tot.cd, tot.cs)}</td>
+            </tr>
+          )}
+          {failed > 0 && (
+            <tr>
+              <td colSpan={4} className="px-4 py-2 text-xs text-red-500">
+                {failed} {failed === 1 ? "store" : "stores"} failed to load from Net-Chef.
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -1982,6 +2191,70 @@ export default function FoodCostClient({
   const salesRange = reportMeta ? { start: reportMeta.startDate, end: reportMeta.endDate } : null;
   const salesByName = useSalesForRange(salesRange);
 
+  // ── Sales cross-check ──────────────────────────────────────────────────────
+  // Net-Chef's own sales figure (salesBase) and PAR's net sales describe the
+  // same store and the same days, so they should agree: across all 13 stores
+  // and five windows from one week to YTD the gap was 0.2% typical, 1.28% at
+  // worst. An answer for the wrong window — a two-week cost once appeared under
+  // a one-week heading — or the wrong store is far outside that. A store more
+  // than SALES_GAP_PCT apart is re-asked fresh from Net-Chef, up to
+  // MAX_RECHECKS times, then flagged on screen rather than retried forever:
+  // a real gap (a day missing from one system) would never converge.
+  const rangeKey = reportMeta ? `${reportMeta.startDate}|${reportMeta.endDate}` : "";
+  const [rechecks, setRechecks] = useState<{ key: string; tries: Record<number, number> }>({ key: "", tries: {} });
+  const recheckTries = useMemo(() => (rechecks.key === rangeKey ? rechecks.tries : {}), [rechecks, rangeKey]);
+  const recheckInFlight = useRef(new Set<string>());
+  const currentRange = useRef(rangeKey);
+  useEffect(() => { currentRange.current = rangeKey; }, [rangeKey]);
+
+  const salesGaps = useMemo(
+    () => loading || Object.keys(salesByName).length === 0
+      ? []
+      : Object.values(locMap).flatMap(l => {
+          const par = salesByName[l.locationName];
+          if (l.salesBase == null || !par) return [];
+          const pct = ((l.salesBase - par) / par) * 100;
+          return Math.abs(pct) > SALES_GAP_PCT ? [{ id: l.locationId, name: l.locationName, nc: l.salesBase, par, pct }] : [];
+        }),
+    [loading, salesByName, locMap],
+  );
+
+  useEffect(() => {
+    if (!rangeKey) return;
+    const [start, end] = rangeKey.split("|");
+    for (const g of salesGaps) {
+      const n = recheckTries[g.id] ?? 0;
+      const flightKey = `${rangeKey}|${g.id}|${n}`;
+      if (n >= MAX_RECHECKS || recheckInFlight.current.has(flightKey)) continue;
+      recheckInFlight.current.add(flightKey);
+      fetch(`/api/netchef/data?start=${start}&end=${end}&locationId=${g.id}&fresh=1`)
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((json: LocationData | null) => {
+          // The range may have changed while this was in flight; its answer
+          // must not land in someone else's table.
+          if (currentRange.current !== rangeKey) return;
+          if (json) setLocMap(prev => ({ ...prev, [g.id]: json }));
+          setRechecks(prev => {
+            const t = prev.key === rangeKey ? prev.tries : {};
+            return { key: rangeKey, tries: { ...t, [g.id]: (t[g.id] ?? 0) + 1 } };
+          });
+        });
+    }
+  }, [rangeKey, salesGaps, recheckTries]);
+
+  // Quiet by design (Josh, 2026-10-28): nothing on screen. A store still apart
+  // after its rechecks is only noted in the browser console.
+  useEffect(() => {
+    for (const g of salesGaps) {
+      if ((recheckTries[g.id] ?? 0) < MAX_RECHECKS) continue;
+      console.warn(
+        `[FoodCost] ${g.name}: Net-Chef sales ${fmtDollars(g.nc)} vs PAR ${fmtDollars(g.par)} ` +
+          `(${g.pct.toFixed(2)}%) after ${MAX_RECHECKS} fresh rechecks, ${rangeKey}`,
+      );
+    }
+  }, [salesGaps, recheckTries, rangeKey]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="sticky top-0 z-20">
@@ -2170,6 +2443,16 @@ export default function FoodCostClient({
               salesByName={salesByName}
               totalLabel={totalLabelFor(storeFilter)}
               sortByMagnitude
+            />
+          </div>
+        )}
+
+        {(allLocations.length > 0 || loading) && (
+          <div className="mt-6">
+            <InventoryCompletionTable
+              range={salesRange}
+              allowed={storeFilter.allowed}
+              totalLabel={totalLabelFor(storeFilter)}
             />
           </div>
         )}

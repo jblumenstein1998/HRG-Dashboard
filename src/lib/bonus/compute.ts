@@ -12,10 +12,10 @@
 
 import { ingestPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
-import { resolveBonusWindow } from "./periods";
+import { listBonusPeriods, resolveBonusWindow } from "./periods";
 import { scoreStore } from "./engine";
 import type { MetricValues } from "./engine";
-import { OVERRIDE_PREFIX } from "./rules";
+import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM } from "./rules";
 
 /**
  * Metrics whose source can only ever report the present, so a closed period's
@@ -117,13 +117,18 @@ export async function computePeriod(
   // lost categories they had legitimately scored the day before. A stale value
   // carried forward is far better than a category that quietly stops being
   // scoreable, and the next good run overwrites it anyway.
+  //
+  // Except where the resolver says an absence is its answer: retention left
+  // pending because someone still has to be checked must stay pending, not
+  // revert to whatever the last run thought.
   const existing = await getMetrics(periodLabel);
+  const authoritative = new Set(diagnostics.authoritative);
   let retained = 0;
   for (const [storeId, values] of byStore) {
     const prior = existing.get(storeId);
     if (!prior) continue;
     for (const [metric, value] of prior) {
-      if (!values.has(metric)) {
+      if (!values.has(metric) && !authoritative.has(metric)) {
         values.set(metric, value);
         retained++;
       }
@@ -257,4 +262,36 @@ export async function rescoreFromStored(
     positions: writes.length,
     warnings: [],
   };
+}
+
+/**
+ * Re-derive retention for every open period it is computed for, and rescore.
+ *
+ * What the retention review calls after somebody says whether a hire worked.
+ * One answer settles a person's 30-, 60- and 90-day anniversaries, which
+ * usually fall in different periods, so every computed, unlocked period from
+ * RETENTION_AUTO_FROM on is refreshed — retention alone, from Postgres and the
+ * day-cached PAR employee lists, with no other vendor touched.
+ */
+export async function refreshRetention(): Promise<string[]> {
+  const { getRetention, retentionMetrics, RETENTION_METRIC_IDS } = await import("../workstreamRetention");
+
+  const refreshed: string[] = [];
+  for (const { label } of listBonusPeriods()) {
+    const window = resolveBonusWindow(label);
+    if (!window || window.period.period < RETENTION_AUTO_FROM) continue;
+    if (await isLocked(label)) continue;
+    const stored = await getMetrics(label);
+    if (stored.size === 0) continue;
+
+    const fresh = retentionMetrics(await getRetention(window.start, window.end));
+    for (const [storeId, values] of stored) {
+      for (const id of RETENTION_METRIC_IDS) values.delete(id);
+      for (const [id, value] of fresh.get(storeId) ?? []) values.set(id, value);
+    }
+    await saveMetrics(label, stored);
+    await rescoreFromStored(label);
+    refreshed.push(label);
+  }
+  return refreshed;
 }

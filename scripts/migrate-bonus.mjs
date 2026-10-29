@@ -65,6 +65,18 @@ await sql`
   )
 `;
 
+// Edit lock on one store's scorecard for one period. No row means locked.
+await sql`
+  CREATE TABLE IF NOT EXISTS bonus_store_locks (
+    store_id     TEXT        NOT NULL,
+    period_label TEXT        NOT NULL,
+    locked       BOOLEAN     NOT NULL,
+    changed_by   TEXT,
+    changed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (store_id, period_label)
+  )
+`;
+
 await sql`
   CREATE TABLE IF NOT EXISTS netchef_costs (
     store_id     TEXT        NOT NULL,
@@ -79,4 +91,4 @@ await sql`
   )
 `;
 
-console.log("bonus_inputs, bonus_metrics, bonus_results, bonus_period_locks, netchef_costs ready.");
+console.log("bonus_inputs, bonus_metrics, bonus_results, bonus_period_locks, bonus_store_locks, netchef_costs ready.");
