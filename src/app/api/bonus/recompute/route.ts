@@ -10,10 +10,12 @@ import { resolveBonusWindow } from "@/lib/bonus/periods";
  *
  * POST /api/bonus/recompute  { period: "P11 FY2026" }
  *
- * Exactly what the nightly bonus-rollup does for a period: pull every vendor,
- * rescore all six positions for every store, store the results. A locked
- * period is left as approved. Admin-only, because it rewrites the scores
- * everyone sees and costs a full round of vendor pulls.
+ * What the early-morning bonus-rollup does for a period — rescore all six
+ * positions for every store and store the results — except that Jolt, Slack
+ * and Net-Chef inventory counts are kept from that run rather than pulled live
+ * (reuseSlowSources): they are ~17 of the ~20 seconds a full run takes, and
+ * nothing else stores them. A locked period is left as approved. Admin-only,
+ * because it rewrites the scores everyone sees.
  */
 export const maxDuration = 300;
 
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
   const token = await loginBerryService().catch(() => null);
   const started = Date.now();
   try {
-    const report = await computePeriod(period, token);
+    const report = await computePeriod(period, token, { reuseSlowSources: true });
     return NextResponse.json({
       ok: true,
       skipped: report.skipped ?? null,

@@ -159,7 +159,7 @@ export default function BonusClient({
   );
   async function refresh() {
     if (isAdmin && !locked) {
-      setRecompute({ busy: true, note: "Pulling every source — about a minute…", failed: false });
+      setRecompute({ busy: true, note: "Recalculating…", failed: false });
       try {
         const res = await fetch("/api/bonus/recompute", {
           method: "POST",
@@ -453,7 +453,7 @@ export default function BonusClient({
               disabled={loading || recompute.busy}
               title={
                 isAdmin && !locked
-                  ? "Recalculate this period from every source now (what the early-morning job does), then reload. About a minute."
+                  ? "Recalculate this period now and reload. Jolt, Slack and inventory counts are as of the early-morning run; everything else is current."
                   : "Reload the latest scores."
               }
               className={`${recompute.note ? "" : "ml-auto "}text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50`}

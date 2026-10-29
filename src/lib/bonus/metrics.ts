@@ -133,11 +133,19 @@ export type ResolveDiagnostics = {
  * `berryToken` is optional: without it the drive-thru sources are skipped and
  * those criteria come back pending rather than wrong. That keeps the whole
  * scorecard from failing when a Superset session can't be established.
+ *
+ * `skipSlowSources` leaves out the three sources nothing else stores — Jolt,
+ * Slack and Net-Chef inventory counts, ~17s of the ~20s a run takes (timed
+ * 2026-10-29). The Bonus tab's manual refresh sets it: compute.ts then carries
+ * those figures forward from the early-morning run, so a refresh is quick and
+ * they are as of that run.
  */
 export async function resolvePeriodMetrics(
   window: BonusWindow,
-  berryToken: string | null
+  berryToken: string | null,
+  opts: { skipSlowSources?: boolean } = {},
 ): Promise<{ byStore: Map<string, MetricValues>; diagnostics: ResolveDiagnostics }> {
+  const live = !opts.skipSlowSources;
   const warnings: string[] = [];
   const weeks = completeWeeksIn(window.start, window.end);
   // Week numbers count from the fiscal year start, not the period start — both
@@ -363,7 +371,7 @@ export async function resolvePeriodMetrics(
   // and scoring "no Jolt" as "failed Jolt" would zero 40% of the Quality card
   // for stores that were never given the tool.
   let joltStores = 0;
-  try {
+  if (live) try {
     const completion = await fetchStoreLists(window.start, window.end);
     const byName = new Map(completion.stores.map((s) => [s.store, s]));
     for (const store of BONUS_STORES) {
@@ -394,7 +402,7 @@ export async function resolvePeriodMetrics(
   // The admin tab's Slack table runs the same storeSlackReport.
   let slackStores = 0;
   const slackErrors = new Map<string, string[]>();
-  await mapLimit(BONUS_STORES, STORE_CONCURRENCY,
+  if (live) await mapLimit(BONUS_STORES, STORE_CONCURRENCY,
     async (store) => {
       try {
         const { result } = await storeSlackReport(store, window.start, window.end);
@@ -455,7 +463,7 @@ export async function resolvePeriodMetrics(
   // last good figure forward, as for any vendor outage.
   let inventoryStores = 0;
   const today = businessDateISO();
-  await Promise.all(
+  if (live) await Promise.all(
     BONUS_STORES.map(async (store) => {
       const v = vals(store.storeId);
       try {

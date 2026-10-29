@@ -74,7 +74,17 @@ export function mergeInputs(auto: MetricValues, manual: Map<string, number> | un
 export async function computePeriod(
   periodLabel: string,
   berryToken: string | null,
-  opts: { refreshCosts?: boolean; force?: boolean } = {}
+  opts: {
+    refreshCosts?: boolean;
+    force?: boolean;
+    /**
+     * Keep Jolt, Slack and inventory counts from the last stored run instead
+     * of pulling them live — the Bonus tab's manual refresh (Josh,
+     * 2026-10-29). Ignored for a period that has never been computed, which
+     * has nothing to keep.
+     */
+    reuseSlowSources?: boolean;
+  } = {}
 ): Promise<ComputeReport> {
   const window = resolveBonusWindow(periodLabel);
   if (!window) {
@@ -106,8 +116,11 @@ export async function computePeriod(
   // Imported lazily so the module graph for the read-only routes doesn't drag
   // in every vendor client.
   const { resolvePeriodMetrics } = await import("./metrics");
-  const { byStore, diagnostics } = await resolvePeriodMetrics(window, berryToken);
+  const existing = await getMetrics(periodLabel);
+  const skipSlowSources = !!opts.reuseSlowSources && existing.size > 0;
+  const { byStore, diagnostics } = await resolvePeriodMetrics(window, berryToken, { skipSlowSources });
   warnings.push(...diagnostics.warnings);
+  if (skipSlowSources) warnings.push("Jolt, Slack and inventory counts kept from the early-morning run");
 
   // Carry forward anything this run couldn't resolve.
   //
@@ -121,7 +134,8 @@ export async function computePeriod(
   // Except where the resolver says an absence is its answer: retention left
   // pending because someone still has to be checked must stay pending, not
   // revert to whatever the last run thought.
-  const existing = await getMetrics(periodLabel);
+  //
+  // This is also how a manual refresh keeps the slow sources it skipped.
   const authoritative = new Set(diagnostics.authoritative);
   let retained = 0;
   for (const [storeId, values] of byStore) {
@@ -134,7 +148,7 @@ export async function computePeriod(
       }
     }
   }
-  if (retained > 0) {
+  if (retained > 0 && !skipSlowSources) {
     warnings.push(`${retained} metric values carried forward from the previous run (a vendor did not respond)`);
   }
 
