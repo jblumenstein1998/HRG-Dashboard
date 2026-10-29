@@ -1,5 +1,6 @@
 import AdminTabClient from "@/components/AdminTabClient";
 import { requireTab } from "@/lib/users/access";
+import { listLeaders } from "@/lib/users/leaders";
 
 /**
  * The Admin tab.
@@ -11,5 +12,6 @@ import { requireTab } from "@/lib/users/access";
  */
 export default async function AdminTabPage() {
   const viewer = await requireTab("/admin-links");
-  return <AdminTabClient tabs={viewer.position.tabs} isAdmin={viewer.position.isAdmin} />;
+  const leaders = await listLeaders();
+  return <AdminTabClient tabs={viewer.position.tabs} isAdmin={viewer.position.isAdmin} leaders={leaders} />;
 }

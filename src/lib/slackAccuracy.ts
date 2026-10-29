@@ -28,9 +28,13 @@ import { getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./ber
 import { loginBerryService } from "./berryAuth";
 import { resolveSupersetTimeRange } from "./tools/dateRange";
 import { fetchCompletionByLocation } from "./jolt";
-import type { BonusStore } from "./bonus/storeMap";
+import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone, type BonusStore } from "./bonus/storeMap";
 import { parseReportFields, type ReportFields } from "./slackFields";
-import { addDays, placeMessage, type SlackMessage, type SlackSlot } from "./slackReports";
+import {
+  addDays, fetchChannelHistory, localMidnight, placeMessage, type SlackMessage, type SlackSlot,
+} from "./slackReports";
+import { mapLimit, STORE_CONCURRENCY } from "./slackCompletion";
+import { saveChecks } from "./slackAccuracyStore";
 
 export type FieldKey =
   | "netSales" | "compPct" | "splh" | "tplh" | "avgCheck"
@@ -53,6 +57,9 @@ export type FieldCheck = {
 };
 
 export type ReportCheck = {
+  /** The day and report this message was read as (see placeMessage). */
+  date: string;
+  slot: SlackSlot;
   /** Every checked field within tolerance; null when nothing could be checked. */
   accurate: boolean | null;
   checks: FieldCheck[];
@@ -77,13 +84,6 @@ export const TOLERANCE: Record<string, number> = {
  * allowance. The hourly buckets, avg check and lane stay strict.
  */
 export const SHIFT_RUNNING_PCT = 5;
-
-/**
- * How many days back from the range's end reports are checked. Each day costs a
- * PAR orders pull: 14 cold days took 72s for Chesapeake (2026-10-29), past the
- * 60s function limit.
- */
-export const ACCURACY_MAX_DAYS = 7;
 
 const SHIFT_WINDOW: Record<Exclude<SlackSlot, "previous_day">, { startHour: number; endHour: number; daypart: number }> = {
   lunch: { startHour: 11, endHour: 14, daypart: 2 },
@@ -125,7 +125,11 @@ function check(
 
 /**
  * Check one store's reports. Returns a check per message ts, for messages that
- * are reports dated within the last ACCURACY_MAX_DAYS of [start, end].
+ * are reports dated within [start, end].
+ *
+ * Each day in the range costs a PAR orders pull (14 cold days took 72s), so
+ * this runs nightly for the days just gone (runNightlyChecks, stored in
+ * slack_report_checks) and live only for today.
  */
 export async function checkStoreReports(
   store: BonusStore,
@@ -134,11 +138,9 @@ export async function checkStoreReports(
   start: string,
   end: string,
 ): Promise<Map<string, ReportCheck>> {
-  const from = addDays(end, -(ACCURACY_MAX_DAYS - 1)) > start ? addDays(end, -(ACCURACY_MAX_DAYS - 1)) : start;
-
   const placed = messages
     .map((m) => ({ m, p: placeMessage(m, timeZone) }))
-    .filter((x): x is { m: SlackMessage; p: NonNullable<typeof x.p> } => !!x.p && x.p.date >= from && x.p.date <= end);
+    .filter((x): x is { m: SlackMessage; p: NonNullable<typeof x.p> } => !!x.p && x.p.date >= start && x.p.date <= end);
   if (placed.length === 0) return new Map();
 
   // ── System figures, fetched once per day ────────────────────────────────
@@ -232,10 +234,39 @@ export async function checkStoreReports(
 
       const decided = checks.filter((c) => c.ok !== null);
       out.set(m.ts, {
+        date: p.date,
+        slot: p.slot,
         accurate: decided.length === 0 ? null : decided.every((c) => c.ok),
         checks,
       });
     }),
   );
   return out;
+}
+
+export type NightlyResult = { store: string; saved: number; error?: string };
+
+/**
+ * Check every store's reports dated within [start, end] and store the results.
+ * What the nightly cron runs (for the last two days, so a report posted a day
+ * late still gets checked) and what a backfill runs one day at a time.
+ */
+export async function runNightlyChecks(start: string, end: string): Promise<NightlyResult[]> {
+  return mapLimit(BONUS_STORES, STORE_CONCURRENCY, async (store) => {
+    try {
+      const channel = SLACK_CHANNEL_IDS[store.storeId];
+      if (!channel) return { store: store.name, saved: 0, error: "no Slack channel" };
+      const timeZone = storeTimeZone(store);
+      // Catch-up reports for these days can arrive up to a few days later.
+      const messages = await fetchChannelHistory(
+        channel,
+        localMidnight(start, timeZone),
+        localMidnight(addDays(end, 3), timeZone),
+      );
+      const checks = await checkStoreReports(store, timeZone, messages, start, end);
+      return { store: store.name, saved: await saveChecks(store.storeId, checks) };
+    } catch (err) {
+      return { store: store.name, saved: 0, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 }

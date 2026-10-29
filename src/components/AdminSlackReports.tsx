@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { PERIODS } from "@/lib/fiscal";
+import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 
 /**
  * Slack reporting, store by store — what the GM's Slack completion criterion
@@ -78,7 +79,7 @@ type StoreRow = {
   pct: number | null;
   error: string | null;
   /** Only on a single store's detail load. */
-  accuracy?: { checked: number; accurate: number; fromDate: string } | null;
+  accuracy?: { checked: number; accurate: number; pct: number | null } | null;
   days: { date: string; slots: Record<SlotId, { status: Status; post: Post; grace: boolean }> }[];
   messages:
     | {
@@ -171,7 +172,13 @@ const QUICK: { key: string; label: string; range: () => Range }[] = [
 
 // ── Sorting ──────────────────────────────────────────────────────────────────
 
-type SortKey = "name" | "required" | "onTime" | "late" | "missed" | "completedPct" | "pct";
+type SortKey = "name" | "required" | "onTime" | "late" | "missed" | "completedPct" | "pct" | "accuratePct";
+
+/** Computed columns, by sort key; the rest are read straight off the row. */
+const DERIVED: Partial<Record<SortKey, (s: StoreRow) => number | null>> = {
+  completedPct: (s) => completedPct(s),
+  accuratePct: (s) => s.accuracy?.pct ?? null,
+};
 
 /** Reports posted at all — on time or late — ÷ reports due. */
 function completedPct(s: StoreRow): number | null {
@@ -194,12 +201,17 @@ const COLUMNS: { key: SortKey; label: string; align: "left" | "right"; firstDir:
   { key: "missed", label: "Missed", align: "right", firstDir: "desc" },
   { key: "completedPct", label: "% Completed", align: "right", firstDir: "desc" },
   { key: "pct", label: "% On time", align: "right", firstDir: "desc" },
+  { key: "accuratePct", label: "% Accurate", align: "right", firstDir: "desc" },
 ];
+
+/** Message text without Slack's *bold* markers, which are noise when read here. */
+const plain = (text: string) => text.replace(/\*/g, "");
 
 /** A zero reads as a dash, so the counts that matter stand out. */
 const count = (n: number) => (n === 0 ? "—" : n);
 
-export default function AdminSlackReports() {
+export default function AdminSlackReports({ leaders }: { leaders: Leader[] }) {
+  const storeFilter = useStoreFilter(leaders);
   const [data, setData] = useState<Payload | null>(null);
   const [quick, setQuick] = useState<string | null>("today");
   const [start, setStart] = useState(() => today());
@@ -266,21 +278,24 @@ export default function AdminSlackReports() {
 
   const rows = useMemo(() => {
     if (!data) return [];
-    const ok = data.stores.filter((s) => !s.error);
-    const failed = data.stores.filter((s) => s.error);
+    const shown = data.stores.filter((s) => inFilter(storeFilter.allowed, s.name));
+    const ok = shown.filter((s) => !s.error);
+    const failed = shown.filter((s) => s.error);
     const sign = sort.dir === "asc" ? 1 : -1;
     ok.sort((a, b) => {
       if (sort.key === "name") return sign * a.name.localeCompare(b.name);
-      const value = (s: StoreRow) => (sort.key === "completedPct" ? completedPct(s) : s[sort.key as Exclude<SortKey, "name" | "completedPct">]);
+      const derive = DERIVED[sort.key];
+      const value = (s: StoreRow) =>
+        derive ? derive(s) : s[sort.key as "required" | "onTime" | "late" | "missed" | "pct"];
       const av = value(a) ?? -1;
       const bv = value(b) ?? -1;
       return sign * (av - bv) || a.name.localeCompare(b.name);
     });
     // Unreadable stores have nothing to sort by; they wait at the bottom.
     return [...ok, ...failed];
-  }, [data, sort]);
+  }, [data, sort, storeFilter.allowed]);
 
-  const failing = data?.stores.filter((s) => s.error) ?? [];
+  const failing = data?.stores.filter((s) => s.error && inFilter(storeFilter.allowed, s.name)) ?? [];
 
   // Only periods that can be shown whole: finished, and starting inside
   // Slack's 90 days. The period in progress is what PTD is for.
@@ -299,6 +314,7 @@ export default function AdminSlackReports() {
         </div>
 
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} className="py-1.5" />
           <div className="flex rounded-lg border border-gray-200 overflow-hidden">
             {QUICK.map((b) => (
               <button
@@ -434,12 +450,17 @@ export default function AdminSlackReports() {
                           <td className={`px-3 py-2 text-right tabular-nums ${s.missed ? "text-red-600" : "text-gray-300"}`}>
                             {count(s.missed)}
                           </td>
-                          {[completedPct(s), s.pct].map((v, i) => {
+                          {[completedPct(s), s.pct, s.accuracy?.pct ?? null].map((v, i, all) => {
                             const c = pctCell(v);
                             return (
                               <td
                                 key={i}
-                                className={`${i === 0 ? "px-3" : "px-4"} py-2 text-right tabular-nums font-semibold ${c.cls}`}
+                                title={
+                                  i === 2 && s.accuracy
+                                    ? `${s.accuracy.accurate} of ${s.accuracy.checked} checked reports accurate`
+                                    : undefined
+                                }
+                                className={`${i === all.length - 1 ? "px-4" : "px-3"} py-2 text-right tabular-nums font-semibold ${c.cls}`}
                               >
                                 {c.text}
                               </td>
@@ -549,7 +570,6 @@ function StoreDetail({
                 <span className={row.accuracy.accurate === row.accuracy.checked ? "text-green-700" : "text-gray-600"}>
                   {row.accuracy.accurate} of {row.accuracy.checked} reports accurate
                 </span>
-                {row.accuracy.fromDate > row.days[0]?.date && ` (checked from ${shortDate(row.accuracy.fromDate)})`}
               </>
             )}
           </div>
@@ -586,7 +606,7 @@ function StoreDetail({
                 </div>
                 <div className="min-w-0">
                   <div className="whitespace-pre-wrap break-words text-gray-700">
-                    {m.text || <span className="text-gray-300">{m.files ? `${m.files} file(s), no text` : "(empty)"}</span>}
+                    {plain(m.text) || <span className="text-gray-300">{m.files ? `${m.files} file(s), no text` : "(empty)"}</span>}
                   </div>
                   {m.check && m.check.checks.length > 0 && <Checks check={m.check} />}
                 </div>

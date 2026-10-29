@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import AdminSlackReports from "@/components/AdminSlackReports";
 import type { Tab } from "@/lib/users/tabs";
+import type { Leader } from "@/components/StoreFilter";
 
 /**
  * The Admin tab: back-office tools that sit behind the scorecards.
@@ -16,7 +17,9 @@ import type { Tab } from "@/lib/users/tabs";
  * admin-only route — so a non-admin position that has the tab ticked sees a
  * note rather than a table that would only fail.
  */
-export default function AdminTabClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function AdminTabClient({
+  tabs, isAdmin, leaders,
+}: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[] }) {
   const router = useRouter();
 
   return (
@@ -64,7 +67,7 @@ export default function AdminTabClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
         {isAdmin ? (
-          <AdminSlackReports />
+          <AdminSlackReports leaders={leaders} />
         ) : (
           <p className="text-sm text-gray-500 py-12 text-center">Nothing here for your position.</p>
         )}

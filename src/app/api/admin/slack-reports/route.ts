@@ -3,7 +3,8 @@ import { requireAdminApi } from "@/lib/users/adminGuard";
 import { BONUS_STORES, storeById } from "@/lib/bonus/storeMap";
 import { businessDateISO } from "@/lib/businessDay";
 import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "@/lib/slackCompletion";
-import { ACCURACY_MAX_DAYS, checkStoreReports } from "@/lib/slackAccuracy";
+import { checkStoreReports, type ReportCheck } from "@/lib/slackAccuracy";
+import { getChecks } from "@/lib/slackAccuracyStore";
 import { addDays, fetchUserNames, GRACE_MINUTES, localParts, placeMessage, SLACK_SLOTS } from "@/lib/slackReports";
 
 /**
@@ -84,19 +85,27 @@ export async function GET(req: NextRequest) {
           ),
         }));
 
+        // Accuracy: past days from the nightly checks, today checked live.
+        const lastStored = end < today ? end : addDays(today, -1);
+        const [stored, live] = await Promise.all([
+          start <= lastStored ? getChecks(store.storeId, start, lastStored) : new Map<string, ReportCheck>(),
+          end >= today
+            ? checkStoreReports(store, timeZone, messages, today, today)
+            : new Map<string, ReportCheck>(),
+        ]);
+        const checks = new Map([...stored, ...live]);
+        const decided = [...checks.values()].filter((c) => c.accurate !== null);
+        const accuracy = {
+          checked: decided.length,
+          accurate: decided.filter((c) => c.accurate).length,
+          pct: decided.length > 0
+            ? Math.round((decided.filter((c) => c.accurate).length / decided.length) * 1000) / 10
+            : null,
+        };
+
         let detail = null;
-        let accuracy = null;
         if (one) {
-          const [names, checks] = await Promise.all([
-            fetchUserNames(messages.map((m) => m.user).filter((u): u is string => !!u)),
-            checkStoreReports(store, timeZone, messages, start, end),
-          ]);
-          const decided = [...checks.values()].filter((c) => c.accurate !== null);
-          accuracy = {
-            checked: decided.length,
-            accurate: decided.filter((c) => c.accurate).length,
-            fromDate: addDays(end, -(ACCURACY_MAX_DAYS - 1)) > start ? addDays(end, -(ACCURACY_MAX_DAYS - 1)) : start,
-          };
+          const names = await fetchUserNames(messages.map((m) => m.user).filter((u): u is string => !!u));
           detail = messages
             .slice()
             .sort((a, b) => Number(a.ts) - Number(b.ts))
