@@ -306,6 +306,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
       return false;
     }
     setOpened((prev) => ({ ...prev, locked: action === "lock", cleared: 0 }));
+    // A note about the previous state ("Locked — entries kept") must not sit
+    // under the banner for the new one; lockScorecard sets its own after this.
+    setSaveStatus(null);
     return true;
   };
 
