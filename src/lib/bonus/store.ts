@@ -142,6 +142,22 @@ async function createBonusSchema(): Promise<void> {
       PRIMARY KEY (store_id, period_label, slot)
     )
   `;
+  // Each store's period figures from a dropped-in P&L — see financials.ts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bonus_financials (
+      store_id            TEXT        NOT NULL,
+      period_label        TEXT        NOT NULL,
+      labor_pct           NUMERIC,
+      controllable_income NUMERIC,
+      ebitda              NUMERIC,
+      total_sales         NUMERIC,
+      lines               JSONB       NOT NULL,
+      source_file         TEXT,
+      uploaded_by         TEXT,
+      uploaded_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (store_id, period_label)
+    )
+  `;
   await sql`
     CREATE TABLE IF NOT EXISTS netchef_costs (
       store_id     TEXT        NOT NULL,

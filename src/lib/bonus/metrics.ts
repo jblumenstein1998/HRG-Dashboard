@@ -434,6 +434,19 @@ export async function resolvePeriodMetrics(
     }),
   );
 
+  // ── Labor % (the period P&L dropped onto the Bonus tab) ────────────────────
+  // Read from Postgres, not a vendor: financials.ts stores each upload. A store
+  // the P&L hasn't covered yet stays pending.
+  try {
+    const { laborPctByStore, LABOR_METRIC } = await import("./financials");
+    for (const [storeId, pct] of await laborPctByStore(window.periodLabel)) {
+      const v = byStore.get(storeId);
+      if (v) put(v, LABOR_METRIC, pct);
+    }
+  } catch (err) {
+    warnings.push(`P&L labor % read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   // ── New-hire retention (Workstream + PAR) ──────────────────────────────────
   // Computed from the first period our synced Workstream copy fully covers;
   // earlier periods are entered by hand (autoFromPeriod in rules.ts).

@@ -40,6 +40,7 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import RetentionPanel from "@/components/RetentionPanel";
 import InventoryCountsPanel from "@/components/InventoryCountsPanel";
 import BonusTeamCard, { type TeamByPosition } from "@/components/BonusTeamCard";
+import BonusPnlCard from "@/components/BonusPnlCard";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel, parsePeriodLabel } from "@/lib/bonus/periods";
 import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM, categoryOverrideId } from "@/lib/bonus/rules";
@@ -532,6 +533,10 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
           payLocked={locked || opened.payLocked}
           onTeam={setTeam}
         />
+
+        {/* The company's financials — admins only, like the route behind it.
+            Saving rescores the period, so the GM's labor criterion moves. */}
+        {isAdmin && <BonusPnlCard period={period} onSaved={() => setRefreshKey((k) => k + 1)} />}
 
         <p className="text-[11px] text-gray-400">
           Blank means <em>not entered</em> and leaves a category unscored — which is not the same as
