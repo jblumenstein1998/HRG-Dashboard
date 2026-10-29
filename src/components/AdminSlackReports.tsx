@@ -119,7 +119,19 @@ const QUICK: { key: string; label: string; range: () => Range }[] = [
 
 // ── Sorting ──────────────────────────────────────────────────────────────────
 
-type SortKey = "name" | "required" | "onTime" | "late" | "missed" | "pct";
+type SortKey = "name" | "required" | "onTime" | "late" | "missed" | "completedPct" | "pct";
+
+/** Reports posted at all — on time or late — ÷ reports due. */
+function completedPct(s: StoreRow): number | null {
+  return s.required > 0 ? Math.round(((s.onTime + s.late) / s.required) * 1000) / 10 : null;
+}
+
+function pctCell(v: number | null) {
+  return {
+    text: v === null ? "—" : `${v.toFixed(1)}%`,
+    cls: v === null ? "text-gray-300" : v >= TARGET ? "text-green-700" : "text-red-600",
+  };
+}
 type Sort = { key: SortKey; dir: "asc" | "desc" };
 
 const COLUMNS: { key: SortKey; label: string; align: "left" | "right"; firstDir: "asc" | "desc" }[] = [
@@ -128,7 +140,8 @@ const COLUMNS: { key: SortKey; label: string; align: "left" | "right"; firstDir:
   { key: "onTime", label: "On time*", align: "right", firstDir: "desc" },
   { key: "late", label: "Late", align: "right", firstDir: "desc" },
   { key: "missed", label: "Missed", align: "right", firstDir: "desc" },
-  { key: "pct", label: "Completion", align: "right", firstDir: "desc" },
+  { key: "completedPct", label: "% Completed", align: "right", firstDir: "desc" },
+  { key: "pct", label: "% On time", align: "right", firstDir: "desc" },
 ];
 
 /** A zero reads as a dash, so the counts that matter stand out. */
@@ -145,8 +158,8 @@ export default function AdminSlackReports() {
   const [detail, setDetail] = useState<Record<string, StoreRow>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
   const [reportsOnly, setReportsOnly] = useState(true);
-  // Completion, best first, until someone clicks a column.
-  const [sort, setSort] = useState<Sort>({ key: "pct", dir: "desc" });
+  // % completed, best first, until someone clicks a column.
+  const [sort, setSort] = useState<Sort>({ key: "completedPct", dir: "desc" });
 
   async function load(r: Range) {
     setLoading(true);
@@ -206,8 +219,9 @@ export default function AdminSlackReports() {
     const sign = sort.dir === "asc" ? 1 : -1;
     ok.sort((a, b) => {
       if (sort.key === "name") return sign * a.name.localeCompare(b.name);
-      const av = a[sort.key] ?? -1;
-      const bv = b[sort.key] ?? -1;
+      const value = (s: StoreRow) => (sort.key === "completedPct" ? completedPct(s) : s[sort.key as Exclude<SortKey, "name" | "completedPct">]);
+      const av = value(a) ?? -1;
+      const bv = value(b) ?? -1;
       return sign * (av - bv) || a.name.localeCompare(b.name);
     });
     // Unreadable stores have nothing to sort by; they wait at the bottom.
@@ -358,7 +372,7 @@ export default function AdminSlackReports() {
                         {s.name}
                       </td>
                       {s.error ? (
-                        <td colSpan={5} className="px-4 py-2 text-xs text-gray-400 text-right">{s.error}</td>
+                        <td colSpan={COLUMNS.length - 1} className="px-4 py-2 text-xs text-gray-400 text-right">{s.error}</td>
                       ) : (
                         <>
                           <td className="px-3 py-2 text-right tabular-nums text-gray-600">{count(s.required)}</td>
@@ -369,19 +383,23 @@ export default function AdminSlackReports() {
                           <td className={`px-3 py-2 text-right tabular-nums ${s.missed ? "text-red-600" : "text-gray-300"}`}>
                             {count(s.missed)}
                           </td>
-                          <td
-                            className={`px-4 py-2 text-right tabular-nums font-semibold ${
-                              s.pct === null ? "text-gray-300" : s.pct >= TARGET ? "text-green-700" : "text-red-600"
-                            }`}
-                          >
-                            {s.pct === null ? "—" : `${s.pct.toFixed(1)}%`}
-                          </td>
+                          {[completedPct(s), s.pct].map((v, i) => {
+                            const c = pctCell(v);
+                            return (
+                              <td
+                                key={i}
+                                className={`${i === 0 ? "px-3" : "px-4"} py-2 text-right tabular-nums font-semibold ${c.cls}`}
+                              >
+                                {c.text}
+                              </td>
+                            );
+                          })}
                         </>
                       )}
                     </tr>
                     {open === s.storeId && (
                       <tr className="bg-gray-50/60">
-                        <td colSpan={6} className="px-4 py-3">
+                        <td colSpan={COLUMNS.length} className="px-4 py-3">
                           <StoreDetail
                             row={detail[s.storeId] ?? s}
                             slots={data.slots}
@@ -401,7 +419,8 @@ export default function AdminSlackReports() {
             <p>
               * On time includes a {data.graceMinutes}-minute grace: a report posted up to {data.graceMinutes} minutes
               after its deadline counts as on time ({graceTotal} in this range, marked * in a store&apos;s days).
-              Later than that counts as late, and late reports don&apos;t count toward completion.
+              Later than that is late: it counts toward % Completed but not % On time, which is what
+              the GM bonus scores.
             </p>
             {data.clampedFrom && (
               <p>
