@@ -31,7 +31,7 @@ type Session = {
 let session: Session | null = null;
 const SESSION_TTL_MS = 55 * 60 * 1000; // 55 min (server timeout is typically 60)
 
-async function login(): Promise<Session> {
+async function login(locationId = 425): Promise<Session> {
   const username = process.env.NETCHEF_USERNAME;
   const password = process.env.NETCHEF_PASSWORD;
   if (!username || !password) throw new Error("NETCHEF_USERNAME / NETCHEF_PASSWORD not set");
@@ -92,7 +92,9 @@ async function login(): Promise<Session> {
   console.log("[NC] post-auth cookies:", cookies);
 
   // Step 3: POST choose-location — finalizes the ncext session so /resource/* APIs accept it.
-  // Any valid location ID works here; we use 425 (Brentwood) just to establish the session.
+  // Any valid location ID works for most reports, which take a locationIdFilter;
+  // 425 (Brentwood) is the default. Daily Inventory Counts is the exception — it
+  // answers only for the chosen location (see ncPostAtLocation).
   const chooseRes = await fetch(`${NC_BASE}/resource/ceslogin/choose-location`, {
     method: "POST",
     headers: {
@@ -104,7 +106,7 @@ async function login(): Promise<Session> {
       "X-Requested-With": "XMLHttpRequest",
       "User-Agent": UA,
     },
-    body: JSON.stringify({ locationId: 425, supplyId: null, language: "eng" }),
+    body: JSON.stringify({ locationId, supplyId: null, language: "eng" }),
   });
   console.log("[NC] choose-location status:", chooseRes.status);
   const chooseBody = await chooseRes.json().catch(() => ({})) as Record<string, unknown>;
@@ -205,6 +207,52 @@ async function ncFetch(path: string, body: unknown): Promise<unknown> {
   }
 
   return res.json();
+  } finally {
+    ncSemaphore.release();
+  }
+}
+
+// ── Per-location sessions ──────────────────────────────────────────────────────
+
+/**
+ * A session pinned to one location, for the reports that ignore
+ * `locationIdFilter` and answer for whatever location the login chose. Daily
+ * Inventory Counts is one: with the shared Brentwood session, every store came
+ * back as Brentwood's rows. Re-choosing a location mid-session does not switch
+ * it either, so each location gets its own login, cached like the shared one.
+ */
+const locationSessions = new Map<number, Session>();
+
+export async function ncPostAtLocation(locationId: number, path: string, body: unknown): Promise<unknown> {
+  await ncSemaphore.acquire();
+  try {
+    let s = locationSessions.get(locationId);
+    if (!s || Date.now() >= s.expiresAt) {
+      s = await login(locationId);
+      locationSessions.set(locationId, s);
+    }
+    const res = await fetch(`${NC_BASE}${path}?_dc=${Date.now()}`, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Cookie": s.cookies,
+        "Origin": NC_BASE,
+        "Referer": `${NC_BASE}/ncext/index.ct`,
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401 || res.status === 403) {
+      locationSessions.delete(locationId);
+      throw new Error("NC session expired — retry the request");
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`NC API error ${res.status} at ${path}: ${text.slice(0, 200)}`);
+    }
+    return res.json();
   } finally {
     ncSemaphore.release();
   }

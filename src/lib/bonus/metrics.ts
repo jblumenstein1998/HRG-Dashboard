@@ -31,6 +31,8 @@ import { rollupByStore } from "@/lib/smgCaseStore";
 import { fetchCompletionByLocation } from "../jolt";
 import { fetchZuReport, fetchZuTestReport, SERVSAFE_MANAGER_TEST_ID } from "../schoox";
 import { getRetention, retentionMetrics, RETENTION_METRIC_IDS } from "../workstreamRetention";
+import { getStoreInventoryCounts } from "../netchefInventory";
+import { businessDateISO } from "../businessDay";
 import { BONUS_ZCASE_TYPES } from "./goals";
 import { BONUS_RULES, RETENTION_AUTO_FROM } from "./rules";
 import { passesGate, resolveGates, type MetricValues } from "./engine";
@@ -112,6 +114,8 @@ export type ResolveDiagnostics = {
   joltStores: number;
   /** Stores the ZU snapshot resolved for. */
   zuStores: number;
+  /** Stores Net-Chef returned inventory counts for. */
+  inventoryStores: number;
   /**
    * Metrics this run answered for definitively, so an absent value means
    * "pending on purpose" and must not be carried forward from an earlier run.
@@ -407,6 +411,29 @@ export async function resolvePeriodMetrics(
     warnings.push(`ZU fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // ── Inventory counts (Net-Chef) ────────────────────────────────────────────
+  // One login and one report per store: Daily Inventory Counts ignores the
+  // location filter the other Net-Chef reports take (netchefInventory.ts).
+  // A store that fails is left absent — pending — and compute.ts carries the
+  // last good figure forward, as for any vendor outage.
+  let inventoryStores = 0;
+  const today = businessDateISO();
+  await Promise.all(
+    BONUS_STORES.map(async (store) => {
+      const v = vals(store.storeId);
+      try {
+        const counts = await getStoreInventoryCounts(store.netchefLocationId, window.start, window.end, today);
+        put(v, "q_critical_counts_pct", counts.criticalPct);
+        put(v, "q_full_counts_weekly", counts.fullCountsOnTime);
+        inventoryStores++;
+      } catch (err) {
+        warnings.push(
+          `Inventory counts failed for ${store.name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+  );
+
   // ── New-hire retention (Workstream + PAR) ──────────────────────────────────
   // Computed from the first period our synced Workstream copy fully covers;
   // earlier periods are entered by hand (autoFromPeriod in rules.ts).
@@ -441,6 +468,7 @@ export async function resolvePeriodMetrics(
     byStore,
     diagnostics: {
       authoritative,
+      inventoryStores,
       weeks: weeks.length,
       zuStores,
       smgPeriodRows: periodRows.length,

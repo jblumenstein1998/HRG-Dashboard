@@ -593,16 +593,37 @@ const QUALITY: PositionRules = {
           target: { cmp: "lte", value: 1.0 },
           note: "Measured as absolute variance, since the doc's ±1.5% / ±1% bands are symmetric.",
         },
+        // Inventory counts, from Net-Chef (netchefInventory.ts). The doc's 0/1/2
+        // rating — "full at beginning of week + daily critical" / "all counts
+        // completed accurately" — was replaced by Josh on 2026-10-28 with a
+        // full count every week at both levels, and ≥95% / 100% of critical
+        // counts. "Accurately" was dropped: Net-Chef cannot say whether a count
+        // was right. Two conditions rather than one so the strict ladder does
+        // the rest: both at target is 100%, both at threshold is 50%.
+        //
+        // Replaces criterion `q_inventory_counts`. Its one hand entry (P9
+        // Columbia) is superseded by the computed figures.
         {
-          id: "q_inventory_counts",
-          label: "Inventory counts",
-          metric: "q_inventory_counts",
-          source: "manual",
-          unit: "rating",
-          grain: "entered",
+          id: "q_full_counts_weekly",
+          label: "Full inventory count every Monday",
+          metric: "q_full_counts_weekly",
+          source: "auto",
+          unit: "boolean",
+          grain: "period",
           threshold: { cmp: "gte", value: 1 },
-          target: { cmp: "gte", value: 2 },
-          note: "0 = not completed. 1 = completed (full at beginning of week + daily critical). 2 = all counts completed accurately.",
+          target: { cmp: "gte", value: 1 },
+          note: "One full count per week, entered on the Monday after it. A Tuesday or Sunday-night entry is late.",
+        },
+        {
+          id: "q_critical_counts",
+          label: "Daily critical counts (AM + PM)",
+          metric: "q_critical_counts_pct",
+          source: "auto",
+          unit: "percent",
+          grain: "period",
+          threshold: { cmp: "gte", value: 95 },
+          target: { cmp: "gte", value: 100 },
+          note: "Share of the period's AM and PM critical-item counts that were done, Mondays excused (the full count covers them). A count entered before 2:15 AM belongs to the night before.",
         },
         {
           id: "q_truck_order_resolution",

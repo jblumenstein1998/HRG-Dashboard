@@ -38,6 +38,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import RetentionPanel from "@/components/RetentionPanel";
+import InventoryCountsPanel from "@/components/InventoryCountsPanel";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel, parsePeriodLabel } from "@/lib/bonus/periods";
 import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM, categoryOverrideId } from "@/lib/bonus/rules";
@@ -633,6 +634,9 @@ function CategoryCard({
       {open && positionId === "training" && cat.category.id === "retention" &&
         (parsePeriodLabel(period)?.period ?? 0) >= RETENTION_AUTO_FROM && (
         <RetentionPanel period={period} storeId={storeId} locked={locked} onRescored={onRescored} />
+      )}
+      {open && positionId === "quality" && cat.category.id === "cogs" && (
+        <InventoryCountsPanel period={period} storeId={storeId} />
       )}
     </div>
   );
