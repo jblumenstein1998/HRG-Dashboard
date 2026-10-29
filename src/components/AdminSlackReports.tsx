@@ -315,8 +315,7 @@ export default function AdminSlackReports() {
       {data && (
         <>
           <div className="px-4 pb-1 text-[11px] text-gray-400">
-            {shortDate(data.start)} – {shortDate(data.end)} · click a store for its days and messages · click a
-            column to sort
+            {shortDate(data.start)} – {shortDate(data.end)}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
