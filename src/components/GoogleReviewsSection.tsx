@@ -97,7 +97,19 @@ export default function GoogleReviewsSection({
             </div>
             {col.stores.map((s) => (
               <div key={s.storeId} className="px-4 py-2.5 flex justify-between gap-2 text-sm border-b border-gray-100">
-                <span className="font-medium text-gray-900 truncate">{STORE_LABELS[s.storeId]}</span>
+                {s.reviewsUri ? (
+                  <a
+                    href={s.reviewsUri}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open this store's reviews on Google"
+                    className="font-medium text-gray-900 truncate hover:underline"
+                  >
+                    {STORE_LABELS[s.storeId]}
+                  </a>
+                ) : (
+                  <span className="font-medium text-gray-900 truncate">{STORE_LABELS[s.storeId]}</span>
+                )}
                 {s.reviewsUri ? (
                   <a
                     href={s.reviewsUri}
