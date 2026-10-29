@@ -495,16 +495,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
           </div>
         )}
         {!locked && isOpen && !storeLocked && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
-            Unlocked — enter values, or switch a computed criterion to manual. <strong>Lock</strong> to keep your
-            entries: reopening or refreshing this scorecard while it is unlocked clears every manual entry and
-            starts again from computed values.
-          </div>
-        )}
-        {opened.cleared > 0 && isOpen && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
-            This scorecard was left unlocked, so its {opened.cleared} manual{" "}
-            {opened.cleared === 1 ? "entry was" : "entries were"} cleared and it shows computed values.
+          <div className="rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs px-3 py-2">
+            Unlocked — enter values, or switch a computed criterion to manual. Reopening or refreshing this
+            scorecard while it is unlocked clears every manual entry and starts again from computed values.
           </div>
         )}
         {saveStatus && (
