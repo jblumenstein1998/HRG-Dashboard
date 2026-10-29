@@ -9,6 +9,10 @@
       "schedule": "0 10 * * *"
     },
     {
+      "path": "/api/cron/google-ratings",
+      "schedule": "15 10 * * *"
+    },
+    {
       "path": "/api/cron/par-shifts",
       "schedule": "30 11 * * *"
     },
