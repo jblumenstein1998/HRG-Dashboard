@@ -10,11 +10,17 @@
  *   hourly sales; shift sales / labor              getHourlyBreakdown      — PAR tab hourly
  *   total window, total lane                       getDriveThruMetrics     — Drive-Thru tab
  *                                                  (whole day, or the 11–2 / 2–5 / 5–8 daypart)
- *   Jolt %                                         fetchCompletionByLocation — Jolt tab
+ *   Jolt %                                         fetchStoreLists completePct — Jolt tab
  *   cash over/short                                getCashSummary (PAR GetTills; no tab yet)
  *
- * The Jolt tab deliberately windows completion differently from Jolt's own app
- * (3 AM business day), so a store copying the app's figure can miss here.
+ * Jolt is the tab's figure, not Jolt's own List Completion Report
+ * (fetchCompletionByLocation). The tab counts a list on its deadline day, the
+ * day ending at 3 AM; Jolt's report counts it on the day it was handed out,
+ * midnight to midnight, so its denominators drift by a list or two. Over 169
+ * morning reports (2026-10-29) stores' posted Jolt % matched the tab 110 times
+ * and Jolt's report 69 — Columbia matches the tab every day. Spring Hill posts
+ * figures no list count can produce (91.98% on an 18-of-18 day), likely a
+ * task-level number from another Jolt screen.
  *
  * Shift reports carry the day's numbers so far, as of the end of their window:
  * a 5:30 report's net sales is everything since open through 5 PM, not just
@@ -27,7 +33,7 @@ import { getPriorYearRange } from "./fiscal";
 import { getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./berryData";
 import { loginBerryService } from "./berryAuth";
 import { resolveSupersetTimeRange } from "./tools/dateRange";
-import { fetchCompletionByLocation } from "./jolt";
+import { fetchStoreLists, type StoreListsReport } from "./jolt";
 import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone, type BonusStore } from "./bonus/storeMap";
 import { parseReportFields, type ReportFields } from "./slackFields";
 import {
@@ -136,6 +142,23 @@ async function driveThruDay(day: string): Promise<DriveThruPayload | null> {
   return payload;
 }
 
+// ── Jolt, shared across stores ───────────────────────────────────────────────
+// fetchStoreLists returns every store's lists for the day; one in-flight fetch
+// per day serves all thirteen stores rather than each pulling the same pages.
+
+const joltDays = new Map<string, { report: Promise<StoreListsReport>; at: number }>();
+
+function joltDay(day: string): Promise<StoreListsReport> {
+  const cached = joltDays.get(day);
+  if (cached && Date.now() - cached.at < BERRY_DAY_TTL_MS) return cached.report;
+  const report = fetchStoreLists(day, day);
+  joltDays.set(day, { report, at: Date.now() });
+  report.catch(() => {
+    if (joltDays.get(day)?.report === report) joltDays.delete(day);
+  });
+  return report;
+}
+
 function check(
   out: FieldCheck[], key: FieldKey, label: string, unit: FieldCheck["unit"],
   posted: number | null, actual: number | null, tolerance: number,
@@ -206,8 +229,8 @@ export async function checkStoreReports(
   });
   const cash = memo("PAR tills", (day) => getCashSummary(store.storeId, day));
   const jolt = memo("Jolt", async (day) => {
-    const report = await fetchCompletionByLocation(day, day);
-    return report.locations.find((l) => l.store === store.name)?.completePct ?? null;
+    const report = await joltDay(day);
+    return report.stores.find((s) => s.store === store.name)?.completePct ?? null;
   });
   const drive = memo("BerryAI", async (day): Promise<DriveThruPayload["stores"][number] | null> => {
     const payload = await driveThruDay(day);
