@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
+import GoogleReviewsSection from "@/components/GoogleReviewsSection";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader } from "@/components/StoreFilter";
@@ -720,6 +721,17 @@ export default function SurveyDataClient({
           Visit date — a guest&apos;s response counts on the day they visited, not the day they
           answered.
         </p>
+
+        {/* Follows the period picker and store filter like the table above;
+            its rating columns are Google's lifetime figures regardless. */}
+        <GoogleReviewsSection
+          start={range?.start ?? null}
+          end={range?.end ?? null}
+          label={selectedLabel}
+          stores={zcaseStores}
+          totalLabel={summaryLabel}
+          refreshKey={refreshKey}
+        />
 
         {/* Always store-level with its own grain and range, so it can span a
             longer history than whichever single period the table is showing. */}
