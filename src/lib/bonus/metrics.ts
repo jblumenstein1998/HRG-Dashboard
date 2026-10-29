@@ -29,7 +29,7 @@ import { BONUS_STORES } from "./storeMap";
 import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "../slackCompletion";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
-import { fetchCompletionByLocation } from "../jolt";
+import { fetchStoreLists } from "../jolt";
 import { fetchZuReport, fetchZuTestReport, SERVSAFE_MANAGER_TEST_ID } from "../schoox";
 import { getRetention, retentionMetrics, RETENTION_METRIC_IDS } from "../workstreamRetention";
 import { getStoreInventoryCounts } from "../netchefInventory";
@@ -347,8 +347,12 @@ export async function resolvePeriodMetrics(
   }
 
   // ── Jolt ───────────────────────────────────────────────────────────────────
-  // Checklist completion for the Quality Director, the same Complete (%) the
-  // Jolt tab reports: complete ÷ (done + missed) over the period window.
+  // Checklist completion for the Quality Director: the Jolt tab's own figure
+  // (fetchStoreLists completePct — done ÷ due, each list counted on its
+  // deadline day, the day ending 3 AM). The Jolt tab is the source of truth
+  // (Josh, 2026-10-29). This used to read Jolt's List Completion Report
+  // (fetchCompletionByLocation), which counts lists by the day they were handed
+  // out and so differed from the Jolt tab by a list or two a day.
   //
   // Jolt answers for an arbitrary date range, so a closed period can always be
   // re-derived and this needs no snapshot — unlike the Schoox figures, which
@@ -360,8 +364,8 @@ export async function resolvePeriodMetrics(
   // for stores that were never given the tool.
   let joltStores = 0;
   try {
-    const completion = await fetchCompletionByLocation(window.start, window.end);
-    const byName = new Map(completion.locations.map((l) => [l.store, l]));
+    const completion = await fetchStoreLists(window.start, window.end);
+    const byName = new Map(completion.stores.map((s) => [s.store, s]));
     for (const store of BONUS_STORES) {
       const v = vals(store.storeId);
       if (!v) continue;

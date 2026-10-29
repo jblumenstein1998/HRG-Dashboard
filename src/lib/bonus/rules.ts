@@ -476,8 +476,8 @@ const QUALITY: PositionRules = {
         {
           id: "q_jolt_completion",
           label: "Jolt checklist completion",
-          // Jolt's own Complete (%) — complete / (done + missed) — over the
-          // period window, the figure the Jolt tab reports. The metric key is
+          // The Jolt tab's Complete (%) — done ÷ due, lists counted on their
+          // deadline day — over the period window. The metric key is
           // deliberately not the criterion id: manual entries are stored under
           // the id, and keeping them apart means an entry made while this was
           // hand-keyed can no longer shadow the live figure. Correcting a
