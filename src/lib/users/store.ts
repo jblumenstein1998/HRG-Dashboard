@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { ensureUserSchema } from "./schema";
 import { ALL_TABS, type Tab } from "./tabs";
+import { HRG_TIME_ZONE } from "@/lib/businessDay";
 
 export type Position = {
   id: string;
@@ -284,8 +285,84 @@ export async function updateUser(
  * every account created from here on it is simply null.
  */
 
-export async function recordLogin(id: string): Promise<void> {
+export type LoginMethod = "google" | "password";
+
+export async function recordLogin(id: string, method: LoginMethod): Promise<void> {
+  await ensureUserSchema();
   await sql`UPDATE app_users SET last_login_at = now() WHERE id = ${id}`;
+  await sql`INSERT INTO app_login_events (user_id, method) VALUES (${id}, ${method})`;
+}
+
+/** Per-person sign-in counts for the admin usage view. */
+export type LoginUsage = {
+  userId: string;
+  name: string;
+  handle: string;
+  positionId: string;
+  logins7: number;
+  logins30: number;
+  /** Distinct business days (HRG_TIME_ZONE) with a sign-in, last 30 days. */
+  days30: number;
+  lastLoginAt: string | null;
+};
+
+export type LoginEvent = {
+  id: string;
+  userId: string;
+  name: string;
+  handle: string;
+  at: string;
+  method: LoginMethod;
+};
+
+/**
+ * Every current account, including ones with no sign-ins — someone who was
+ * added and never came in is exactly what this view is for spotting.
+ */
+export async function loginUsage(): Promise<LoginUsage[]> {
+  await ensureUserSchema();
+  const rows = (await sql`
+    SELECT u.id, u.name, u.email, u.username, u.position_id, u.last_login_at,
+      count(e.id) FILTER (WHERE e.at > now() - interval '7 days')::int AS logins7,
+      count(e.id) FILTER (WHERE e.at > now() - interval '30 days')::int AS logins30,
+      count(DISTINCT (e.at AT TIME ZONE ${HRG_TIME_ZONE})::date)
+        FILTER (WHERE e.at > now() - interval '30 days')::int AS days30
+    FROM app_users u
+    LEFT JOIN app_login_events e ON e.user_id = u.id
+    WHERE u.disabled_at IS NULL
+    GROUP BY u.id
+    ORDER BY days30 DESC, logins30 DESC, u.last_login_at DESC NULLS LAST, u.name
+  `) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    userId: r.id as string,
+    name: r.name as string,
+    handle: loginHandle({ email: r.email as string | null, username: r.username as string | null }),
+    positionId: r.position_id as string,
+    logins7: r.logins7 as number,
+    logins30: r.logins30 as number,
+    days30: r.days30 as number,
+    lastLoginAt: r.last_login_at ? new Date(r.last_login_at as string).toISOString() : null,
+  }));
+}
+
+/** The most recent sign-ins, newest first. */
+export async function recentLogins(limit = 200): Promise<LoginEvent[]> {
+  await ensureUserSchema();
+  const rows = (await sql`
+    SELECT e.id, e.user_id, e.at, e.method, u.name, u.email, u.username
+    FROM app_login_events e
+    JOIN app_users u ON u.id = e.user_id
+    ORDER BY e.at DESC
+    LIMIT ${limit}
+  `) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: String(r.id),
+    userId: r.user_id as string,
+    name: r.name as string,
+    handle: loginHandle({ email: r.email as string | null, username: r.username as string | null }),
+    at: new Date(r.at as string).toISOString(),
+    method: r.method as LoginMethod,
+  }));
 }
 
 /**

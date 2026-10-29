@@ -82,6 +82,6 @@ export async function GET(request: NextRequest) {
   res.cookies.delete("berry_token");
   res.cookies.delete("berry_corp");
 
-  await recordLogin(user.id);
+  await recordLogin(user.id, "google");
   return res;
 }

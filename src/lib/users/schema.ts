@@ -162,4 +162,29 @@ async function createUserSchema(): Promise<void> {
   await sql`
     CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_key ON app_users (lower(username))
   `;
+
+  /*
+   * One row per successful sign-in, for measuring how often people use the
+   * dashboard. `app_users.last_login_at` only ever holds the latest one.
+   *
+   * No foreign key, matching the rest of app_users: deleting an account must
+   * not be blocked by its history. The usage view joins to app_users, so a
+   * deleted person's rows simply stop showing.
+   *
+   * A sign-in is not a visit — the session lasts twelve hours, so someone who
+   * keeps a tab open all day signs in once. Read the counts as "working days
+   * they came in", which is what the admin view reports.
+   */
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_login_events (
+      id      BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      -- 'google' or 'password' (a shared store account).
+      method  TEXT NOT NULL
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS app_login_events_at_idx ON app_login_events (at DESC)
+  `;
 }
