@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
-import AdminSlackReports from "@/components/AdminSlackReports";
 import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
 import { ALL_STORES } from "@/lib/stores";
 import { formatSyncStamp } from "@/lib/surveyMeta";
@@ -261,8 +260,6 @@ export default function AdminClient({
             send(`/api/admin/leaders?id=${encodeURIComponent(id)}`, { method: "DELETE" })
           }
         />
-
-        <AdminSlackReports />
       </main>
     </div>
   );
