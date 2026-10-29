@@ -370,6 +370,166 @@ function RecentWeeksTable({ allowed, totalLabel }: { allowed: Set<string> | null
   );
 }
 
+// ── Inventory count completion ───────────────────────────────────────────────
+
+type InventoryCompletion = {
+  locationId: number;
+  locationName: string;
+  criticalDone: number;
+  criticalSlots: number;
+  criticalPct: number | null;
+  weeksOnTime: number;
+  weeksJudged: number;
+  lateWeeks: string[];
+  missedWeeks: string[];
+};
+
+// Coloured against the Quality Director's bonus goal: a full count every
+// Monday at both levels, and critical counts at 95% for half, 100% for full.
+// The full count has no middle band — the goal has no partial credit for it.
+function fullCountColor(onTime: number, judged: number): string {
+  if (judged === 0) return "text-gray-400";
+  return onTime === judged ? "text-green-600" : "text-red-600";
+}
+function criticalColor(pct: number | null): string {
+  if (pct === null) return "text-gray-400";
+  if (pct >= 100) return "text-green-600";
+  if (pct >= 95) return "text-yellow-600";
+  return "text-red-600";
+}
+const pctOf = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null);
+
+function InventoryCompletionTable({
+  range, allowed, totalLabel,
+}: {
+  range: { start: string; end: string } | null;
+  allowed: Set<string> | null;
+  totalLabel: string;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const key = range ? `${range.start}|${range.end}` : "";
+  const [rows, setRows] = useState<{ key: string; byId: Record<number, InventoryCompletion | "error"> }>({ key: "", byId: {} });
+
+  // Keyed on the date strings, not the range object, which is rebuilt on every
+  // render of the page and would refetch thirteen stores each time.
+  useEffect(() => {
+    if (!key) return;
+    const [start, end] = key.split("|");
+    let cancelled = false;
+    // Responses for an older range are dropped by keying the stored rows;
+    // results land one store at a time, as each store's Net-Chef login
+    // completes, rather than waiting on the slowest of thirteen.
+    const land = (id: number, row: InventoryCompletion | "error") => {
+      if (cancelled) return;
+      setRows((prev) => ({ key, byId: { ...(prev.key === key ? prev.byId : {}), [id]: row } }));
+    };
+    for (const id of LOCATION_IDS) {
+      fetch(`/api/netchef/inventory-counts?locationId=${id}&start=${start}&end=${end}`)
+        .then(async (r) => {
+          const json = await r.json();
+          if (!r.ok) throw new Error(json.error ?? "failed");
+          return json as InventoryCompletion;
+        })
+        .then((row) => land(id, row))
+        .catch(() => land(id, "error"));
+    }
+    return () => { cancelled = true; };
+  }, [key]);
+
+  if (!range) return null;
+
+  const current = rows.key === key ? rows.byId : {};
+  const loaded = Object.values(current).filter((r): r is InventoryCompletion => r !== "error");
+  const failed = LOCATION_IDS.filter((id) => current[id] === "error").length;
+  const pending = LOCATION_IDS.length - Object.keys(current).length;
+  const shown = loaded
+    .filter((r) => inFilter(allowed, r.locationName))
+    .sort((a, b) => {
+      const fa = pctOf(a.weeksOnTime, a.weeksJudged) ?? -1;
+      const fb = pctOf(b.weeksOnTime, b.weeksJudged) ?? -1;
+      return (b.criticalPct ?? -1) - (a.criticalPct ?? -1) || fb - fa;
+    });
+
+  const tot = shown.reduce(
+    (t, r) => ({ cd: t.cd + r.criticalDone, cs: t.cs + r.criticalSlots, wo: t.wo + r.weeksOnTime, wj: t.wj + r.weeksJudged }),
+    { cd: 0, cs: 0, wo: 0, wj: 0 },
+  );
+
+  const fullCell = (onTime: number, judged: number) =>
+    judged === 0 ? "—" : `${pctOf(onTime, judged)}% (${onTime}/${judged})`;
+  const critCell = (done: number, slots: number) =>
+    slots === 0 ? "—" : `${pctOf(done, slots)}% (${done}/${slots})`;
+
+  return (
+    <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <CopyableTitle title="Inventory Count Completion" targetRef={cardRef} className="text-sm font-semibold text-gray-800" />
+        <span className="text-xs text-gray-400">
+          Full count:{" "}
+          <span className="text-green-600 font-medium">every Monday</span>
+          {" / "}
+          <span className="text-red-600 font-medium">any missed or late</span>
+          <span className="text-gray-300"> · </span>
+          Critical (AM + PM, Mondays excused):{" "}
+          <span className="text-green-600 font-medium">100%</span>
+          {" / "}
+          <span className="text-yellow-600 font-medium">≥95%</span>
+          {" / "}
+          <span className="text-red-600 font-medium">&lt;95%</span>
+        </span>
+        {pending > 0 && (
+          <span className="text-xs text-gray-400 animate-pulse ml-auto">Loading {LOCATION_IDS.length - pending}/{LOCATION_IDS.length}…</span>
+        )}
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100">
+            <th className="text-right px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8">#</th>
+            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-48">Full Counts</th>
+            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-48">Critical Counts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r, i) => {
+            const notes = [
+              ...r.missedWeeks.map((w) => `missed week of ${fmtDate(w)}`),
+              ...r.lateWeeks.map((w) => `late for week of ${fmtDate(w)}`),
+            ];
+            return (
+              <tr key={r.locationId} className="border-b border-[#ececec]">
+                <td className="px-3 py-3 text-right text-xs text-gray-400 tabular-nums">{i + 1}.</td>
+                <td className="px-4 py-3 font-medium text-gray-900">{r.locationName}</td>
+                <td className={`px-4 py-3 text-right tabular-nums font-semibold ${fullCountColor(r.weeksOnTime, r.weeksJudged)}`} title={notes.join("\n") || undefined}>
+                  {fullCell(r.weeksOnTime, r.weeksJudged)}
+                </td>
+                <td className={`px-4 py-3 text-right tabular-nums font-semibold ${criticalColor(r.criticalPct)}`}>
+                  {critCell(r.criticalDone, r.criticalSlots)}
+                </td>
+              </tr>
+            );
+          })}
+          {shown.length > 0 && (
+            <tr className="border-t-2 border-gray-200 bg-gray-50">
+              <td className="px-3 py-3" />
+              <td className="px-4 py-3 font-semibold text-gray-900">{totalLabel}</td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${fullCountColor(tot.wo, tot.wj)}`}>{fullCell(tot.wo, tot.wj)}</td>
+              <td className={`px-4 py-3 text-right tabular-nums font-semibold ${criticalColor(pctOf(tot.cd, tot.cs))}`}>{critCell(tot.cd, tot.cs)}</td>
+            </tr>
+          )}
+          {failed > 0 && (
+            <tr>
+              <td colSpan={4} className="px-4 py-2 text-xs text-red-500">
+                {failed} {failed === 1 ? "store" : "stores"} failed to load from Net-Chef.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Variance YoY ─────────────────────────────────────────────────────────────
 
 const WEEK_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 26, 52];
@@ -2170,6 +2330,16 @@ export default function FoodCostClient({
               salesByName={salesByName}
               totalLabel={totalLabelFor(storeFilter)}
               sortByMagnitude
+            />
+          </div>
+        )}
+
+        {(allLocations.length > 0 || loading) && (
+          <div className="mt-6">
+            <InventoryCompletionTable
+              range={salesRange}
+              allowed={storeFilter.allowed}
+              totalLabel={totalLabelFor(storeFilter)}
             />
           </div>
         )}

@@ -87,6 +87,9 @@ export type StoreInventoryCounts = {
   criticalSlots: number;
   /** 1 when every judged week had an on-time full count, 0 if any did not, null if none judged. */
   fullCountsOnTime: number | null;
+  /** Judged weeks, and how many had their full count on the Monday. */
+  weeksJudged: number;
+  weeksOnTime: number;
 };
 
 function addDays(iso: string, days: number): string {
@@ -170,9 +173,13 @@ export async function getStoreInventoryCounts(
   const criticalSlots = required.length * 2;
   const criticalDone = required.reduce((n, d) => n + (d.am ? 1 : 0) + (d.pm ? 1 : 0), 0);
 
-  // Monday–Sunday weeks whose Sunday falls in the window.
+  // Monday–Sunday weeks whose Sunday falls in the window. A window that does
+  // not start on a Monday (the Food Cost tab allows any range) still owns the
+  // week whose Sunday it contains.
   const weeks: FullCountWeek[] = [];
-  for (let weekStart = start; addDays(weekStart, 6) <= end; weekStart = addDays(weekStart, 7)) {
+  let firstMonday = start;
+  while (!isMonday(firstMonday)) firstMonday = addDays(firstMonday, -1);
+  for (let weekStart = firstMonday; addDays(weekStart, 6) <= end; weekStart = addDays(weekStart, 7)) {
     const weekEnd = addDays(weekStart, 6);
     const dueOn = addDays(weekEnd, 1);
     // The first full count entered from that Sunday until the next Sunday —
@@ -201,5 +208,7 @@ export async function getStoreInventoryCounts(
     criticalDone,
     criticalSlots,
     fullCountsOnTime: judged.length === 0 ? null : judged.every((w) => w.onTime) ? 1 : 0,
+    weeksJudged: judged.length,
+    weeksOnTime: judged.filter((w) => w.onTime).length,
   };
 }
