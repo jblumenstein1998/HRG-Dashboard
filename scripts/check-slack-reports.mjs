@@ -40,6 +40,7 @@ try {
   // "2026-10-28 21:12:42 EDT" → Slack ts
   const ts = (edt) => String(Date.parse(edt.replace(" ", "T") + "-04:00") / 1000);
   const msg = (edt, text) => ({ ts: ts(edt), text, user: "U1" });
+  const pick = (p) => p && { date: p.date, slot: p.slot, onTime: p.onTime };
   const CT = "America/Chicago";
   const ET = "America/New_York";
 
@@ -57,25 +58,25 @@ try {
 
   // ── Placement (date, slot, on time) ────────────────────────────────────────
   check("CT lunch 3:17 PM ET = 2:17 CT, on time",
-    S.placeMessage(msg("2026-10-28 15:17:12", "10/28 lunch \nNet sales- $1547\n11-12 $376\n12-1 $540\n1-2 $406"), CT),
+    pick(S.placeMessage(msg("2026-10-28 15:17:12", "10/28 lunch \nNet sales- $1547\n11-12 $376\n12-1 $540\n1-2 $406"), CT)),
     { date: "2026-10-28", slot: "lunch", onTime: true });
   check("CT full day 9:40 AM ET = 8:40 CT, late",
-    S.placeMessage(msg("2026-10-28 09:40:12", "10/27/26 Full Day \n\nNet sales- $4,247.22\nComp- +17.9%"), CT),
+    pick(S.placeMessage(msg("2026-10-28 09:40:12", "10/27/26 Full Day \n\nNet sales- $4,247.22\nComp- +17.9%"), CT)),
     { date: "2026-10-28", slot: "previous_day", onTime: false });
   check("ET full day 7:34 AM, on time",
-    S.placeMessage(msg("2026-10-29 07:34:23", "*Total net sales:$11,306.91*\n*Comp%18.60*"), ET),
+    pick(S.placeMessage(msg("2026-10-29 07:34:23", "*Total net sales:$11,306.91*\n*Comp%18.60*"), ET)),
     { date: "2026-10-29", slot: "previous_day", onTime: true });
   check("typo'd date on an on-time post uses the posting date",
-    S.placeMessage(msg("2026-10-27 21:38:28", "10/22 dinner \nNet sales- $3936\nSph-\n5-6 $286\n6-7 $573\n7-8 $598"), CT),
+    pick(S.placeMessage(msg("2026-10-27 21:38:28", "10/22 dinner \nNet sales- $3936\nSph-\n5-6 $286\n6-7 $573\n7-8 $598"), CT)),
     { date: "2026-10-27", slot: "dinner", onTime: false });
   check("typo'd month ignored",
-    S.placeMessage(msg("2026-10-21 15:15:39", "11/21 lunch\nNet 1357\n11-12 453\n12-1 404\n1-2 384"), CT),
+    pick(S.placeMessage(msg("2026-10-21 15:15:39", "11/21 lunch\nNet 1357\n11-12 453\n12-1 404\n1-2 384"), CT)),
     { date: "2026-10-21", slot: "lunch", onTime: true });
   check("catch-up report next morning credits its written day, late",
-    S.placeMessage(msg("2026-10-22 09:05:00", "10/21 dinner\nNet 3428\n5-6 501\n6-7 401\n7-8 588"), CT),
+    pick(S.placeMessage(msg("2026-10-22 09:05:00", "10/21 dinner\nNet 3428\n5-6 501\n6-7 401\n7-8 588"), CT)),
     { date: "2026-10-21", slot: "dinner", onTime: false });
   check("bot messages ignored",
-    S.placeMessage({ ...msg("2026-10-28 15:17:12", "Net 1 11-12 1"), bot_id: "B1" }, CT), null);
+    pick(S.placeMessage({ ...msg("2026-10-28 15:17:12", "Net 1 11-12 1"), bot_id: "B1" }, CT)), null);
 
   // ── Scoring a day ──────────────────────────────────────────────────────────
   // Brentwood, 10/21: the area leader posted "No 5pm or 8pm slack" about 10/20.

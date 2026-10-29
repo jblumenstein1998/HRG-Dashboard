@@ -164,7 +164,13 @@ export function writtenDate(text: string, postedDate: string): string | null {
 
 export type SlotStatus = "on_time" | "late" | "missed";
 
-export type SlackDay = { date: string; slots: Record<SlackSlot, SlotStatus | null> };
+export type SlackDay = {
+  date: string;
+  /** null = not due (the store was closed). */
+  slots: Record<SlackSlot, SlotStatus | null>;
+  /** The Slack ts of the message that filled each slot, if any. */
+  posts: Record<SlackSlot, string | null>;
+};
 
 export type SlackCompletion = {
   required: number;
@@ -181,16 +187,24 @@ export type SlackCompletion = {
  * that slot's deadline. The full-day report covers yesterday but is due the
  * morning it's posted, so it fills that morning's slot.
  */
-export function placeMessage(
-  msg: SlackMessage,
-  timeZone: string,
-): { date: string; slot: SlackSlot; onTime: boolean } | null {
+export type Placement = {
+  date: string;
+  slot: SlackSlot;
+  onTime: boolean;
+  /** Whether the content said which report this is, or the posting time had to. */
+  by: "content" | "time";
+  /** Local posting date and minutes after midnight. */
+  posted: { date: string; minutes: number };
+};
+
+export function placeMessage(msg: SlackMessage, timeZone: string): Placement | null {
   const text = msg.text ?? "";
   if (msg.bot_id || (msg.subtype && msg.subtype !== "thread_broadcast" && msg.subtype !== "file_share")) return null;
   if (!isReport(text)) return null;
 
   const posted = localParts(msg.ts, timeZone);
-  const slot = classifyByContent(text) ?? classifyByTime(posted.minutes);
+  const byContent = classifyByContent(text);
+  const slot = byContent ?? classifyByTime(posted.minutes);
 
   // The posting date wins whenever the posting time fits the slot. Typed dates
   // are wrong often enough ("10/22 dinner" posted at 8:38 PM on 10/27, the only
@@ -208,7 +222,7 @@ export function placeMessage(
   }
 
   const onTime = posted.date < date || (posted.date === date && posted.minutes <= DEADLINE_MINUTES[slot]);
-  return { date, slot, onTime };
+  return { date, slot, onTime, by: byContent ? "content" : "time", posted };
 }
 
 /**
@@ -223,12 +237,19 @@ export function scoreSlackReports(
   messages: SlackMessage[],
   opts: { timeZone: string; start: string; end: string; openDays?: Set<string> | null },
 ): SlackCompletion {
-  const best = new Map<string, boolean>(); // `${date}|${slot}` → on time?
+  // The message that fills each `${date}|${slot}`: the earliest on-time one,
+  // else the earliest late one.
+  const best = new Map<string, { ts: string; onTime: boolean }>();
   for (const msg of messages) {
     const placed = placeMessage(msg, opts.timeZone);
     if (!placed) continue;
     const key = `${placed.date}|${placed.slot}`;
-    best.set(key, (best.get(key) ?? false) || placed.onTime);
+    const prior = best.get(key);
+    const better =
+      !prior ||
+      (placed.onTime && !prior.onTime) ||
+      (placed.onTime === prior.onTime && Number(msg.ts) < Number(prior.ts));
+    if (better) best.set(key, { ts: msg.ts, onTime: placed.onTime });
   }
 
   const isOpen = (d: string) => !opts.openDays || opts.openDays.has(d);
@@ -236,19 +257,21 @@ export function scoreSlackReports(
   let required = 0, onTime = 0, late = 0;
   for (let date = opts.start; date <= opts.end; date = addDays(date, 1)) {
     const slots = {} as Record<SlackSlot, SlotStatus | null>;
+    const posts = {} as Record<SlackSlot, string | null>;
     for (const { id } of SLACK_SLOTS) {
+      const hit = best.get(`${date}|${id}`);
+      posts[id] = hit?.ts ?? null;
       const needed = id === "previous_day" ? isOpen(addDays(date, -1)) : isOpen(date);
       if (!needed) {
         slots[id] = null;
         continue;
       }
       required++;
-      const hit = best.get(`${date}|${id}`);
-      if (hit === true) { slots[id] = "on_time"; onTime++; }
-      else if (hit === false) { slots[id] = "late"; late++; }
+      if (hit?.onTime) { slots[id] = "on_time"; onTime++; }
+      else if (hit) { slots[id] = "late"; late++; }
       else slots[id] = "missed";
     }
-    days.push({ date, slots });
+    days.push({ date, slots, posts });
   }
 
   return {
@@ -264,19 +287,31 @@ export function scoreSlackReports(
 // ── Slack API ────────────────────────────────────────────────────────────────
 
 /**
+ * The token channel history is read with.
+ *
+ * Josh's own user token (SLACK_USER_TOKEN, user scopes `groups:history` and
+ * `users:read`) when set: he is already in every store channel, so nothing has
+ * to be invited anywhere, and it sees exactly what he sees — a channel he
+ * leaves goes pending. Falls back to the dashboard bot, which would need the
+ * same scopes and an invite to each channel.
+ */
+function readToken(): string | undefined {
+  return process.env.SLACK_USER_TOKEN || process.env.SLACK_BOT_TOKEN;
+}
+
+/**
  * Top-level messages in a channel between two instants (unix seconds).
  *
- * Needs a bot token with `groups:history` (the store channels are private) and
- * the bot invited to each channel. A channel it can't read throws, and the
- * resolver leaves that store's criterion pending rather than scoring it zero.
+ * A channel the token can't read throws, and the resolver leaves that store's
+ * criterion pending rather than scoring it zero.
  */
 export async function fetchChannelHistory(
   channelId: string,
   oldest: number,
   latest: number,
 ): Promise<SlackMessage[]> {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("SLACK_BOT_TOKEN is not set");
+  const token = readToken();
+  if (!token) throw new Error("neither SLACK_USER_TOKEN nor SLACK_BOT_TOKEN is set");
 
   const out: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -308,6 +343,10 @@ export async function fetchChannelHistory(
       response_metadata?: { next_cursor?: string };
     };
     if (!data.ok) {
+      // A private channel the token's account isn't in reads as "not found".
+      if (data.error === "channel_not_found" || data.error === "not_in_channel") {
+        throw new Error(`can't see the channel (${data.error}) — set SLACK_USER_TOKEN, or invite the bot`);
+      }
       throw new Error(data.error === "missing_scope" ? `missing_scope (${data.needed})` : (data.error ?? "unknown error"));
     }
     out.push(...(data.messages ?? []));
@@ -315,6 +354,36 @@ export async function fetchChannelHistory(
     if (!cursor) break;
   }
   return out;
+}
+
+/**
+ * Display names for Slack user ids, best effort: needs `users:read`, and any id
+ * it can't resolve is simply left out, so callers fall back to the id.
+ */
+export async function fetchUserNames(ids: string[]): Promise<Map<string, string>> {
+  const token = readToken();
+  const names = new Map<string, string>();
+  if (!token) return names;
+  await Promise.all(
+    [...new Set(ids)].map(async (id) => {
+      try {
+        const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        const data = (await res.json()) as {
+          ok: boolean;
+          user?: { real_name?: string; name?: string; profile?: { display_name?: string; real_name?: string } };
+        };
+        const u = data.user;
+        const name = u?.profile?.real_name || u?.real_name || u?.profile?.display_name || u?.name;
+        if (data.ok && name) names.set(id, name);
+      } catch {
+        // A name is a nicety; the id stands in.
+      }
+    }),
+  );
+  return names;
 }
 
 /** Unix seconds for local midnight at the start of `date` in `timeZone`. */
