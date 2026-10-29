@@ -516,8 +516,7 @@ function StoreDetail({
     <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
       <div>
         <div className="text-[11px] text-gray-400 mb-1">
-          Each cell: when the report that filled it was posted ({row.timeZone?.replace("America/", "")} time) · * within
-          grace
+          Each cell: when the report that filled it was posted ({row.timeZone?.replace("America/", "")} time)
         </div>
         <table className="text-xs">
           <thead>
@@ -548,7 +547,7 @@ function StoreDetail({
                           : cell.status === "upcoming"
                             ? "not due"
                             : post
-                            ? `${late}${post.time}${cell.grace ? "*" : ""}`
+                            ? `${late}${post.time}`
                             : "missed"}
                       </div>
                     </td>
@@ -596,7 +595,6 @@ function StoreDetail({
                         title={m.placed.by === "time" ? "Read from the posting time — the text didn't say" : "Read from the text"}
                       >
                         {SLOT_SHORT[m.placed.slot]} {shortDate(m.placed.date)}
-                        {m.placed.inGrace && "*"}
                         {m.placed.by === "time" && " ⏱"}
                       </span>
                     ) : (

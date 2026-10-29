@@ -42,7 +42,7 @@
     },
     {
       "path": "/api/cron/slack-accuracy",
-      "schedule": "30 14 * * *"
+      "schedule": "15 12 * * *"
     }
   ]
 }

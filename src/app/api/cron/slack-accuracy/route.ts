@@ -9,6 +9,10 @@ import { KEEP_DAYS, pruneChecks } from "@/lib/slackAccuracyStore";
  * results (lib/slackAccuracyStore.ts), so the admin table can show accuracy for
  * any range without pulling PAR orders on page load.
  *
+ * Runs at 12:15 UTC (7:15 AM Central), just after par-rollup writes the day's
+ * PAR totals at 12:00 — earlier and getTotalsForRange would rebuild each store's
+ * day from PAR live, doing the rollup's work twice.
+ *
  * Two days, not one, so a report posted a day late is still checked. Anything
  * older than Slack's 90-day history is pruned.
  *
