@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireTabApi } from "@/lib/users/adminGuard";
 import { apiViewer } from "@/lib/users/access";
-import { getAssignments, listCandidates, saveAssignments, type AssignmentWrite } from "@/lib/bonus/assignments";
+import { getTeam, listCandidates, saveTeam, type TeamMember } from "@/lib/bonus/assignments";
 import { resolveBonusWindow } from "@/lib/bonus/periods";
 import { isLocked } from "@/lib/bonus/store";
 import { storeById } from "@/lib/bonus/storeMap";
@@ -11,13 +11,17 @@ import { POSITION_ORDER, type PositionId } from "@/lib/bonus/types";
  * The people on a store's scorecard — see lib/bonus/assignments.ts.
  *
  * GET  /api/bonus/assignments?period=P10%20FY2026&store=36001
- *      → { assignments, candidates }
+ *      → { team: { members, fromPeriod }, candidates }
  * POST /api/bonus/assignments
- *      { period, storeId, team: { [positionId]: { name, workstreamUuid } } }
+ *      { period, storeId, members: [{ positionId, name, workstreamUuid }] }
+ *      replaces the period's whole team, in the order sent.
  *
  * Refused under the pay lock and nothing else: the scorecard's edit lock
  * guards scoring entries, and a name is not one.
  */
+
+/** Rows a team may hold — six positions with room for shared ones, and a cap on junk. */
+const MAX_MEMBERS = 24;
 
 function checkTarget(period: string | null | undefined, storeId: string | null | undefined): string | null {
   if (!period || !resolveBonusWindow(period)) return `Unknown period "${period}"`;
@@ -35,16 +39,16 @@ export async function GET(req: NextRequest) {
   if (problem) return NextResponse.json({ error: problem }, { status: 400 });
 
   try {
-    const [assignments, candidates] = await Promise.all([
-      getAssignments(period!, storeId!),
+    const [team, candidates] = await Promise.all([
+      getTeam(period!, storeId!),
       // The suggestions are a convenience. An unsynced roster leaves the names
       // typed by hand rather than the whole card failing.
       listCandidates(storeId!).catch((err) => {
-        console.error("[Bonus] assignment candidates failed:", err instanceof Error ? err.message : err);
+        console.error("[Bonus] team candidates failed:", err instanceof Error ? err.message : err);
         return [];
       }),
     ]);
-    return NextResponse.json({ period, storeId, assignments, candidates });
+    return NextResponse.json({ period, storeId, team, candidates });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Bonus] GET /api/bonus/assignments failed:", msg);
@@ -55,7 +59,7 @@ export async function GET(req: NextRequest) {
 type PostBody = {
   period?: string;
   storeId?: string;
-  team?: Partial<Record<PositionId, { name?: string; workstreamUuid?: string | null }>>;
+  members?: { positionId?: string; name?: string; workstreamUuid?: string | null }[];
 };
 
 export async function POST(req: NextRequest) {
@@ -63,26 +67,28 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const body = (await req.json().catch(() => ({}))) as PostBody;
-  const { period, storeId, team } = body;
-  const problem = checkTarget(period, storeId) ?? (team ? null : "team is required");
+  const { period, storeId, members } = body;
+  const problem = checkTarget(period, storeId)
+    ?? (Array.isArray(members) ? null : "members is required")
+    ?? (members!.length > MAX_MEMBERS ? `A team holds at most ${MAX_MEMBERS} people` : null)
+    ?? (members!.every((m) => (POSITION_ORDER as string[]).includes(m.positionId ?? ""))
+      ? null
+      : "Every row needs a known position");
   if (problem) return NextResponse.json({ error: problem }, { status: 400 });
 
-  // Only the six positions, and only those sent: anything else in the body is
-  // ignored rather than stored under an id nothing reads.
-  const writes: AssignmentWrite[] = POSITION_ORDER.flatMap((positionId) => {
-    const entry = team![positionId];
-    if (!entry) return [];
-    const name = (entry.name ?? "").trim().slice(0, 120);
-    return [{ positionId, name, workstreamUuid: name ? entry.workstreamUuid ?? null : null }];
-  });
+  const team: TeamMember[] = members!.map((m) => ({
+    positionId: m.positionId as PositionId,
+    name: (m.name ?? "").trim().slice(0, 120),
+    workstreamUuid: m.workstreamUuid ?? null,
+  }));
 
   try {
     if (await isLocked(period!)) {
       return NextResponse.json({ error: `${period} is approved and locked for pay.` }, { status: 409 });
     }
     const viewer = await apiViewer();
-    await saveAssignments(period!, storeId!, writes, viewer?.user.email ?? viewer?.user.name ?? null);
-    return NextResponse.json({ ok: true, assignments: await getAssignments(period!, storeId!) });
+    await saveTeam(period!, storeId!, team, viewer?.user.email ?? viewer?.user.name ?? null);
+    return NextResponse.json({ ok: true, team: await getTeam(period!, storeId!) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Bonus] POST /api/bonus/assignments failed:", msg);

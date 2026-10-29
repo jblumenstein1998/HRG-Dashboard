@@ -1,22 +1,29 @@
 /**
  * Who holds each position on a store's bonus scorecard.
  *
- * Josh's rules (2026-10-28): every store's scorecard names its GM, AGM and four
- * Directors. Names are suggested from Workstream, whose job titles are
- * "General Manager", "AGM" and "Director" — one title for all four Directors,
- * so which Director is Drive-Thru and which is Quality is decided here, on the
- * tab, and nowhere else. Any name can be typed instead of a suggestion.
+ * Josh's rules (2026-10-28/29): every store's scorecard lists its team — the
+ * GM, AGM and four Directors — as rows of position + name, and more rows can be
+ * added, such as a second GM. **Two people in one position split that
+ * position's bonus** (to matter once $ payouts are built). Names are suggested
+ * from the store's own Workstream staff, whose job titles are "General
+ * Manager", "AGM" and "Director" — one title for all four Directors, so which
+ * Director is Drive-Thru and which is Quality is decided here, on the tab, and
+ * nowhere else. Any name can be typed instead of a suggestion.
  *
  * ── Carried forward ──────────────────────────────────────────────────────────
  *
  * A management team changes a few times a year, not every period, so a period
- * with no row for a position reads the latest earlier period that has one, and
- * says where it came from. Saving writes the whole team to the period being
+ * with no team saved reads the team of the latest earlier period that has one,
+ * and says where it came from. A team is saved whole, for the period being
  * looked at, so a change made in P12 never rewrites who held the job in P11.
  * Only earlier periods are consulted, which keeps a past period's answer fixed
  * however later ones are edited; approving a period for pay also writes its
- * carried names into it (`materializeAssignments`), so the approved record
- * stands on its own rows.
+ * carried team into it (`materializeTeam`), so the approved record stands on
+ * its own rows.
+ *
+ * A team saved with no rows at all is stored as a single marker row (an empty
+ * position), so "nobody" is a saved answer and doesn't fall back to an older
+ * period's team.
  *
  * ── Not behind the scorecard's edit lock ─────────────────────────────────────
  *
@@ -33,111 +40,97 @@ import { POSITION_ORDER, type PositionId } from "./types";
 import { storeById } from "./storeMap";
 import { ensureWorkstreamEmployeeSchema } from "../workstreamStore";
 
-export type Assignment = {
+export type TeamMember = {
   positionId: PositionId;
+  /** May be empty: a position on the team with nobody named yet. */
   name: string;
   /** Set when the name was picked from Workstream, null when typed. */
   workstreamUuid: string | null;
-  /** The period the name was saved under — this one, or the earlier one it carries from. */
-  fromPeriod: string;
 };
 
-type AssignmentRow = {
+export type Team = {
+  members: TeamMember[];
+  /** The period the team was saved under — this one, an earlier one it carries from, or null if never saved. */
+  fromPeriod: string | null;
+};
+
+type TeamRow = {
   period_label: string;
+  slot: number;
   position_id: string;
   name: string;
   workstream_uuid: string | null;
 };
 
 const periodNumber = (label: string): number => parsePeriodLabel(label)?.period ?? -1;
+const isPosition = (id: string): id is PositionId => (POSITION_ORDER as string[]).includes(id);
 
-/** One store's team for a period, each position falling back to the latest earlier period. */
-export async function getAssignments(periodLabel: string, storeId: string): Promise<Assignment[]> {
+/** One store's team for a period, falling back to the latest earlier period with one. */
+export async function getTeam(periodLabel: string, storeId: string): Promise<Team> {
   await ensureBonusSchema();
   const rows = (await sql`
-    SELECT period_label, position_id, name, workstream_uuid
-    FROM bonus_assignments
+    SELECT period_label, slot, position_id, name, workstream_uuid
+    FROM bonus_team
     WHERE store_id = ${storeId}
-  `) as AssignmentRow[];
+  `) as TeamRow[];
 
   // Ordering in JS rather than SQL: period labels sort as text ("P10" < "P9"),
   // and parsePeriodLabel is the one place that knows what they mean.
   const target = periodNumber(periodLabel);
-  const latest = new Map<string, AssignmentRow>();
+  let from: string | null = null;
   for (const r of rows) {
     const n = periodNumber(r.period_label);
     if (n < 0 || n > target) continue;
-    const held = latest.get(r.position_id);
-    if (!held || n > periodNumber(held.period_label)) latest.set(r.position_id, r);
+    if (from === null || n > periodNumber(from)) from = r.period_label;
   }
+  if (from === null) return { members: [], fromPeriod: null };
 
-  return POSITION_ORDER.flatMap((positionId) => {
-    const r = latest.get(positionId);
-    // An empty name is how a position is cleared, so it carries nothing forward.
-    if (!r || !r.name) return [];
-    return [{ positionId, name: r.name, workstreamUuid: r.workstream_uuid, fromPeriod: r.period_label }];
-  });
+  const members = rows
+    .filter((r) => r.period_label === from && isPosition(r.position_id))
+    .sort((a, b) => a.slot - b.slot)
+    .map((r) => ({ positionId: r.position_id as PositionId, name: r.name, workstreamUuid: r.workstream_uuid }));
+  return { members, fromPeriod: from };
 }
 
-export type AssignmentWrite = {
-  positionId: PositionId;
-  name: string;
-  workstreamUuid: string | null;
-};
-
-/**
- * Save a store's whole team for one period.
- *
- * Every position is written, blanks included: a blank saved here stops an
- * earlier period's name carrying into this one, which is what clearing a
- * position on screen means.
- */
-export async function saveAssignments(
+/** Replace a store's team for one period with these rows, in this order. */
+export async function saveTeam(
   periodLabel: string,
   storeId: string,
-  writes: AssignmentWrite[],
+  members: TeamMember[],
   changedBy: string | null,
-): Promise<number> {
-  if (writes.length === 0) return 0;
+): Promise<void> {
   await ensureBonusSchema();
-  await sql`
-    INSERT INTO bonus_assignments (store_id, period_label, position_id, name, workstream_uuid, changed_by, changed_at)
-    SELECT ${storeId}, ${periodLabel}, u.position_id, u.name, u.workstream_uuid, ${changedBy}, now()
-    FROM UNNEST(
-      ${writes.map((w) => w.positionId)}::text[],
-      ${writes.map((w) => w.name.trim())}::text[],
-      ${writes.map((w) => w.workstreamUuid)}::text[]
-    ) AS u(position_id, name, workstream_uuid)
-    ON CONFLICT (store_id, period_label, position_id)
-    DO UPDATE SET
-      name            = EXCLUDED.name,
-      workstream_uuid = EXCLUDED.workstream_uuid,
-      changed_by      = EXCLUDED.changed_by,
-      changed_at      = now()
-  `;
-  return writes.length;
+  // An empty team is saved as one marker row; see the header.
+  const rows = members.length
+    ? members.map((m) => ({ positionId: m.positionId as string, name: m.name.trim(), uuid: m.name.trim() ? m.workstreamUuid : null }))
+    : [{ positionId: "", name: "", uuid: null }];
+
+  await sql.transaction([
+    sql`DELETE FROM bonus_team WHERE store_id = ${storeId} AND period_label = ${periodLabel}`,
+    sql`
+      INSERT INTO bonus_team (store_id, period_label, slot, position_id, name, workstream_uuid, changed_by, changed_at)
+      SELECT ${storeId}, ${periodLabel}, u.slot, u.position_id, u.name, u.workstream_uuid, ${changedBy}, now()
+      FROM UNNEST(
+        ${rows.map((_, i) => i)}::int[],
+        ${rows.map((r) => r.positionId)}::text[],
+        ${rows.map((r) => r.name)}::text[],
+        ${rows.map((r) => r.uuid)}::text[]
+      ) AS u(slot, position_id, name, workstream_uuid)
+    `,
+  ]);
 }
 
 /**
- * Write every store's carried names into a period as its own rows, for the pay
- * lock. Positions already saved under the period are left alone.
+ * Write every store's carried team into a period as its own rows, for the pay
+ * lock. A store whose team was already saved under the period is left alone.
  */
-export async function materializeAssignments(periodLabel: string, storeIds: string[]): Promise<number> {
+export async function materializeTeam(periodLabel: string, storeIds: string[]): Promise<number> {
   let written = 0;
   for (const storeId of storeIds) {
-    const carried = (await getAssignments(periodLabel, storeId)).filter((a) => a.fromPeriod !== periodLabel);
-    if (carried.length === 0) continue;
-    await sql`
-      INSERT INTO bonus_assignments (store_id, period_label, position_id, name, workstream_uuid, changed_by, changed_at)
-      SELECT ${storeId}, ${periodLabel}, u.position_id, u.name, u.workstream_uuid, 'carried forward', now()
-      FROM UNNEST(
-        ${carried.map((a) => a.positionId)}::text[],
-        ${carried.map((a) => a.name)}::text[],
-        ${carried.map((a) => a.workstreamUuid)}::text[]
-      ) AS u(position_id, name, workstream_uuid)
-      ON CONFLICT (store_id, period_label, position_id) DO NOTHING
-    `;
-    written += carried.length;
+    const team = await getTeam(periodLabel, storeId);
+    if (team.fromPeriod === null || team.fromPeriod === periodLabel) continue;
+    await saveTeam(periodLabel, storeId, team.members, "carried forward");
+    written += 1;
   }
   return written;
 }
@@ -149,22 +142,10 @@ export type ManagerTitle = "General Manager" | "AGM" | "Director";
 
 const MANAGER_TITLES: ManagerTitle[] = ["General Manager", "AGM", "Director"];
 
-/** Which Workstream title fills which scorecard position. */
-export const TITLE_FOR_POSITION: Record<PositionId, ManagerTitle> = {
-  gm: "General Manager",
-  agm: "AGM",
-  driveThru: "Director",
-  quality: "Director",
-  training: "Director",
-  hospitality: "Director",
-};
-
 export type Candidate = {
   workstreamUuid: string;
   name: string;
   title: ManagerTitle;
-  storeId: string | null;
-  storeName: string | null;
 };
 
 /**
@@ -191,9 +172,10 @@ function tidyName(s: string): string {
  * can still be typed.
  */
 export async function listCandidates(storeId: string): Promise<Candidate[]> {
+  if (!storeById(storeId)) return [];
   await ensureWorkstreamEmployeeSchema();
   const rows = (await sql`
-    SELECT uuid, first_name, last_name, preferred_name, store_id, job_title
+    SELECT uuid, first_name, last_name, preferred_name, job_title
     FROM workstream_employees
     WHERE status = 'active' AND termination_date IS NULL
       AND store_id = ${storeId}
@@ -204,7 +186,6 @@ export async function listCandidates(storeId: string): Promise<Candidate[]> {
     first_name: string;
     last_name: string;
     preferred_name: string;
-    store_id: string | null;
     job_title: ManagerTitle;
   }[];
 
@@ -212,7 +193,5 @@ export async function listCandidates(storeId: string): Promise<Candidate[]> {
     workstreamUuid: r.uuid,
     name: tidyName(`${r.preferred_name || r.first_name} ${r.last_name}`),
     title: r.job_title,
-    storeId: r.store_id,
-    storeName: r.store_id ? storeById(r.store_id)?.name ?? null : null,
   }));
 }

@@ -126,18 +126,20 @@ async function createBonusSchema(): Promise<void> {
       PRIMARY KEY (store_id, period_label)
     )
   `;
-  // Who held each position on a store's scorecard for a period. See
-  // assignments.ts — a period with no rows reads the previous period's.
+  // Who held each position on a store's scorecard for a period, one row per
+  // person — a position can be held by two people, who split its bonus. See
+  // assignments.ts: a period with no rows reads the previous period's team.
   await sql`
-    CREATE TABLE IF NOT EXISTS bonus_assignments (
+    CREATE TABLE IF NOT EXISTS bonus_team (
       store_id        TEXT        NOT NULL,
       period_label    TEXT        NOT NULL,
+      slot            INTEGER     NOT NULL,
       position_id     TEXT        NOT NULL,
       name            TEXT        NOT NULL,
       workstream_uuid TEXT,
       changed_by      TEXT,
       changed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (store_id, period_label, position_id)
+      PRIMARY KEY (store_id, period_label, slot)
     )
   `;
   await sql`

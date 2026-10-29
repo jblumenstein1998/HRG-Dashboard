@@ -4,7 +4,7 @@ import { apiViewer } from "@/lib/users/access";
 import { listLocks, listUnlockedStores, lockPeriod, unlockPeriod } from "@/lib/bonus/store";
 import { resolveBonusWindow } from "@/lib/bonus/periods";
 import { BONUS_STORE_IDS, storeById } from "@/lib/bonus/storeMap";
-import { materializeAssignments } from "@/lib/bonus/assignments";
+import { materializeTeam } from "@/lib/bonus/assignments";
 
 /**
  * Freezing an approved period — the pay lock.
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     }
     // The names carried into this period from earlier ones become its own
     // rows, so the approved record of who held each job stands alone.
-    await materializeAssignments(period, BONUS_STORE_IDS);
+    await materializeTeam(period, BONUS_STORE_IDS);
     return NextResponse.json({ ok: true, period, locked: true, snapshotted, locks: await listLocks() });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
