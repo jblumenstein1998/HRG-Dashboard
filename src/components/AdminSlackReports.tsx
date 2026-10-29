@@ -39,8 +39,10 @@ function fmtValue(v: number, unit: FieldCheck["unit"]): string {
 
 /**
  * Each number the report posted, against the dashboard's own figure for it.
- * Green within tolerance, red outside it (with the system's number), grey
- * when the system had nothing to compare.
+ * Green within tolerance, red outside it (with the system's number). When the
+ * system had nothing to compare (BerryAI not caught up, no Jolt at the store)
+ * the field reads "data not available" and counts as correct (Josh,
+ * 2026-10-29) — it never counts against a report's accuracy.
  */
 function Checks({ check }: { check: ReportCheck }) {
   return (
@@ -50,16 +52,17 @@ function Checks({ check }: { check: ReportCheck }) {
           key={c.key}
           title={
             (c.actual === null
-              ? "No system figure to compare"
+              ? "Data not available — counted as correct"
               : `Posted ${fmtValue(c.posted, c.unit)} · dashboard ${fmtValue(c.actual, c.unit)} · allowed ±${fmtValue(c.tolerance, c.unit)}`) +
             (c.note ? `\n${c.note}` : "")
           }
           className={`rounded px-1.5 py-0.5 text-[11px] ${
-            c.ok === null ? "bg-gray-50 text-gray-400" : c.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-700"
+            c.ok === false ? "bg-red-50 text-red-700" : "bg-green-50 text-green-800"
           }`}
         >
           {c.label}
           {c.ok === false && c.actual !== null && <> · should be {fmtValue(c.actual, c.unit)}</>}
+          {c.ok === null && " · data not available"}
           {c.note && " †"}
         </span>
       ))}
