@@ -87,6 +87,8 @@ const RANGE_SLOT: Record<number, SlackSlot> = {
   5: "dinner", 6: "dinner", 7: "dinner",
 };
 
+const WEEKLY_RECAP_RE = /week of period|for the week\b|\bweek to date\b|\bperiod to date\b|\bWTD\b|\bPTD\b/i;
+
 /**
  * Is this a sales report at all, rather than chatter? Every report leads with
  * a sales figure: "Net sales- $1547", "Netsales: 1,954.10", "Net 1296",
@@ -94,6 +96,10 @@ const RANGE_SLOT: Record<number, SlackSlot> = {
  * net sales:* / Comp % :*") and talk about sales ("sales for Tuesday I see as…").
  */
 export function isReport(text: string): boolean {
+  // A GM's weekly recap ("we have completed the first week of period 10 /
+  // Total net sales: 55316 / Sales projections for the week") carries a sales
+  // figure but isn't one of the four daily reports.
+  if (WEEKLY_RECAP_RE.test(text)) return false;
   // At least three digits, so a blank template's "Net Sales: $ • 5-6: $" —
   // posted and never filled in — doesn't read the hour as the figure.
   if (/(?:\bnet\s*sales?|\bnet|\bsales?)\b\W{0,6}\d[\d,]{2,}/i.test(text)) return true;

@@ -66,8 +66,17 @@ const TIME_SPECS = {
   laneSecs: /total\s*lane|\blane\b|\btl\b|drive\s*time|drove\s*time|total\s*time|total\s*drive|\bdt\b/i,
 };
 
+/**
+ * "1,954.10" and "11,306" are thousands; "77,35" (College, 2026-08-09) is a
+ * decimal comma — a single comma followed by exactly two digits and nothing more.
+ */
+function toNumber(raw: string): number {
+  if (/^\d+,\d{2}$/.test(raw)) return Number(raw.replace(",", "."));
+  return Number(raw.replace(/,/g, ""));
+}
+
 function parseNumber(m: RegExpMatchArray, signed: boolean): number {
-  const value = Number(m[4].replace(/,/g, ""));
+  const value = toNumber(m[4]);
   const sign = m[3] || (m[2] === "" ? m[1] : "");
   return signed && sign === "-" ? -value : value;
 }

@@ -155,6 +155,10 @@ try {
   const oyster = F.parseReportFields("Netsales -2,023.68\nHourly 11-12/341.48 12-1/ 719.79 1-2/ 359.09\nProductivity -58.36\nTPLH-3.5");
   check("oyster: 'Netsales -' and slashed hours", [oyster.netSales, oyster.splh, oyster.tplh, oyster.hourly],
     [2023.68, 58.36, 3.5, { 11: 341.48, 12: 719.79, 13: 359.09 }]);
+  check("decimal comma", F.parseReportFields("Net: $7468\nProductivity: 77,35\nTPLH: 4.105").splh, 77.35);
+  check("thousands comma still thousands", F.parseReportFields("Netsales: 1,954.10\nNet sales: 11,306").netSales, 1954.1);
+  check("a weekly recap isn't a daily report",
+    S.isReport("Gdm!!!  As you know we have completed the first week of period 10\n\nTotal net sales: 55316\nComp % : -1.33 (period)\nSales projections for the week: $52,343.00"), false);
   check("projection lines don't read as productivity",
     F.parseReportFields("Net sales: $100\nSales Projection: $6,014.65\nProductivity Projection: $85.07").splh, null);
 
