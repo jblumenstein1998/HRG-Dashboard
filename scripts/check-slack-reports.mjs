@@ -1,0 +1,107 @@
+// Run with:  node scripts/check-slack-reports.mjs
+//
+// Fixture checks for the Slack reporting classifier (src/lib/slackReports.ts),
+// the GM's "Slack completion rate". Same approach as check-bonus-engine.mjs:
+// compile the real module with tsc and exercise it — nothing mocked.
+//
+// The fixtures are real messages from #brentwood-56301 (Central) and
+// #hampton-57002 (Eastern), October 2026, with their Slack timestamps. They are
+// here because every one of them is a format somebody actually uses.
+
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+const require = createRequire(import.meta.url);
+const out = mkdtempSync(join(tmpdir(), "slack-reports-"));
+try {
+  const tsc = join(dirname(require.resolve("typescript")), "tsc.js");
+  execFileSync(
+    process.execPath,
+    [tsc, "src/lib/slackReports.ts", "--outDir", out, "--module", "commonjs",
+     "--target", "es2022", "--moduleResolution", "node", "--skipLibCheck"],
+    { stdio: "inherit" }
+  );
+  const S = require(join(out, "slackReports.js"));
+
+  let pass = 0;
+  let fail = 0;
+  const check = (name, actual, expected) => {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    if (ok) pass++;
+    else {
+      fail++;
+      console.error(`FAIL ${name}\n  expected ${JSON.stringify(expected)}\n  actual   ${JSON.stringify(actual)}`);
+    }
+  };
+
+  // "2026-10-28 21:12:42 EDT" → Slack ts
+  const ts = (edt) => String(Date.parse(edt.replace(" ", "T") + "-04:00") / 1000);
+  const msg = (edt, text) => ({ ts: ts(edt), text, user: "U1" });
+  const CT = "America/Chicago";
+  const ET = "America/New_York";
+
+  // ── Classification by content ──────────────────────────────────────────────
+  check("brentwood lunch", S.classifyByContent("10/28 lunch \nNet sales- $1547\nSPH- \n11-12 $376\n12-1 $540\n1-2 $406\nProd- 71.35\nTPLH- 5 \nAvg- $14.07\nDrive time- 3:54"), "lunch");
+  check("brentwood midday", S.classifyByContent("10/28/26 midday \n\nNet Sales - $2,372.61\nSPH - \n2-3 - $380.49\n3-4 - $160.15\n4-5 - $367.89\nPROD - $74.96\nTPLH - 4.99\nAVG - $15.02\nLane - 3:27"), "midday");
+  check("brentwood dinner", S.classifyByContent("10/28 dinner \nNet sales- $3587\nSPH- \n4-5 $248\n5-6 $543\n6-7 $402\nProd- 70.62\nTPLH- 4.37"), "dinner");
+  check("hampton midday, ranges typed 2:3", S.classifyByContent("Total net sales: $5.119.90\nHourly breakdown:\n•2:3: 797.79\n•3-4: 655.53\n•4-5: 812.72\nProductivity(SPLH): $65.25\nTotal Window: .59\nTotal time(PF): 2:59"), "midday");
+  check("hampton full day, bold", S.classifyByContent("*Total net sales:$11,306.91*\n*Comp%18.60*\n*Catering: 0*\n*Productivity: :$74.34*\n*Total window: 1:01*\n*Sales projection$11.054.28*"), "previous_day");
+  check("full day labelled 'dinner'", S.classifyByContent("10/15 dinner \nNet sales- $4326\nComp- +11.5 \nCatering- 0 \nSales projection- $4433"), "previous_day");
+  check("no ranges, no words", S.classifyByContent("Net 1936 Prod 51 Tplh 3.5 Lane 3:43"), null);
+  check("lane times are not ranges", S.classifyByContent("Net 2000 TL- 3:43 TW- 1:37 Drive time- 5:52 Lane 2:43"), null);
+  check("chatter is not a report", S.isReport("Sorry for late slack"), false);
+  check("drive-time follow-up is not a report", S.isReport("Dt 3:26"), false);
+
+  // ── Placement (date, slot, on time) ────────────────────────────────────────
+  check("CT lunch 3:17 PM ET = 2:17 CT, on time",
+    S.placeMessage(msg("2026-10-28 15:17:12", "10/28 lunch \nNet sales- $1547\n11-12 $376\n12-1 $540\n1-2 $406"), CT),
+    { date: "2026-10-28", slot: "lunch", onTime: true });
+  check("CT full day 9:40 AM ET = 8:40 CT, late",
+    S.placeMessage(msg("2026-10-28 09:40:12", "10/27/26 Full Day \n\nNet sales- $4,247.22\nComp- +17.9%"), CT),
+    { date: "2026-10-28", slot: "previous_day", onTime: false });
+  check("ET full day 7:34 AM, on time",
+    S.placeMessage(msg("2026-10-29 07:34:23", "*Total net sales:$11,306.91*\n*Comp%18.60*"), ET),
+    { date: "2026-10-29", slot: "previous_day", onTime: true });
+  check("typo'd date on an on-time post uses the posting date",
+    S.placeMessage(msg("2026-10-27 21:38:28", "10/22 dinner \nNet sales- $3936\nSph-\n5-6 $286\n6-7 $573\n7-8 $598"), CT),
+    { date: "2026-10-27", slot: "dinner", onTime: false });
+  check("typo'd month ignored",
+    S.placeMessage(msg("2026-10-21 15:15:39", "11/21 lunch\nNet 1357\n11-12 453\n12-1 404\n1-2 384"), CT),
+    { date: "2026-10-21", slot: "lunch", onTime: true });
+  check("catch-up report next morning credits its written day, late",
+    S.placeMessage(msg("2026-10-22 09:05:00", "10/21 dinner\nNet 3428\n5-6 501\n6-7 401\n7-8 588"), CT),
+    { date: "2026-10-21", slot: "dinner", onTime: false });
+  check("bot messages ignored",
+    S.placeMessage({ ...msg("2026-10-28 15:17:12", "Net 1 11-12 1"), bot_id: "B1" }, CT), null);
+
+  // ── Scoring a day ──────────────────────────────────────────────────────────
+  // Brentwood, 10/21: the area leader posted "No 5pm or 8pm slack" about 10/20.
+  const brentwood = [
+    msg("2026-10-20 09:17:57", "10/19 whole day \nNet sales- $4031\nComp- +34%"),
+    msg("2026-10-20 15:36:54", "10/20/26 lunch \n\nNet Sales - $1,433.72\nSPH -\n11-12 - $405.76\n12-1 - $425.78\n1-2 - $290.81"),
+    msg("2026-10-21 09:50:58", "<!channel>\n\nNo 5pm or 8pm slack\n\nCan someone please explain why we can't figure out something this simple?"),
+  ];
+  const day = S.scoreSlackReports(brentwood, { timeZone: CT, start: "2026-10-20", end: "2026-10-20" });
+  check("10/20 slots (lunch posted 2:36 CT, six minutes late)", day.days[0].slots, { previous_day: "on_time", lunch: "late", midday: "missed", dinner: "missed" });
+  check("10/20 totals", [day.required, day.onTime, day.late, day.missed, day.pct], [4, 1, 1, 2, 25]);
+
+  const closed = S.scoreSlackReports(brentwood, {
+    timeZone: CT, start: "2026-10-20", end: "2026-10-21", openDays: new Set(["2026-10-19", "2026-10-20"]),
+  });
+  check("closed day: only the morning-after report is required",
+    closed.days[1].slots, { previous_day: "missed", lunch: null, midday: null, dinner: null });
+  check("closed day totals", closed.required, 5);
+
+  // ── Time zones ─────────────────────────────────────────────────────────────
+  check("CT midnight", S.localMidnight("2026-10-20", CT), Date.parse("2026-10-20T05:00:00Z") / 1000);
+  check("ET midnight", S.localMidnight("2026-10-20", ET), Date.parse("2026-10-20T04:00:00Z") / 1000);
+  check("ET midnight after DST ends", S.localMidnight("2026-11-02", ET), Date.parse("2026-11-02T05:00:00Z") / 1000);
+
+  console.log(`${pass} passed, ${fail} failed`);
+  if (fail > 0) process.exitCode = 1;
+} finally {
+  rmSync(out, { recursive: true, force: true });
+}

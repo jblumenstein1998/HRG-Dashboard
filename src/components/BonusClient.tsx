@@ -92,7 +92,9 @@ type AttainmentResponse = {
 
 type BonusInput = { storeId: string; criterionId: string; value: number | null };
 
-export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+export default function BonusClient({
+  tabs, isAdmin, canAssignTeam,
+}: { tabs: Tab[]; isAdmin: boolean; canAssignTeam: boolean }) {
   const router = useRouter();
 
   // Seeded from the fiscal calendar rather than from the first response, so the
@@ -531,6 +533,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
           storeId={storeId}
           storeName={store.name}
           payLocked={locked || opened.payLocked}
+          canEdit={canAssignTeam}
           onTeam={setTeam}
         />
 

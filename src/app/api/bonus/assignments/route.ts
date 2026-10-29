@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireTabApi } from "@/lib/users/adminGuard";
 import { apiViewer } from "@/lib/users/access";
-import { getTeam, listCandidates, saveTeam, type TeamMember } from "@/lib/bonus/assignments";
+import { canAssignTeam, getTeam, listCandidates, saveTeam, type TeamMember } from "@/lib/bonus/assignments";
 import { resolveBonusWindow } from "@/lib/bonus/periods";
 import { isLocked } from "@/lib/bonus/store";
 import { storeById } from "@/lib/bonus/storeMap";
@@ -16,8 +16,9 @@ import { POSITION_ORDER, type PositionId } from "@/lib/bonus/types";
  *      { period, storeId, members: [{ positionId, name, workstreamUuid }] }
  *      replaces the period's whole team, in the order sent.
  *
- * Refused under the pay lock and nothing else: the scorecard's edit lock
- * guards scoring entries, and a name is not one.
+ * POST is for Directors of Operations and admins only (canAssignTeam), and is
+ * refused under the pay lock — not the scorecard's edit lock, which guards
+ * scoring entries, and a name is not one.
  */
 
 /** Rows a team may hold — six positions with room for shared ones, and a cap on junk. */
@@ -65,6 +66,13 @@ type PostBody = {
 export async function POST(req: NextRequest) {
   const denied = await requireTabApi("/bonus");
   if (denied) return denied;
+  const viewer = await apiViewer();
+  if (!viewer || !canAssignTeam(viewer.position)) {
+    return NextResponse.json(
+      { error: "Only a Director of Operations or an admin can assign positions." },
+      { status: 403 },
+    );
+  }
 
   const body = (await req.json().catch(() => ({}))) as PostBody;
   const { period, storeId, members } = body;
@@ -86,7 +94,6 @@ export async function POST(req: NextRequest) {
     if (await isLocked(period!)) {
       return NextResponse.json({ error: `${period} is approved and locked for pay.` }, { status: 409 });
     }
-    const viewer = await apiViewer();
     await saveTeam(period!, storeId!, team, viewer?.user.email ?? viewer?.user.name ?? null);
     return NextResponse.json({ ok: true, team: await getTeam(period!, storeId!) });
   } catch (err) {

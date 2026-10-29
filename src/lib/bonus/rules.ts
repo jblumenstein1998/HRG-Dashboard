@@ -1110,12 +1110,16 @@ const GM: PositionRules = {
         {
           id: "gm_slack_completion",
           label: "Slack completion rate",
-          metric: "gm_slack_completion",
-          source: "manual",
+          // The four daily reports in the store's channel (8:30 AM previous
+          // day, 2:30, 5:30, 8:30 PM, local), on time ÷ required. Read from
+          // Slack by lib/slackReports.ts; correct it with the override.
+          metric: "slackCompletionPct",
+          source: "auto",
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 95 },
           target: { cmp: "gte", value: 95 },
+          note: "Reports posted by deadline (8:30 AM, 2:30, 5:30, 8:30 PM local) ÷ reports due. Late posts don't count.",
         },
       ],
       disqualifiers: [
@@ -1212,6 +1216,7 @@ export const OVERRIDABLE_METRICS: { metric: string; label: string; unit: Conditi
   { metric: "smgAccuracy", label: "Order accuracy (overrides SMG Accuracy top box)", unit: "percent" },
   { metric: "cogsPct", label: "Food cost % (overrides Net-Chef)", unit: "percent" },
   { metric: "varianceAbsPct", label: "Food cost variance % (overrides Net-Chef)", unit: "percent" },
+  { metric: "slackCompletionPct", label: "Slack completion % (overrides Slack)", unit: "percent" },
 ];
 
 export const OVERRIDE_PREFIX = "override_";

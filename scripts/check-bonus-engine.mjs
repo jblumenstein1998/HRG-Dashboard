@@ -146,7 +146,7 @@ try {
     t_shift_lead_pipeline: 2, t_workstream_current: 1, t_pipeline_promotion: 0,
     agm_mock_rer_weekly: 1, agm_mock_rer_dishonest: 0, agm_rer_external_100: 0,
     gm_labor_pct: 20, zuComplianceRate: 100, gmServeSafeCurrent: 1, gm_missed_lto_deadlines: 0,
-    gm_slack_completion: 100, gm_zu_completed_for_someone: 0, gm_monday_meetings: 1,
+    slackCompletionPct: 100, gm_zu_completed_for_someone: 0, gm_monday_meetings: 1,
   };
   const all = scoreStore("36001", "P7 FY2026", new Map(Object.entries(base)));
   for (const id of ["driveThru", "quality", "training", "hospitality"]) {

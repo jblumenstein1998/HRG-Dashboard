@@ -31,7 +31,20 @@
  * unlocked scorecard clears its entries, and making someone unlock — and so
  * risk clearing — a scorecard to fix a misspelt name would be a trap. Only the
  * pay lock freezes them.
+ *
+ * ── Who may assign ───────────────────────────────────────────────────────────
+ *
+ * Directors of Operations and admins (Josh, 2026-10-29). Everyone else who can
+ * open the tab sees the team read-only. `canAssignTeam` is the one rule; the
+ * route enforces it and the page uses it to decide whether the card is editable.
  */
+
+/** Position id of the Director of Operations in app_positions. */
+const DIRECTOR_OF_OPERATIONS = "director_of_operations";
+
+export function canAssignTeam(position: { id: string; isAdmin: boolean }): boolean {
+  return position.isAdmin || position.id === DIRECTOR_OF_OPERATIONS;
+}
 
 import { sql } from "../db";
 import { ensureBonusSchema } from "./store";

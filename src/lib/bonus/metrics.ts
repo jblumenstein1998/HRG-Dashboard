@@ -25,7 +25,8 @@ import { getDailyRowsForRange } from "../parRollup";
 import { getTrend, getDailyTrend, type TrendPoint, type TrendStorePoint } from "../driveThruTrend";
 import { queryScores } from "../smgStore";
 import { getPeriodCosts } from "../netchefRollup";
-import { BONUS_STORES } from "./storeMap";
+import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone } from "./storeMap";
+import { fetchChannelHistory, localMidnight, addDays, scoreSlackReports } from "../slackReports";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
 import { fetchCompletionByLocation } from "../jolt";
@@ -116,6 +117,8 @@ export type ResolveDiagnostics = {
   zuStores: number;
   /** Stores Net-Chef returned inventory counts for. */
   inventoryStores: number;
+  /** Stores whose Slack channel could be read. */
+  slackStores: number;
   /**
    * Metrics this run answered for definitively, so an absent value means
    * "pending on purpose" and must not be carried forward from an earlier run.
@@ -213,6 +216,9 @@ export async function resolvePeriodMetrics(
 
   // ── PAR: sales, labour, transactions, YoY ──────────────────────────────────
   const prior = getPriorYearRange(window.start, window.end);
+  // Days each store traded, for the Slack block below: no reports are owed for
+  // a day the store was closed.
+  const openDays = new Map<string, Set<string>>();
   await Promise.all(
     BONUS_STORES.map(async (store) => {
       const v = vals(store.storeId);
@@ -221,6 +227,7 @@ export async function resolvePeriodMetrics(
         getDailyRowsForRange(store.storeId, prior.start, prior.end),
       ]);
       if (rows.length === 0) return;
+      openDays.set(store.storeId, new Set(rows.filter((r) => r.netSales > 0).map((r) => r.date)));
 
       const byDate = new Map(rows.map((r) => [r.date, r]));
       const priorByDate = new Map(priorRows.map((r) => [r.date, r]));
@@ -377,6 +384,54 @@ export async function resolvePeriodMetrics(
     warnings.push(`Jolt fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // ── Slack reporting ────────────────────────────────────────────────────────
+  // The GM's Slack completion rate: the four daily reports each store owes its
+  // channel, posted by their local deadline (lib/slackReports.ts).
+  //
+  // Read straight from Slack history, so a closed period re-derives the same
+  // answer and needs no snapshot. A channel the bot can't read leaves that
+  // store pending; compute.ts carries the last good figure forward.
+  //
+  // The morning report on a period's first day covers the day before it, so
+  // that day's PAR is looked up too. Where PAR has nothing for a store
+  // (Portland before its token), every day counts.
+  let slackStores = 0;
+  const slackErrors = new Map<string, string[]>();
+  await Promise.all(
+    BONUS_STORES.map(async (store) => {
+      const channel = SLACK_CHANNEL_IDS[store.storeId];
+      if (!channel) return;
+      const timeZone = storeTimeZone(store);
+      try {
+        const messages = await fetchChannelHistory(
+          channel,
+          localMidnight(window.start, timeZone),
+          // Catch-up reports for the last days arrive after the period ends.
+          localMidnight(addDays(window.end, 3), timeZone),
+        );
+        let open = openDays.get(store.storeId) ?? null;
+        if (open) {
+          const dayBefore = addDays(window.start, -1);
+          const before = await getDailyRowsForRange(store.storeId, dayBefore, dayBefore);
+          open = new Set([...open, ...before.filter((r) => r.netSales > 0).map((r) => r.date)]);
+        }
+        const result = scoreSlackReports(messages, { timeZone, start: window.start, end: window.end, openDays: open });
+        const v = vals(store.storeId);
+        put(v, "slackCompletionPct", result.pct);
+        put(v, "slackReportsRequired", result.required);
+        put(v, "slackReportsLate", result.late);
+        put(v, "slackReportsMissed", result.missed);
+        slackStores++;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        slackErrors.set(reason, [...(slackErrors.get(reason) ?? []), store.name]);
+      }
+    }),
+  );
+  for (const [reason, stores] of slackErrors) {
+    warnings.push(`Slack reports unreadable for ${stores.join(", ")}: ${reason} — left pending`);
+  }
+
   // ── Zaxby's University (Schoox) ────────────────────────────────────────────
   // Both figures are point-in-time. Schoox answers only for the present — there
   // is no way to ask what a store's compliance was on a date that has passed —
@@ -482,6 +537,7 @@ export async function resolvePeriodMetrics(
     diagnostics: {
       authoritative,
       inventoryStores,
+      slackStores,
       weeks: weeks.length,
       zuStores,
       smgPeriodRows: periodRows.length,

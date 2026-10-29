@@ -91,6 +91,32 @@ export const GOOGLE_PLACE_IDS: Record<string, string> = {
   "57007": "ChIJ77ptGADBuokRgqNLt4w7CbU", // Beach — 2332 Elson Green Ave., Virginia Beach, VA 23456
 };
 
+/**
+ * Each store's private Slack channel, where the four daily reports are posted
+ * (lib/slackReports.ts). Named `<store>-<PAR id>` in Slack, which is how these
+ * were matched on 2026-10-29.
+ */
+export const SLACK_CHANNEL_IDS: Record<string, string> = {
+  "28901": "C098QMMERUL", // #columbia-28901
+  "36001": "C099B1KK63A", // #springfield-36001
+  "42601": "C098M4SH8G5", // #white-house-42601
+  "56301": "C0A1PF35QF3", // #brentwood-56301
+  "61401": "C098LF99VFY", // #spring-hill-61401
+  "75075": "C0BQ2QU1VGW", // #portland-75075
+  "57001": "C0AQW844QCU", // #college-drive-57001
+  "57002": "C0ARLU4NH40", // #hampton-57002
+  "57003": "C0AQW84TGDA", // #oyster-point-57003
+  "57004": "C0AQP7ZA9D3", // #chesapeake-square-57004
+  "57005": "C0AR5H74TCH", // #jefferson-avenue-57005
+  "57006": "C0AQSKYMZDG", // #hillcrest-57006
+  "57007": "C0AR5GZGQ01", // #virginia-beach-57007
+};
+
+/** The store's local time zone. Slack reporting deadlines are local times. */
+export function storeTimeZone(store: BonusStore): string {
+  return store.state === "VA" ? "America/New_York" : "America/Chicago";
+}
+
 export const BONUS_STORES: BonusStore[] = [
   // Tennessee
   // The four TN stores rest on a unique name; every VA store below is confirmed

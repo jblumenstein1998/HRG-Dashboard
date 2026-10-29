@@ -74,12 +74,14 @@ const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
 export type TeamByPosition = Map<PositionId, string[]>;
 
 export default function BonusTeamCard({
-  period, storeId, storeName, payLocked, onTeam,
+  period, storeId, storeName, payLocked, canEdit, onTeam,
 }: {
   period: string;
   storeId: string;
   storeName: string;
   payLocked: boolean;
+  /** Directors of Operations and admins only (canAssignTeam); others read. */
+  canEdit: boolean;
   onTeam: (team: TeamByPosition) => void;
 }) {
   const key = `${period}|${storeId}`;
@@ -177,7 +179,7 @@ export default function BonusTeamCard({
     }
   }
 
-  const editable = !payLocked && !loading;
+  const editable = canEdit && !payLocked && !loading;
 
   return (
     <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -187,7 +189,7 @@ export default function BonusTeamCard({
           who holds each position at {storeName} in {period}
           {carried && !dirty && ` · carried from ${loaded.team.fromPeriod}`}
         </span>
-        {!payLocked && (dirty || carried) && (
+        {editable && (dirty || carried) && (
           <span className="ml-auto flex items-center gap-2">
             {dirty && (
               <button
@@ -240,7 +242,7 @@ export default function BonusTeamCard({
                 value={r.name}
                 onChange={(e) => setName(r.key, e.target.value)}
                 disabled={!editable}
-                placeholder={payLocked ? "Not assigned" : "Pick or type a name"}
+                placeholder={!canEdit || payLocked ? "Not assigned" : "Pick or type a name"}
                 className="flex-1 min-w-0 text-sm border border-gray-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-gray-200 disabled:bg-gray-50 disabled:text-gray-600"
               />
               <datalist id={listId}>
