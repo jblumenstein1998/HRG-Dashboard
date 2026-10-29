@@ -229,7 +229,7 @@ export default function AdminSlackReports() {
         <div>
           <div className="text-sm font-semibold text-gray-800">Slack reporting</div>
           <div className="text-[11px] text-gray-400">
-            GM bonus · reports posted by 8:30 AM, 2:30, 5:30 and 8:30 PM local ÷ reports due · closed days owe nothing
+            Reports posted by 8:30 AM, 2:30, 5:30 and 8:30 PM local ÷ reports due · closed days owe nothing
           </div>
         </div>
 
