@@ -121,7 +121,11 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
    * computed values (Josh, 2026-10-28). Results and entries are only read once
    * that has finished, or they would show what was just cleared.
    */
-  const openKey = `${period}|${storeId}`;
+  // The Refresh button counts as reopening, exactly as reloading the tab does —
+  // it bumps openNonce. Saves and rescores only bump refreshKey, which re-reads
+  // results without reopening, or a save would clear what it had just saved.
+  const [openNonce, setOpenNonce] = useState(0);
+  const openKey = `${period}|${storeId}|${openNonce}`;
   const [opened, setOpened] = useState<{ key: string; locked: boolean; payLocked: boolean; cleared: number }>(
     { key: "", locked: true, payLocked: false, cleared: 0 }
   );
@@ -188,7 +192,8 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
    * would otherwise each fetch the same rows and each hold a rival copy of
    * them. One fetch, one edit buffer, one save covering every position.
    */
-  const inputsKey = `${period}|${storeId}`;
+  // Keyed on the open, so a refresh re-reads entries and drops unsaved edits.
+  const inputsKey = openKey;
   const [loadedInputs, setLoadedInputs] = useState<{ key: string; values: Record<string, string> }>({ key: "", values: {} });
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -375,7 +380,7 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
             )}
 
             <button
-              onClick={() => setRefreshKey((k) => k + 1)}
+              onClick={() => { setOpenNonce((n) => n + 1); setRefreshKey((k) => k + 1); }}
               disabled={loading}
               className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
             >
@@ -478,7 +483,9 @@ export default function BonusClient({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: b
           <div className={`space-y-2.5 transition-opacity ${loading ? "opacity-50" : "opacity-100"}`}>
             {SCORECARD_ORDER.map((positionId) => (
               <PositionScorecard
-                key={positionId}
+                // Remounted on every open, so per-row choices such as a
+                // criterion switched to manual reset along with the entries.
+                key={`${positionId}|${openKey}`}
                 positionId={positionId}
                 result={byPosition.get(positionId)?.detail ?? null}
                 values={values}
