@@ -313,16 +313,13 @@ export function scoreSlackReports(
 // ── Slack API ────────────────────────────────────────────────────────────────
 
 /**
- * The token channel history is read with.
- *
- * Josh's own user token (SLACK_USER_TOKEN, user scopes `groups:history` and
- * `users:read`) when set: he is already in every store channel, so nothing has
- * to be invited anywhere, and it sees exactly what he sees — a channel he
- * leaves goes pending. Falls back to the dashboard bot, which would need the
- * same scopes and an invite to each channel.
+ * The token channel history is read with: the dashboard bot, which has
+ * `groups:history` and `users:read` and is invited to every store channel
+ * (2026-10-29). A new store channel needs the bot invited, or that store reads
+ * "can't see the channel" here and goes pending on the scorecard.
  */
 function readToken(): string | undefined {
-  return process.env.SLACK_USER_TOKEN || process.env.SLACK_BOT_TOKEN;
+  return process.env.SLACK_BOT_TOKEN;
 }
 
 /**
@@ -337,7 +334,7 @@ export async function fetchChannelHistory(
   latest: number,
 ): Promise<SlackMessage[]> {
   const token = readToken();
-  if (!token) throw new Error("neither SLACK_USER_TOKEN nor SLACK_BOT_TOKEN is set");
+  if (!token) throw new Error("SLACK_BOT_TOKEN is not set");
 
   const out: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -371,7 +368,7 @@ export async function fetchChannelHistory(
     if (!data.ok) {
       // A private channel the token's account isn't in reads as "not found".
       if (data.error === "channel_not_found" || data.error === "not_in_channel") {
-        throw new Error(`can't see the channel (${data.error}) — set SLACK_USER_TOKEN, or invite the bot`);
+        throw new Error(`can't see the channel (${data.error}) — invite @hrg_dashboard_bot to it`);
       }
       throw new Error(data.error === "missing_scope" ? `missing_scope (${data.needed})` : (data.error ?? "unknown error"));
     }
