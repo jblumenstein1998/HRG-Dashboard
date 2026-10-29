@@ -94,13 +94,19 @@ export async function GET(req: NextRequest) {
             : new Map<string, ReportCheck>(),
         ]);
         const checks = new Map([...stored, ...live]);
+        // % Accurate is by item, not by report (Josh, 2026-10-29): every figure
+        // a report posted counts once, so a report with one figure off is 9/10
+        // rather than a miss. "Data not available" counts as correct. A report
+        // with nothing checkable at all stays out entirely.
         const decided = [...checks.values()].filter((c) => c.accurate !== null);
+        const items = decided.flatMap((c) => c.checks);
+        const itemsAccurate = items.filter((f) => f.ok !== false).length;
         const accuracy = {
-          checked: decided.length,
-          accurate: decided.filter((c) => c.accurate).length,
-          pct: decided.length > 0
-            ? Math.round((decided.filter((c) => c.accurate).length / decided.length) * 1000) / 10
-            : null,
+          reports: decided.length,
+          reportsAccurate: decided.filter((c) => c.accurate).length,
+          items: items.length,
+          itemsAccurate,
+          pct: items.length > 0 ? Math.round((itemsAccurate / items.length) * 1000) / 10 : null,
         };
 
         let detail = null;

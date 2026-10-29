@@ -82,7 +82,7 @@ type StoreRow = {
   pct: number | null;
   error: string | null;
   /** Only on a single store's detail load. */
-  accuracy?: { checked: number; accurate: number; pct: number | null } | null;
+  accuracy?: { reports: number; reportsAccurate: number; items: number; itemsAccurate: number; pct: number | null } | null;
   days: { date: string; slots: Record<SlotId, { status: Status; post: Post; grace: boolean }> }[];
   messages:
     | {
@@ -460,7 +460,7 @@ export default function AdminSlackReports({ leaders }: { leaders: Leader[] }) {
                                 key={i}
                                 title={
                                   i === 2 && s.accuracy
-                                    ? `${s.accuracy.accurate} of ${s.accuracy.checked} checked reports accurate`
+                                    ? `${s.accuracy.itemsAccurate} of ${s.accuracy.items} figures accurate, across ${s.accuracy.reports} reports`
                                     : undefined
                                 }
                                 className={`${i === all.length - 1 ? "px-4" : "px-3"} py-2 text-right tabular-nums font-semibold ${c.cls}`}
@@ -566,11 +566,11 @@ function StoreDetail({
         <div className="flex items-center gap-3 mb-1">
           <div className="text-[11px] text-gray-400">
             Messages in the channel, and how each was read
-            {row.accuracy && row.accuracy.checked > 0 && (
+            {row.accuracy && row.accuracy.items > 0 && (
               <>
                 {" · "}
-                <span className={row.accuracy.accurate === row.accuracy.checked ? "text-green-700" : "text-gray-600"}>
-                  {row.accuracy.accurate} of {row.accuracy.checked} reports accurate
+                <span className={row.accuracy.itemsAccurate === row.accuracy.items ? "text-green-700" : "text-gray-600"}>
+                  {row.accuracy.itemsAccurate} of {row.accuracy.items} figures accurate ({row.accuracy.reportsAccurate} of {row.accuracy.reports} reports fully accurate)
                 </span>
               </>
             )}
