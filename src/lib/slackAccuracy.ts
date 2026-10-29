@@ -99,6 +99,43 @@ function clockSecs(v: string | null | undefined): number | null {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// ── BerryAI, shared across stores ───────────────────────────────────────────
+// One login and one fetch per day for every store, not one per store: BerryAI
+// answered thirteen simultaneous logins with "Invalid credentials" for most of
+// them (2026-10-29), and the day's payload is the same for all stores anyway.
+
+const BERRY_LOGIN_TTL_MS = 20 * 60_000;
+const BERRY_DAY_TTL_MS = 5 * 60_000;
+let berryLogin: { token: Promise<string>; at: number } | null = null;
+const berryDays = new Map<string, { payload: Promise<DriveThruPayload>; at: number }>();
+
+function sharedBerryToken(): Promise<string> {
+  if (!berryLogin || Date.now() - berryLogin.at > BERRY_LOGIN_TTL_MS) {
+    const token = loginBerryService();
+    berryLogin = { token, at: Date.now() };
+    token.catch(() => {
+      if (berryLogin?.token === token) berryLogin = null;
+    });
+  }
+  return berryLogin.token;
+}
+
+async function driveThruDay(day: string): Promise<DriveThruPayload | null> {
+  const range = resolveSupersetTimeRange({ startDate: day, endDate: day });
+  if ("error" in range) return null;
+  const cached = berryDays.get(day);
+  if (cached && Date.now() - cached.at < BERRY_DAY_TTL_MS) return cached.payload;
+  const payload = (async () => {
+    const token = await sharedBerryToken();
+    return getDriveThruMetrics(token, range.timeRange, range.label, { bust: !isClosedRange(range.timeRange) });
+  })();
+  berryDays.set(day, { payload, at: Date.now() });
+  payload.catch(() => {
+    if (berryDays.get(day)?.payload === payload) berryDays.delete(day);
+  });
+  return payload;
+}
+
 function check(
   out: FieldCheck[], key: FieldKey, label: string, unit: FieldCheck["unit"],
   posted: number | null, actual: number | null, tolerance: number,
@@ -172,18 +209,9 @@ export async function checkStoreReports(
     const report = await fetchCompletionByLocation(day, day);
     return report.locations.find((l) => l.store === store.name)?.completePct ?? null;
   });
-  let berryToken: Promise<string> | null = null;
   const drive = memo("BerryAI", async (day): Promise<DriveThruPayload["stores"][number] | null> => {
-    berryToken ??= loginBerryService();
-    const token = await berryToken.catch((err) => {
-      berryToken = null;
-      throw err;
-    });
-    const range = resolveSupersetTimeRange({ startDate: day, endDate: day });
-    if ("error" in range) return null;
-    const payload = await getDriveThruMetrics(token, range.timeRange, range.label, {
-      bust: !isClosedRange(range.timeRange),
-    });
+    const payload = await driveThruDay(day);
+    if (!payload) return null;
     return payload.stores.find((s) => s.store_name_and_id.includes(store.storeId)) ?? null;
   });
 
