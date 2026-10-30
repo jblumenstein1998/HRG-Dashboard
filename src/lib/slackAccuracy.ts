@@ -13,6 +13,11 @@
  *   Jolt %                                         fetchStoreLists completePct — Jolt tab
  *   cash over/short                                getCashSummary (PAR GetTills; no tab yet)
  *
+ * Same functions isn't enough on its own: the figures derived from PAR totals
+ * go through lib/parFigures.ts, the formulas and rounding the tabs use, and
+ * BerryAI ranges are keyed by canonicalTimeRange, so this check and the
+ * Drive-Thru tab read one cached copy of a day rather than two.
+ *
  * Jolt is the tab's figure, not Jolt's own List Completion Report
  * (fetchCompletionByLocation). The tab counts a list on its deadline day, the
  * day ending at 3 AM; Jolt's report counts it on the day it was handed out,
@@ -29,6 +34,7 @@
 
 import { getHourlyBreakdown, getTotalsForRange, type HourBucket } from "./parRollup";
 import { getCashSummary } from "./par";
+import { avgCheck, compPct, productivity, roundedTotals, tplh } from "./parFigures";
 import { getPriorYearRange } from "./fiscal";
 import { getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./berryData";
 import { loginBerryService } from "./berryAuth";
@@ -251,14 +257,15 @@ export async function checkStoreReports(
           f.joltPct !== null ? jolt(day) : null,
           f.cashOverShort !== null ? cash(day) : null,
         ]);
-        const hours = t ? t.laborMinutes / 60 : 0;
-        check(checks, "netSales", "Net sales", "$", f.netSales, t?.netSales ?? null, TOLERANCE.netSales);
-        check(checks, "compPct", "Comp", "%", f.compPct,
-          t && py && py.netSales > 0 ? ((t.netSales - py.netSales) / py.netSales) * 100 : null, TOLERANCE.compPct);
-        check(checks, "splh", "Productivity", "$", f.splh, t && hours > 0 ? t.netSales / hours : null, TOLERANCE.splh);
-        check(checks, "tplh", "TPLH", "num", f.tplh, t && hours > 0 ? t.orderCount / hours : null, TOLERANCE.tplh);
+        // Rounded the way the PAR tab's snapshot carries them, then the tab's own formulas.
+        const r = t ? roundedTotals(t) : null;
+        const pyNet = py ? roundedTotals(py).netSales : null;
+        check(checks, "netSales", "Net sales", "$", f.netSales, r?.netSales ?? null, TOLERANCE.netSales);
+        check(checks, "compPct", "Comp", "%", f.compPct, r && pyNet !== null ? compPct(r.netSales, pyNet) : null, TOLERANCE.compPct);
+        check(checks, "splh", "Productivity", "$", f.splh, r ? productivity(r.netSales, r.laborHours) : null, TOLERANCE.splh);
+        check(checks, "tplh", "TPLH", "num", f.tplh, r ? tplh(r.transactions, r.laborHours) : null, TOLERANCE.tplh);
         check(checks, "avgCheck", "Avg check", "$", f.avgCheck,
-          t && t.orderCount > 0 ? t.netSales / t.orderCount : null, TOLERANCE.avgCheck);
+          r && r.transactions > 0 ? avgCheck(r.netSales, r.transactions) : null, TOLERANCE.avgCheck);
         check(checks, "windowSecs", "Total window", "secs", f.windowSecs, d?.overall.total_cars ? clockSecs(d.overall.window_service) : null, TOLERANCE.windowSecs);
         check(checks, "laneSecs", "Total lane", "secs", f.laneSecs, d?.overall.total_cars ? clockSecs(d.overall.lane_total) : null, TOLERANCE.laneSecs);
         check(checks, "joltPct", "Jolt", "%", f.joltPct, j, TOLERANCE.joltPct);
@@ -290,11 +297,11 @@ export async function checkStoreReports(
           check(checks, key, label, "$", f.hourly[h] ?? null, bucket?.netSales ?? null, TOLERANCE.hour);
         }
         check(checks, "splh", "Productivity", "$", f.splh,
-          sofar && sofar.hours > 0 ? sofar.netSales / sofar.hours : null, TOLERANCE.splh, running);
+          sofar ? productivity(sofar.netSales, sofar.hours) : null, TOLERANCE.splh, running);
         check(checks, "tplh", "TPLH", "num", f.tplh,
-          sofar && sofar.hours > 0 ? sofar.orders / sofar.hours : null, TOLERANCE.tplh, running);
+          sofar ? tplh(sofar.orders, sofar.hours) : null, TOLERANCE.tplh, running);
         check(checks, "avgCheck", "Avg check", "$", f.avgCheck,
-          sofar && sofar.orders > 0 ? sofar.netSales / sofar.orders : null, TOLERANCE.avgCheck);
+          sofar && sofar.orders > 0 ? avgCheck(sofar.netSales, sofar.orders) : null, TOLERANCE.avgCheck);
         // No cars in the daypart means BerryAI hasn't caught up yet (it lags a few
         // hours; at 5:20 PM on 10/29 every store's 2–5 daypart read 0 cars,
         // "00:00"), so there is nothing to compare — not a lane time of zero.

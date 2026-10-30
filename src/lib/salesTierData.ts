@@ -6,6 +6,7 @@ import {
   getLaborHoursForRange,
   getDailyRowsForRange,
 } from "@/lib/parRollup";
+import { productivity, round2 } from "@/lib/parFigures";
 
 function daysBetweenInclusive(start: string, end: string): number {
   const [sy, sm, sd] = start.split("-").map(Number);
@@ -107,7 +108,8 @@ export async function getSalesTierData(rangeKey: RangeKey): Promise<SalesTierDat
       getTierSales(loc.storeId, start, end, t7),
     ]);
     salesByStoreId[loc.storeId] = tier.value;
-    productivityByStoreId[loc.storeId] = laborHours > 0 ? Math.round((netSales / laborHours) * 100) / 100 : null;
+    const splh = productivity(netSales, laborHours);
+    productivityByStoreId[loc.storeId] = splh === null ? null : round2(splh);
     salesLabel = tier.label; // identical shape for every store — just keep the last one
   }
 

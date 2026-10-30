@@ -46,6 +46,21 @@ export function isClosedRange(timeRange: string): boolean {
   return end !== null && end < todayCentralISO();
 }
 
+/**
+ * One spelling per span of days. Ranges reach here two ways — presets ending
+ * at an exclusive midnight ("Yesterday" = D : D+1T00:00:00) and custom or
+ * T7/Last Week ranges ending at D T23:59:59 — and each spelling was its own
+ * cache row, so the Slack accuracy check and the Drive-Thru tab held separate
+ * copies of 10/29 that disagreed. The inclusive end becomes the next midnight.
+ */
+export function canonicalTimeRange(timeRange: string): string {
+  const [start, end] = timeRange.split(" : ").map(s => s.trim());
+  const m = end?.match(/^(\d{4})-(\d{2})-(\d{2})T23:59:59$/);
+  if (!m) return timeRange;
+  const next = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1)).toISOString().slice(0, 10);
+  return `${start} : ${next}T00:00:00`;
+}
+
 /** Last business date a range covers, or null for one ending "now". */
 function effectiveEndDate(timeRange: string): string | null {
   const [, endRaw] = timeRange.split(" : ").map(s => s.trim());
@@ -204,19 +219,24 @@ export type DriveThruPayload = {
  */
 export async function getDriveThruMetrics(
   token: string,
-  timeRange: string,
+  requestedRange: string,
   rangeLabel: string,
   opts: { bust?: boolean } = {},
 ): Promise<DriveThruPayload> {
+  // Every caller asking for the same days gets the same query and the same
+  // cached copy, so no two screens can show different numbers for them.
+  const timeRange = canonicalTimeRange(requestedRange);
   const closed = isClosedRange(timeRange);
 
   if (!opts.bust) {
     const cached = await getCachedPayload(timeRange);
     if (cached) {
+      // The copy is shared; the label is the caller's own.
+      const hit = { ...cached.payload, range_label: rangeLabel };
       // Permanent — the period is over, numbers can't change — but only if it
       // was fetched once the data was final; an earlier copy refreshes below.
-      if (closed && cached.fetchedAt.getTime() >= finalAfter(timeRange)) return cached.payload;
-      if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return cached.payload;
+      if (closed && cached.fetchedAt.getTime() >= finalAfter(timeRange)) return hit;
+      if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return hit;
     }
   }
 

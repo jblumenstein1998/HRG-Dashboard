@@ -1,6 +1,7 @@
 import { PAR_LOCATIONS, getOrders, getOrdersLive, getShiftsLive, STATE_TIMEZONE, type PARLocation, type PAROrder } from "@/lib/par";
 import { getPriorYearRange, PERIODS, type RangeKey } from "@/lib/fiscal";
 import { getTotalsForRange } from "@/lib/parRollup";
+import { laborHours, round2 } from "@/lib/parFigures";
 import { resolveDateBounds } from "@/lib/tools/dateRange";
 import { businessDateISO, businessMinutes, businessParts, isoOf, zonedParts } from "@/lib/businessDay";
 
@@ -194,9 +195,6 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   return { netSales: Math.round(netSales * 100) / 100, transactions };
 }
 
-function round2(v: number): number {
-  return Math.round(v * 100) / 100;
-}
 
 export type StoreSnapshotRaw = {
   storeId: string;
@@ -257,7 +255,7 @@ async function liveTodayStore(loc: PARLocation, todayDate: string, lastYearDate:
     netSalesLY: ly.netSales,
     txTY: ty.transactions,
     txLY: ly.transactions,
-    laborHoursTY: round2(todayShifts.reduce((s, sh) => s + sh.minutesWorked, 0) / 60),
+    laborHoursTY: laborHours(todayShifts.reduce((s, sh) => s + sh.minutesWorked, 0)),
     clockedInTY: todayShifts.filter((sh) => sh.isOpen).length,
   };
 }
@@ -281,7 +279,7 @@ async function rollupStore(
     netSalesLY: round2(ly.netSales),
     txTY: ty.orderCount,
     txLY: ly.orderCount,
-    laborHoursTY: round2(ty.laborMinutes / 60),
+    laborHoursTY: laborHours(ty.laborMinutes),
     clockedInTY: null,
   };
 }
