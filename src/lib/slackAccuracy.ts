@@ -35,11 +35,10 @@
 import { getHourlyBreakdown, getHourlyBreakdownMany, getPastDays, getTotalsForRange, type HourBucket } from "./parRollup";
 import { getCashSummary, getCashSummaryMany } from "./par";
 import { avgCheck, compPct, productivity, roundedTotals, tplh } from "./parFigures";
-import { getPriorYearRange } from "./fiscal";
+import { getPriorYearRange, resolveRange } from "./fiscal";
 import { businessDateISO } from "./businessDay";
-import { cachedDriveThruDays, getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./berryData";
+import { cachedDriveThruDays, dayTimeRange, getDriveThruMetrics, type DriveThruPayload } from "./berryData";
 import { loginBerryService } from "./berryAuth";
-import { resolveSupersetTimeRange } from "./tools/dateRange";
 import { completionByDay, fetchStoreLists, type StoreListsReport } from "./jolt";
 import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone, type BonusStore } from "./bonus/storeMap";
 import { parseReportFields, type ReportFields } from "./slackFields";
@@ -132,19 +131,23 @@ function sharedBerryToken(): Promise<string> {
   return berryLogin.token;
 }
 
+/**
+ * A day's drive-thru numbers, asked for exactly as the Drive-Thru tab asks
+ * (Josh, 2026-10-30): today is the tab's own Today range, a past day the
+ * key its Yesterday uses, and never a forced refetch — the tab only busts
+ * on its Refresh button. So both read the one cached copy. The in-memory map
+ * only joins requests already in flight (thirteen stores at once); it never
+ * keeps a copy of its own that could be older than the shared one.
+ */
 async function driveThruDay(day: string): Promise<DriveThruPayload | null> {
-  const range = resolveSupersetTimeRange({ startDate: day, endDate: day });
-  if ("error" in range) return null;
-  const cached = berryDays.get(day);
-  if (cached && Date.now() - cached.at < BERRY_DAY_TTL_MS) return cached.payload;
-  const payload = (async () => {
-    const token = await sharedBerryToken();
-    return getDriveThruMetrics(token, range.timeRange, range.label, { bust: !isClosedRange(range.timeRange) });
-  })();
+  const inFlight = berryDays.get(day);
+  if (inFlight) return inFlight.payload;
+  const { range, label } = day === businessDateISO() ? resolveRange("today") : { range: dayTimeRange(day), label: day };
+  const payload = (async () => getDriveThruMetrics(await sharedBerryToken(), range, label))();
   berryDays.set(day, { payload, at: Date.now() });
-  payload.catch(() => {
+  payload.finally(() => {
     if (berryDays.get(day)?.payload === payload) berryDays.delete(day);
-  });
+  }).catch(() => {});
   return payload;
 }
 
