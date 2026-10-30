@@ -42,12 +42,30 @@ function dayBefore(iso: string): string {
  * back it up a day before comparing, same convention as formatRangeDates.
  */
 export function isClosedRange(timeRange: string): boolean {
+  const end = effectiveEndDate(timeRange);
+  return end !== null && end < todayCentralISO();
+}
+
+/** Last business date a range covers, or null for one ending "now". */
+function effectiveEndDate(timeRange: string): string | null {
   const [, endRaw] = timeRange.split(" : ").map(s => s.trim());
-  if (endRaw === "now") return false;
+  if (endRaw === "now") return null;
   const endDateStr = endRaw.split("T")[0];
   const endTime = endRaw.split("T")[1] ?? "";
-  const effectiveEndDate = endTime.startsWith("00:00:00") ? dayBefore(endDateStr) : endDateStr;
-  return effectiveEndDate < todayCentralISO();
+  return endTime.startsWith("00:00:00") ? dayBefore(endDateStr) : endDateStr;
+}
+
+/**
+ * When a closed range's numbers stop changing: 12:00 UTC (7 AM Central) the
+ * day after its last date — past PAR's 2:15 AM end of day, plus the few hours
+ * BerryAI lags. A copy fetched before then is a snapshot of an unfinished day
+ * and must not be kept forever: on 10/29 the Slack accuracy check cached
+ * that day at 5:19 PM (111 of Springfield's 332 cars, lane 2:12 against the
+ * real 2:31), and once the day closed that copy was served as final.
+ */
+function finalAfter(timeRange: string): number {
+  const [y, m, d] = (effectiveEndDate(timeRange) ?? "9999-12-31").split("-").map(Number);
+  return Date.UTC(y, m - 1, d + 1, 12);
 }
 
 async function getCachedPayload(timeRange: string): Promise<{ payload: DriveThruPayload; fetchedAt: Date } | null> {
@@ -195,7 +213,9 @@ export async function getDriveThruMetrics(
   if (!opts.bust) {
     const cached = await getCachedPayload(timeRange);
     if (cached) {
-      if (closed) return cached.payload; // permanent — the period is over, numbers can't change
+      // Permanent — the period is over, numbers can't change — but only if it
+      // was fetched once the data was final; an earlier copy refreshes below.
+      if (closed && cached.fetchedAt.getTime() >= finalAfter(timeRange)) return cached.payload;
       if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return cached.payload;
     }
   }
