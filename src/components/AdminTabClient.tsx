@@ -13,9 +13,10 @@ import type { Leader } from "@/components/StoreFilter";
  * it, and it was removed on 2026-10-29 (Josh). Its rows are left in the
  * admin_links table, unread.
  *
- * Today it holds the Slack reporting table, which reads Slack through an
- * admin-only route — so a non-admin position that has the tab ticked sees a
- * note rather than a table that would only fail.
+ * Today it holds the Slack reporting table. Anyone whose position has the tab
+ * ticked sees it (Josh, 2026-10-30 — it had been admin-only, which left
+ * Directors of Operations looking at an empty tab); its route checks the same
+ * tick.
  */
 export default function AdminTabClient({
   tabs, isAdmin, leaders,
@@ -66,11 +67,7 @@ export default function AdminTabClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
-        {isAdmin ? (
-          <AdminSlackReports leaders={leaders} />
-        ) : (
-          <p className="text-sm text-gray-500 py-12 text-center">Nothing here for your position.</p>
-        )}
+        <AdminSlackReports leaders={leaders} />
       </main>
     </div>
   );

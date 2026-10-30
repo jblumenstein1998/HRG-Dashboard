@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminApi } from "@/lib/users/adminGuard";
+import { requireTabApi } from "@/lib/users/adminGuard";
 import { BONUS_STORES, storeById } from "@/lib/bonus/storeMap";
 import { businessDateISO } from "@/lib/businessDay";
 import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "@/lib/slackCompletion";
@@ -40,7 +40,8 @@ function hhmm(minutes: number): string {
 }
 
 export async function GET(req: NextRequest) {
-  const denied = await requireAdminApi();
+  // Anyone with the Admin tab ticked (Josh, 2026-10-30), like every tab's own routes.
+  const denied = await requireTabApi("/admin-links");
   if (denied) return denied;
 
   const today = businessDateISO();
