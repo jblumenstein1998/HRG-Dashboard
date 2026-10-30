@@ -1,6 +1,7 @@
 import { sql } from "@/lib/db";
 import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange, type PARShift } from "@/lib/par";
 import { businessDateISO } from "@/lib/businessDay";
+import { avgCheck, laborHours, round2 } from "@/lib/parFigures";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
 // Used both to write the rollup (backfillStoreDay, always cached — a settled
@@ -400,7 +401,7 @@ export async function getTotalsForRange(
 
 export async function getNetSalesForRange(storeId: string, start: string, end: string): Promise<number> {
   const { netSales } = await getTotalsForRange(storeId, start, end);
-  return Math.round(netSales * 100) / 100;
+  return round2(netSales);
 }
 
 export async function getOrderCountForRange(storeId: string, start: string, end: string): Promise<number> {
@@ -410,7 +411,7 @@ export async function getOrderCountForRange(storeId: string, start: string, end:
 
 export async function getLaborHoursForRange(storeId: string, start: string, end: string): Promise<number> {
   const { laborMinutes } = await getTotalsForRange(storeId, start, end);
-  return Math.round((laborMinutes / 60) * 100) / 100;
+  return laborHours(laborMinutes);
 }
 
 export async function getAvgOrderValueForRange(storeId: string, start: string, end: string): Promise<number> {
@@ -429,10 +430,10 @@ export type PARDailyRow = {
 function toDailyRow(date: string, netSales: number, transactions: number, laborMinutes: number): PARDailyRow {
   return {
     date,
-    netSales: Math.round(netSales * 100) / 100,
+    netSales: round2(netSales),
     transactions,
-    avgTicket: transactions > 0 ? Math.round((netSales / transactions) * 100) / 100 : 0,
-    laborHours: Math.round((laborMinutes / 60) * 100) / 100,
+    avgTicket: round2(avgCheck(netSales, transactions)),
+    laborHours: laborHours(laborMinutes),
   };
 }
 
@@ -590,9 +591,9 @@ export async function getHourlyBreakdown(storeId: string, businessDate: string):
     return {
       hour,
       label: fmtHourRange(hour),
-      netSales: Math.round(netSales * 100) / 100,
+      netSales: round2(netSales),
       orderCount,
-      laborHours: Math.round((laborMinutes / 60) * 100) / 100,
+      laborHours: laborHours(laborMinutes),
     };
   });
 }
