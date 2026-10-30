@@ -162,4 +162,27 @@ async function createUserSchema(): Promise<void> {
   await sql`
     CREATE UNIQUE INDEX IF NOT EXISTS app_users_username_key ON app_users (lower(username))
   `;
+
+  /*
+   * How often people use the dashboard, for the Uses (30d) column on Users & Access.
+   * `last_login_at` can't answer it: a session lasts twelve hours, so someone
+   * who keeps a tab open all day and checks it now and then signs in once.
+   *
+   * One row per person per five-minute block in which they opened a page or
+   * clicked, scrolled or typed with the dashboard in front (see
+   * components/ActivityTracker). The primary key is the dedupe, so two
+   * windows in the same block still make one row.
+   *
+   * No foreign key, matching the rest of app_users: deleting an account must
+   * not be blocked by its history. Rows for a deleted account just stop
+   * matching anyone in the People table.
+   */
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_activity (
+      user_id TEXT NOT NULL,
+      -- date_bin('5 minutes', now(), epoch): the start of the block.
+      bucket  TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (user_id, bucket)
+    )
+  `;
 }
