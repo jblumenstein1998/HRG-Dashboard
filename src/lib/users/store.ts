@@ -302,26 +302,15 @@ export async function recordActivity(userId: string): Promise<void> {
   `;
 }
 
-/** Per-person usage for the Usage panel on Users & Access. */
-export type LoginUsage = {
-  userId: string;
-  name: string;
-  handle: string;
-  positionId: string;
-  /**
-   * Uses in the last 30 days. A use is a run of active blocks; a gap of more
-   * than 30 minutes starts a new one, so someone who keeps the tab open and
-   * checks it every couple of hours gets one use per check-in.
-   */
-  uses30: number;
-  lastLoginAt: string | null;
-};
-
 /**
- * Every current account, including ones that never used it — someone who was
- * added and never came in is exactly what this view is for spotting.
+ * Uses in the last 30 days, by user id, for the People table on Users &
+ * Access. Anyone missing has none.
+ *
+ * A use is a run of active blocks; a gap of more than 30 minutes starts a new
+ * one, so someone who keeps the tab open and checks it every couple of hours
+ * gets one use per check-in.
  */
-export async function loginUsage(): Promise<LoginUsage[]> {
+export async function usesLast30Days(): Promise<Record<string, number>> {
   await ensureUserSchema();
   const rows = (await sql`
     WITH blocks AS (
@@ -329,27 +318,13 @@ export async function loginUsage(): Promise<LoginUsage[]> {
         lag(bucket) OVER (PARTITION BY user_id ORDER BY bucket) AS prev
       FROM app_activity
       WHERE bucket > now() - interval '30 days'
-    ), uses AS (
-      SELECT user_id,
-        count(*) FILTER (WHERE prev IS NULL OR bucket - prev > interval '30 minutes')::int AS uses30
-      FROM blocks
-      GROUP BY user_id
     )
-    SELECT u.id, u.name, u.email, u.username, u.position_id, u.last_login_at,
-      coalesce(s.uses30, 0) AS uses30
-    FROM app_users u
-    LEFT JOIN uses s ON s.user_id = u.id
-    WHERE u.disabled_at IS NULL
-    ORDER BY uses30 DESC, u.last_login_at DESC NULLS LAST, u.name
-  `) as Record<string, unknown>[];
-  return rows.map((r) => ({
-    userId: r.id as string,
-    name: r.name as string,
-    handle: loginHandle({ email: r.email as string | null, username: r.username as string | null }),
-    positionId: r.position_id as string,
-    uses30: r.uses30 as number,
-    lastLoginAt: r.last_login_at ? new Date(r.last_login_at as string).toISOString() : null,
-  }));
+    SELECT user_id,
+      count(*) FILTER (WHERE prev IS NULL OR bucket - prev > interval '30 minutes')::int AS uses
+    FROM blocks
+    GROUP BY user_id
+  `) as { user_id: string; uses: number }[];
+  return Object.fromEntries(rows.map((r) => [r.user_id, r.uses]));
 }
 
 /**

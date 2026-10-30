@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/users/access";
-import { listPositions, listUsers, loginUsage } from "@/lib/users/store";
+import { listPositions, listUsers, usesLast30Days } from "@/lib/users/store";
 import { listLeaders } from "@/lib/users/leaders";
 import { ALL_TABS } from "@/lib/users/tabs";
 import AdminClient from "@/components/AdminClient";
@@ -11,11 +11,11 @@ import AdminClient from "@/components/AdminClient";
  */
 export default async function AdminPage() {
   const viewer = await requireAdmin();
-  const [users, positions, leaders, usage] = await Promise.all([
+  const [users, positions, leaders, uses] = await Promise.all([
     listUsers(),
     listPositions(),
     listLeaders(),
-    loginUsage(),
+    usesLast30Days(),
   ]);
 
   return (
@@ -23,7 +23,7 @@ export default async function AdminPage() {
       initialUsers={users}
       initialPositions={positions}
       initialLeaders={leaders}
-      usage={usage}
+      uses={uses}
       allTabs={[...ALL_TABS]}
       viewerId={viewer.user.id}
       viewerTabs={viewer.position.tabs}

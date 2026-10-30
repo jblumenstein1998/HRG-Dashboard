@@ -164,7 +164,7 @@ async function createUserSchema(): Promise<void> {
   `;
 
   /*
-   * How often people use the dashboard, for the Usage panel on Users & Access.
+   * How often people use the dashboard, for the Uses (30d) column on Users & Access.
    * `last_login_at` can't answer it: a session lasts twelve hours, so someone
    * who keeps a tab open all day and checks it now and then signs in once.
    *
@@ -174,8 +174,8 @@ async function createUserSchema(): Promise<void> {
    * windows in the same block still make one row.
    *
    * No foreign key, matching the rest of app_users: deleting an account must
-   * not be blocked by its history. The usage view joins to app_users, so a
-   * deleted person's rows simply stop showing.
+   * not be blocked by its history. Rows for a deleted account just stop
+   * matching anyone in the People table.
    */
   await sql`
     CREATE TABLE IF NOT EXISTS app_activity (

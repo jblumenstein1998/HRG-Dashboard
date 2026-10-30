@@ -7,7 +7,7 @@ import { recordActivity } from "@/lib/users/store";
  *
  * Checks the signed token only, not the user row: this is fired every few
  * minutes by every open page, and a stale or deleted account's rows are
- * harmless — the usage view joins to app_users and drops them. The proxy has
+ * harmless — they match no one in the People table. The proxy has
  * already turned away requests with no session at all.
  */
 export async function POST() {

@@ -19,7 +19,7 @@ function ping() {
 }
 
 /**
- * Feeds the Usage panel on Users & Access.
+ * Feeds the Uses (30d) column on Users & Access.
  *
  * Pings on every page opened, and otherwise at most once per five-minute
  * block, only when someone clicks, scrolls or types with the dashboard in
