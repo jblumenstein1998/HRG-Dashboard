@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { ZCASE_GOALS } from "@/lib/bonus/goals";
 import { formatSyncStamp, prettyUnit, STORE_LABELS, TONE_TEXT, type ScoreTone } from "@/lib/surveyMeta";
+import { GROUP_TONE, JOB_GROUPS, groupOf, titleOf } from "@/lib/staffGroups";
 
 type ZCaseRow = {
   caseKey: string;
@@ -921,20 +922,6 @@ type TeamResponse = {
   error: string | null;
 };
 
-/**
- * Who was running the shift, by what they clocked in as — Workstream's title
- * only when PAR has no job on the shift. The title isn't the night: AGMs hold
- * "Director" in Workstream and a Shift Leader can hold "Cashier". PAR prefixes
- * its job names with the pay type ("Hourly - Assistant Manager", "Salary -
- * General Manager"), hence a pattern; on 2026-10-30 it matched exactly those
- * two and "Shift Leader" across every job on the clock.
- */
-const LEADER = /manager|\bmgr\b|shift lead|\bgm\b|\bagm\b|director/i;
-const isLeader = (p: TeamMember) => LEADER.test(p.job ?? p.position ?? "");
-
-/** Same clean-up the Staffing tab does: the pay-type prefix off PAR's job name. */
-const cleanJob = (job: string | null) => job?.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
-
 const clock = (minutes: number) => {
   const h24 = Math.floor(minutes / 60) % 24;
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
@@ -961,7 +948,11 @@ function TeamButton({ open, onClick }: { open: boolean; onClick: () => void }) {
   );
 }
 
-/** The people on the clock at the guest's visit, managers first. */
+/**
+ * The people on the clock at the guest's visit, in the Staffing tab's tiers —
+ * Workstream positions, grouped and coloured as on its "currently clocked in"
+ * cards (lib/staffGroups), so a person is the same thing on both tabs.
+ */
 function TeamPanel({ caseKey }: { caseKey: string }) {
   const [data, setData] = useState<TeamResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -988,8 +979,12 @@ function TeamPanel({ caseKey }: { caseKey: string }) {
   const when = data.wholeHour
     ? `${clock(data.startMinutes)}–${clock(data.endMinutes)}`
     : `at ${clock(data.startMinutes)}`;
-  const leaders = data.team.filter(isLeader);
-  const crew = data.team.filter((p) => !isLeader(p));
+  const sections = [
+    ...JOB_GROUPS.map((g) => ({ key: g.key, label: g.label })),
+    { key: "other", label: "Other" },
+  ]
+    .map((s) => ({ ...s, people: data.team.filter((p) => groupOf(p.position) === s.key) }))
+    .filter((s) => s.people.length > 0);
 
   return (
     <div className="rounded-md border border-gray-200 bg-white px-3 py-2">
@@ -1000,22 +995,37 @@ function TeamPanel({ caseKey }: { caseKey: string }) {
       {data.team.length === 0 ? (
         <div className="py-1.5 text-xs text-gray-500">Nobody was on the clock at that time.</div>
       ) : (
-        <div className="mt-1.5 flex flex-col gap-1">
-          {[...leaders, ...crew].map((p) => (
-            <div key={`${p.employeeId ?? p.name}|${p.startLabel}`} className="flex items-baseline gap-2 text-[12.5px]">
-              {isLeader(p) && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
-                  Manager
-                </span>
-              )}
-              <span className="font-medium text-gray-900">{p.name}</span>
-              <span className="text-gray-500">{cleanJob(p.job) ?? p.position ?? "—"}</span>
-              {p.onBreakThroughout && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">on break</span>
-              )}
-              <span className="ml-auto text-gray-500 tabular-nums">
-                {p.startLabel}–{p.endLabel}
-              </span>
+        <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+          {sections.map((s) => (
+            <div key={s.key} className={`rounded-lg border ${GROUP_TONE[s.key] ?? GROUP_TONE.other}`}>
+              <div className="px-2.5 py-1 flex items-baseline gap-2 border-b border-black/5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-700">{s.label}</span>
+                <span className="text-[11px] text-gray-500">{s.people.length}</span>
+              </div>
+              <ul className="divide-y divide-black/5">
+                {s.people.map((p) => (
+                  <li
+                    key={`${p.employeeId ?? p.name}|${p.startLabel}`}
+                    className="px-2.5 py-1 flex items-baseline gap-2 text-[12.5px]"
+                  >
+                    <span className="font-medium text-gray-900 truncate">
+                      {p.name}
+                      {titleOf(p.position, p.job) && (
+                        <span className="font-normal text-gray-500">
+                          {" — "}
+                          {titleOf(p.position, p.job)}
+                        </span>
+                      )}
+                    </span>
+                    {p.onBreakThroughout && (
+                      <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
+                    )}
+                    <span className="ml-auto text-[11px] text-gray-500 tabular-nums whitespace-nowrap">
+                      {p.startLabel}–{p.endLabel}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>

@@ -31,6 +31,7 @@ import type {
   MissedPunchReport, PayPeriod, HoursSpan, HoursGrain, StaffingDay,
 } from "@/lib/staffing";
 import { clockLabel, hourlyRateOf, rosterAt } from "@/lib/staffingRoster";
+import { GROUP_TONE, JOB_GROUPS, cleanJobTitle, groupOf, titleOf } from "@/lib/staffGroups";
 
 /**
  * Column sorting for the two tables below.
@@ -110,24 +111,6 @@ function dateHeader(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dow = DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   return `${dow} ${iso.slice(5).replace("-", "/")}`;
-}
-
-/**
- * A PAR job name with its payroll prefix taken off.
- *
- * PAR spells its jobs "Hourly - Assistant Manager", "Salary - General Manager",
- * "SAL Mgr Asst Gen" — the pay type welded onto the front of the position,
- * because the same role exists twice in its setup depending on how it is paid.
- * Nobody reading a staffing screen needs that: whether a manager is salaried is
- * already visible in the rate beside their name.
- *
- * Cosmetic only, and temporary. Positions come from Workstream once somebody is
- * linked, and Workstream says "Shift Lead" without the ceremony — at which
- * point this only applies to people the reconciliation queue has not reached.
- */
-function cleanJobTitle(job: string | null | undefined): string | null {
-  if (!job) return null;
-  return job.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
 }
 
 /** "YYYY-MM-DD" moved by `n` calendar days. */
@@ -1585,54 +1568,6 @@ function StoreHoursRows({
 }
 
 /**
- * The four tiers, keyed on Workstream's job titles.
- *
- * These are positions of record, not what someone clocked in as — Workstream is
- * where a person is hired into a job, and PAR only knows which button they
- * pressed at the terminal. That is why an earlier version of this map listed
- * PAR's titles ("SAL Mgr Asst Gen", "Hourly - Assistant Manager") and described
- * itself as provisional until payroll was integrated. It is integrated; this is
- * the replacement.
- *
- * Cook and Cashier sit in Crew: they are crew-level line positions, and between
- * them they are about a quarter of everyone active.
- *
- * Still an explicit list rather than a pattern match over the words in a title,
- * for the same reason as before — a title that is not named here appears under
- * "Other" with its real name, so a new or renamed job is something to look at
- * rather than something that silently joins the wrong tier. District Manager
- * and Director of Operations land there on purpose: they are above-store roles
- * and are not usually on a store's clock.
- */
-const JOB_GROUPS: { key: string; label: string; titles: string[] }[] = [
-  { key: "crew", label: "Crew", titles: ["Crew", "Cook", "Cashier"] },
-  { key: "managers", label: "Managers", titles: ["Crew Trainer", "Shift Lead"] },
-  { key: "directors", label: "Directors", titles: ["Director"] },
-  { key: "leadership", label: "Leadership", titles: ["AGM", "General Manager"] },
-];
-
-const GROUP_TONE: Record<string, string> = {
-  crew: "bg-blue-50 border-blue-200",
-  managers: "bg-amber-50 border-amber-200",
-  directors: "bg-purple-50 border-purple-200",
-  leadership: "bg-emerald-50 border-emerald-200",
-  other: "bg-gray-50 border-gray-200",
-};
-
-/**
- * The title to group and label by: Workstream's, falling back to PAR's.
- *
- * The fallback only fires for someone not yet linked to a Workstream record,
- * and it will land them in "Other" because PAR's titles are not in the list
- * above. That is the honest outcome — an unlinked person's position is not
- * known, and putting them in Crew because PAR said "Cashier" would be a guess
- * wearing a fact's clothes.
- */
-function titleOf(p: StaffOnClock): string | null {
-  return p.workstream?.position ?? p.job;
-}
-
-/**
  * The rate to show: Workstream's rate of record, or PAR's shift rate.
  *
  * Null means salaried — Workstream states those annually and PAR records them
@@ -1641,12 +1576,6 @@ function titleOf(p: StaffOnClock): string | null {
  */
 /** The card's rate — shared with the store's wage total (lib/staffingRoster). */
 const rateOf = (p: StaffOnClock): number | null => hourlyRateOf(p);
-
-function groupOf(p: StaffOnClock): string {
-  const title = p.workstream?.position;
-  if (!title) return "other";
-  return JOB_GROUPS.find((g) => g.titles.includes(title))?.key ?? "other";
-}
 
 /**
  * Says when the Workstream roster was last read, but only when that matters.
@@ -1698,7 +1627,7 @@ function StoreCard({ store }: { store: StoreRoster }) {
 
   const grouped = new Map<string, typeof store.onClock>();
   for (const p of store.onClock) {
-    const key = groupOf(p);
+    const key = groupOf(p.workstream?.position);
     const list = grouped.get(key) ?? [];
     list.push(p);
     grouped.set(key, list);
@@ -1768,9 +1697,9 @@ function StoreCard({ store }: { store: StoreRoster }) {
                             for two facts that read perfectly well together. */}
                         <span className="text-sm font-medium text-gray-900 truncate">
                           {p.name}
-                          {cleanJobTitle(titleOf(p)) && (
+                          {titleOf(p.workstream?.position, p.job) && (
                             <span className="font-normal text-gray-500">
-                              {" — "}{cleanJobTitle(titleOf(p))}
+                              {" — "}{titleOf(p.workstream?.position, p.job)}
                             </span>
                           )}
                         </span>
