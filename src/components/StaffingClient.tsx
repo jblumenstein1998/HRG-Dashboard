@@ -677,7 +677,7 @@ export default function StaffingClient({
  */
 // ── Projections ─────────────────────────────────────────────────────────────
 
-type ProjectionCell = { date: string; salesProjection: number | null; productivityProjection: number | null };
+type ProjectionCell = { date: string; salesProjection: number | null; productivityProjection: number | null; forecastSales: number | null };
 type ProjectionRow = {
   storeId: string;
   storeName: string;
@@ -741,7 +741,7 @@ function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reload
       <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
         <span className="text-sm font-semibold text-gray-900">Projections</span>
         <span className="text-xs text-gray-400">
-          from each store&apos;s morning Slack report · actuals from PAR · productivity is sales per labor hour
+          from each store&apos;s morning Slack report · CT forecast from CrunchTime Teamworx · actuals from PAR · productivity is sales per labor hour
         </span>
         {!state.loaded && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
       </div>
@@ -754,10 +754,10 @@ function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reload
             <thead>
               <tr className="text-[11px] text-gray-500">
                 <th />
-                <th colSpan={6} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
+                <th colSpan={8} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
                   Yesterday · {dateHeader(state.data.yesterday)}
                 </th>
-                <th colSpan={2} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
+                <th colSpan={3} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
                   Today · {dateHeader(state.data.today)}
                 </th>
               </tr>
@@ -766,10 +766,13 @@ function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reload
                 <SortHeader label="Sales proj" sortKey="ySalesProj" arrow={sorter.arrow} onClick={sorter.toggle} className="border-l border-gray-100" />
                 <SortHeader label="Actual sales" sortKey="ySales" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="vs proj" sortKey="ySalesVar" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="CT forecast" sortKey="yForecast" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="vs CT" sortKey="yForecastVar" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="Prod proj" sortKey="yProdProj" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="Actual prod" sortKey="yProd" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="vs proj" sortKey="yProdVar" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="Sales proj" sortKey="tSalesProj" arrow={sorter.arrow} onClick={sorter.toggle} className="border-l border-gray-100" />
+                <SortHeader label="CT forecast" sortKey="tForecast" arrow={sorter.arrow} onClick={sorter.toggle} />
                 <SortHeader label="Prod proj" sortKey="tProdProj" arrow={sorter.arrow} onClick={sorter.toggle} />
               </tr>
             </thead>
@@ -782,6 +785,9 @@ function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reload
                   case "ySalesProj": return y.salesProjection;
                   case "ySales": return y.actualSales;
                   case "ySalesVar": return minus(y.actualSales, y.salesProjection);
+                  case "yForecast": return y.forecastSales;
+                  case "yForecastVar": return minus(y.actualSales, y.forecastSales);
+                  case "tForecast": return s.today.forecastSales;
                   case "yProdProj": return y.productivityProjection;
                   case "yProd": return y.actualProductivity;
                   case "yProdVar": return minus(y.actualProductivity, y.productivityProjection);
@@ -800,10 +806,13 @@ function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reload
                     <td className={`${cell} border-l border-gray-100`}>{y.salesProjection !== null ? money0(y.salesProjection) : notPosted}</td>
                     <td className={`${cell} text-gray-800`}>{y.actualSales !== null ? money0(y.actualSales) : "—"}</td>
                     <td className={cell}><Variance actual={y.actualSales} projected={y.salesProjection} fmt={money0} /></td>
+                    <td className={cell}>{y.forecastSales !== null ? money0(y.forecastSales) : "—"}</td>
+                    <td className={cell}><Variance actual={y.actualSales} projected={y.forecastSales} fmt={money0} /></td>
                     <td className={cell}>{y.productivityProjection !== null ? money2(y.productivityProjection) : notPosted}</td>
                     <td className={`${cell} text-gray-800`}>{y.actualProductivity !== null ? money2(y.actualProductivity) : "—"}</td>
                     <td className={cell}><Variance actual={y.actualProductivity} projected={y.productivityProjection} fmt={money2} /></td>
                     <td className={`${cell} border-l border-gray-100`}>{s.today.salesProjection !== null ? money0(s.today.salesProjection) : notPosted}</td>
+                    <td className={cell}>{s.today.forecastSales !== null ? money0(s.today.forecastSales) : "—"}</td>
                     <td className={cell}>{s.today.productivityProjection !== null ? money2(s.today.productivityProjection) : notPosted}</td>
                   </tr>
                 );

@@ -117,7 +117,16 @@ async function login(locationId = 425): Promise<Session> {
   return { cookies, expiresAt: Date.now() + SESSION_TTL_MS };
 }
 
-function cookiesFromHeaders(headers: Headers): string {
+/**
+ * A fresh Net-Chef login chosen at one location, as a Cookie header — for
+ * single sign-on into the other CrunchTime apps (lib/teamworx.ts), which land
+ * on whichever location the login chose.
+ */
+export async function ncLoginCookies(locationId: number): Promise<string> {
+  return (await login(locationId)).cookies;
+}
+
+export function cookiesFromHeaders(headers: Headers): string {
   const setCookie: string[] = (headers as unknown as { getSetCookie?(): string[] }).getSetCookie?.() ?? [];
   // Fallback for environments where getSetCookie isn't available
   if (!setCookie.length) {
@@ -127,7 +136,7 @@ function cookiesFromHeaders(headers: Headers): string {
   return setCookie.map(c => c.split(";")[0].trim()).filter(Boolean).join("; ");
 }
 
-function mergeCookies(base: string, override: string): string {
+export function mergeCookies(base: string, override: string): string {
   const map = new Map<string, string>();
   for (const pair of (base + "; " + override).split(";")) {
     const eq = pair.indexOf("=");

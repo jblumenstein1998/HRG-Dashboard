@@ -12,6 +12,9 @@
  * Read live from Slack (two days of thirteen channels, a couple of seconds),
  * not stored. A store that left the projections blank — Portland posts the
  * template with both lines empty — reads as not posted, never as zero.
+ *
+ * Next to each, CrunchTime's own forecast for the day from Teamworx
+ * (lib/teamworx.ts, synced nightly) — the number the schedule was written to.
  */
 
 import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone } from "./bonus/storeMap";
@@ -20,11 +23,14 @@ import { businessDateISO } from "./businessDay";
 import { parseReportFields } from "./slackFields";
 import { addDays, fetchChannelHistory, localMidnight, placeMessage } from "./slackReports";
 import { labelled, mapLimit, STORE_CONCURRENCY } from "./slackCompletion";
+import { getForecastSales } from "./teamworx";
 
 export type Projection = {
   date: string;
   salesProjection: number | null;
   productivityProjection: number | null;
+  /** Teamworx (CrunchTime) forecast sales for the date, if synced. */
+  forecastSales: number | null;
   /** Slack ts of the report the projections were read from, if any. */
   ts: string | null;
 };
@@ -44,9 +50,17 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export async function getProjections(): Promise<ProjectionsReport> {
   const today = businessDateISO();
   const yesterday = addDays(today, -1);
+  // A failed read leaves the forecast column blank, not the table.
+  const forecasts = await getForecastSales([yesterday, today]).catch((err) => {
+    console.error("[staffing] teamworx forecast read failed:", err instanceof Error ? err.message : err);
+    return new Map<string, Map<string, number>>();
+  });
 
   const stores = await mapLimit(BONUS_STORES, STORE_CONCURRENCY, async (store): Promise<ProjectionRow> => {
-    const blank = (date: string): Projection => ({ date, salesProjection: null, productivityProjection: null, ts: null });
+    const blank = (date: string): Projection => ({
+      date, salesProjection: null, productivityProjection: null,
+      forecastSales: forecasts.get(store.storeId)?.get(date) ?? null, ts: null,
+    });
     const row: ProjectionRow = {
       storeId: store.storeId,
       storeName: store.name,
