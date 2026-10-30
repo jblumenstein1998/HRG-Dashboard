@@ -151,8 +151,33 @@ function readHourly(text: string): Record<number, number> {
   return out;
 }
 
+const CURRENT_DAY_RE = /\bcurrent\s*day\b/i;
+const ANY_PROJECTION_RE = new RegExp(`${SPECS.salesProjection.labels.source}|${SPECS.productivityProjection.labels.source}`, "i");
+
+/**
+ * The morning report has two halves, per the Slack Reporting doc: the full
+ * previous day, then "Current Day" — today's projections. The split is read
+ * from the report itself: the "Current Day" heading, or failing that the first
+ * projection line (Beach has no heading).
+ *
+ * Everything under it is a projection whatever it is called. Oyster's
+ * 10/29 report reads "Current Day / Sales Projections $6645.15 / Productivity
+ * $65.42" — the second line is the productivity projection, not yesterday's
+ * productivity (which was $53.43, above the heading). And yesterday's actuals
+ * are read only from above it, so a projection can't be checked as an actual.
+ */
+function splitCurrentDay(rows: string[]): { previous: string[]; current: string[] } {
+  let at = rows.findIndex((l) => CURRENT_DAY_RE.test(l));
+  if (at < 0) at = rows.findIndex((l) => ANY_PROJECTION_RE.test(l));
+  return at < 0 ? { previous: rows, current: [] } : { previous: rows.slice(0, at), current: rows.slice(at) };
+}
+
 export function parseReportFields(text: string): ReportFields {
-  const rows = lines(text);
+  const { previous: rows, current } = splitCurrentDay(lines(text));
+  // Under "Current Day", a bare "Productivity $65.42" or "Sales $6,645" is the
+  // projection; the labelled forms ("Projected prod…") work anywhere.
+  const bareSales: Spec = { labels: SPECS.netSales.labels };
+  const bareProd: Spec = { labels: SPECS.splh.labels };
   return {
     netSales: readField(rows, SPECS.netSales),
     compPct: readField(rows, SPECS.compPct),
@@ -163,8 +188,9 @@ export function parseReportFields(text: string): ReportFields {
     laneSecs: readClock(rows, TIME_SPECS.laneSecs),
     joltPct: readField(rows, SPECS.joltPct),
     cashOverShort: readField(rows, SPECS.cashOverShort),
-    salesProjection: readField(rows, SPECS.salesProjection),
-    productivityProjection: readField(rows, SPECS.productivityProjection),
+    salesProjection: readField([...rows, ...current], SPECS.salesProjection) ?? readField(current, bareSales),
+    productivityProjection:
+      readField([...rows, ...current], SPECS.productivityProjection) ?? readField(current, bareProd),
     hourly: readHourly(text),
   };
 }

@@ -172,6 +172,14 @@ try {
   check("beach 'Projected SPLH'", F.parseReportFields("Productivity: $68.52\nProjected sales: $5257\nProjected SPLH: 62.52").productivityProjection, 62.52);
   const jeff = F.parseReportFields("Netsales: 6,001.64\nSPLH: 90.25\nPJ: 6,863.18\n(SPLH) P.P: 67.94");
   check("jefferson PJ / P.P", [jeff.salesProjection, jeff.productivityProjection, jeff.splh], [6863.18, 67.94, 90.25]);
+  const oyster1029 = F.parseReportFields(
+    "Net Sales $5167.75\nComp% -21.39\nProductivity $53.43\nTPLH 3.30\n%Third Party 18.48\nTotal Window 1:26\nTotal Lane 3:39\nJolt Completion N/A\nArrowStream Submission $0\nCash EVEN\n\nCurrent Day\n\nSales Projections $6645.15\nProductivity $65.42\n\nWe MUST manage labor!",
+  );
+  check("oyster: unlabelled productivity under Current Day is the projection",
+    [oyster1029.splh, oyster1029.salesProjection, oyster1029.productivityProjection, oyster1029.netSales], [53.43, 6645.15, 65.42, 5167.75]);
+  const bareCurrent = F.parseReportFields("Net sales: $4,000\nProductivity: $60.00\nCurrent Day:\nSales: $5,100\nProductivity: $70.00");
+  check("bare sales and productivity under Current Day",
+    [bareCurrent.netSales, bareCurrent.splh, bareCurrent.salesProjection, bareCurrent.productivityProjection], [4000, 60, 5100, 70]);
   check("misspelt 'projecttion'", F.parseReportFields("Net 4257\nSales projecttion4186\nProd projection 63.94").salesProjection, 4186);
   check("a blank projection reads as none",
     [F.parseReportFields("• Sales projection:\n• Productivity projection:").salesProjection,
