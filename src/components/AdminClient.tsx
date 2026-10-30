@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import TabPicker from "@/components/TabPicker";
-import LoginUsagePanel, { type LoginEvent, type LoginUsage } from "@/components/LoginUsagePanel";
+import LoginUsagePanel, { type LoginUsage } from "@/components/LoginUsagePanel";
 import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
 import { ALL_STORES } from "@/lib/stores";
 import { formatSyncStamp } from "@/lib/surveyMeta";
@@ -40,7 +40,6 @@ export default function AdminClient({
   initialPositions,
   initialLeaders,
   usage,
-  logins,
   allTabs,
   viewerId,
   viewerTabs,
@@ -49,7 +48,6 @@ export default function AdminClient({
   initialPositions: Position[];
   initialLeaders: Leader[];
   usage: LoginUsage[];
-  logins: LoginEvent[];
   allTabs: Tab[];
   viewerId: string;
   viewerTabs: Tab[];
@@ -233,7 +231,6 @@ export default function AdminClient({
 
         <LoginUsagePanel
           usage={usage}
-          events={logins}
           positionLabels={Object.fromEntries(positions.map((p) => [p.id, p.label]))}
         />
 

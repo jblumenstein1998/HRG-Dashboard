@@ -164,56 +164,25 @@ async function createUserSchema(): Promise<void> {
   `;
 
   /*
-   * One row per successful sign-in, for measuring how often people use the
-   * dashboard. `app_users.last_login_at` only ever holds the latest one.
+   * How often people use the dashboard, for the Usage panel on Users & Access.
+   * `last_login_at` can't answer it: a session lasts twelve hours, so someone
+   * who keeps a tab open all day and checks it now and then signs in once.
+   *
+   * One row per person per five-minute block in which they opened a page or
+   * clicked, scrolled or typed with the dashboard in front (see
+   * components/ActivityTracker). The primary key is the dedupe, so two
+   * windows in the same block still make one row.
    *
    * No foreign key, matching the rest of app_users: deleting an account must
    * not be blocked by its history. The usage view joins to app_users, so a
    * deleted person's rows simply stop showing.
-   *
-   * A sign-in is not a visit — the session lasts twelve hours, so someone who
-   * keeps a tab open all day signs in once. Read the counts as "working days
-   * they came in", which is what the admin view reports.
-   */
-  await sql`
-    CREATE TABLE IF NOT EXISTS app_login_events (
-      id      BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-      -- 'google' or 'password' (a shared store account).
-      method  TEXT NOT NULL
-    )
-  `;
-  await sql`
-    CREATE INDEX IF NOT EXISTS app_login_events_at_idx ON app_login_events (at DESC)
-  `;
-
-  /*
-   * Engagement, which sign-ins can't see: a tab left open all day and checked
-   * now and then is one sign-in but many visits.
-   *
-   * One row per person per five-minute block per tab in which they opened a
-   * page or clicked, scrolled or typed with the tab in front (see
-   * components/ActivityTracker). Active time is distinct blocks × 5 minutes.
-   * The primary key is the dedupe — two browser windows in the same block
-   * still make one row — and it keeps the table to a few rows per person per
-   * working day rather than one per ping.
-   *
-   * No foreign key, for the same reason as app_login_events.
    */
   await sql`
     CREATE TABLE IF NOT EXISTS app_activity (
       user_id TEXT NOT NULL,
       -- date_bin('5 minutes', now(), epoch): the start of the block.
       bucket  TIMESTAMPTZ NOT NULL,
-      -- The top-level route, e.g. '/par' or '/admin'.
-      tab     TEXT NOT NULL,
-      -- Page opens in this block; 0 when the block came from activity alone.
-      views   INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (user_id, bucket, tab)
+      PRIMARY KEY (user_id, bucket)
     )
-  `;
-  await sql`
-    CREATE INDEX IF NOT EXISTS app_activity_bucket_idx ON app_activity (bucket DESC)
   `;
 }

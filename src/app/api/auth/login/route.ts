@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, sessionCookieOptions);
 
-  await recordLogin(user.id, "password");
+  await recordLogin(user.id);
 
   return Response.json({ ok: true });
 }
