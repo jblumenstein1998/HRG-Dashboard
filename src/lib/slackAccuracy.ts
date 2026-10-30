@@ -9,7 +9,8 @@
  *   comp %                                         same, vs getPriorYearRange — PAR tab comps
  *   hourly sales; shift sales / labor              getHourlyBreakdown      — PAR tab hourly
  *   total window, total lane                       getDriveThruMetrics     — Drive-Thru tab
- *                                                  (whole day, or the 11–2 / 2–5 / 5–8 daypart)
+ *                                                  (morning report only: BerryAI lags too far
+ *                                                  behind for the 2/5/8 PM reports)
  *   Jolt %                                         fetchStoreLists completePct — Jolt tab
  *   cash over/short                                getCashSummary (PAR GetTills; no tab yet)
  *
@@ -29,7 +30,7 @@
  *
  * Shift reports carry the day's numbers so far, as of the end of their window:
  * a 5:30 report's net sales is everything since open through 5 PM, not just
- * 2–5. Hourly sales and lane time are the window's own.
+ * 2–5. Hourly sales are the window's own. Lane time isn't checked on them.
  */
 
 import { getHourlyBreakdown, getHourlyBreakdownMany, getPastDays, getTotalsForRange, type HourBucket } from "./parRollup";
@@ -96,10 +97,10 @@ export const TOLERANCE: Record<string, number> = {
  */
 export const SHIFT_RUNNING_PCT = 5;
 
-const SHIFT_WINDOW: Record<Exclude<SlackSlot, "previous_day">, { startHour: number; endHour: number; daypart: number }> = {
-  lunch: { startHour: 11, endHour: 14, daypart: 2 },
-  midday: { startHour: 14, endHour: 17, daypart: 3 },
-  dinner: { startHour: 17, endHour: 20, daypart: 4 },
+const SHIFT_WINDOW: Record<Exclude<SlackSlot, "previous_day">, { startHour: number; endHour: number }> = {
+  lunch: { startHour: 11, endHour: 14 },
+  midday: { startHour: 14, endHour: 17 },
+  dinner: { startHour: 17, endHour: 20 },
 };
 
 function clockSecs(v: string | null | undefined): number | null {
@@ -310,7 +311,7 @@ export async function checkStoreReports(
         });
       } else {
         const w = SHIFT_WINDOW[p.slot];
-        const [buckets, d] = await Promise.all([hourly(p.date), drive(p.date)]);
+        const buckets = await hourly(p.date);
         const sum = (bs: HourBucket[] | null, from: number, to: number) => {
           if (!bs) return null;
           const inRange = bs.filter((b) => b.hour >= from && b.hour < to);
@@ -336,14 +337,12 @@ export async function checkStoreReports(
           sofar ? tplh(sofar.orders, sofar.hours) : null, TOLERANCE.tplh, running);
         check(checks, "avgCheck", "Avg check", "$", f.avgCheck,
           sofar && sofar.orders > 0 ? avgCheck(sofar.netSales, sofar.orders) : null, TOLERANCE.avgCheck);
-        // No cars in the daypart means BerryAI hasn't caught up yet (it lags a few
-        // hours; at 5:20 PM on 10/29 every store's 2–5 daypart read 0 cars,
-        // "00:00"), so there is nothing to compare — not a lane time of zero.
-        const part = d?.dayparts.find((x) => x.index === w.daypart && x.total_cars) ?? null;
-        check(checks, "laneSecs", "Lane", "secs", f.laneSecs, clockSecs(part?.lane_total), TOLERANCE.laneSecs);
-        // No window check: leadership dropped window time from the 2/5/8 PM
-        // reports on 2026-09-18 (#all-hudson-restaurant-group), so a window
-        // figure there is extra, not owed.
+        // No lane or window check on shift reports. Lane: BerryAI lags hours
+        // behind the store (at 5:20 PM on 10/29 every store's 2–5 daypart still
+        // read 0 cars), so a report posted at the window's end can't be held to
+        // it — lane is checked on the morning report only (Josh, 2026-10-30).
+        // Window: leadership dropped it from the 2/5/8 PM reports on 2026-09-18
+        // (#all-hudson-restaurant-group), so a figure there is extra, not owed.
       }
 
       const decided = checks.filter((c) => c.ok !== null);
@@ -396,14 +395,14 @@ export type SharedDays = {
 
 /**
  * Load the shared sources for a range once per request rather than once per
- * store. Morning reports are checked against the day before, so the range
- * starts a day early. Days not stored yet are left to each store's single-day
- * path, which fetches and saves them; today is never preloaded (it's live).
+ * store. Only morning reports use them, and those are checked against the day
+ * before, so the range is shifted a day early. Days not stored yet are left to
+ * each store's single-day path, which fetches and saves them.
  */
 export async function loadSharedDays(start: string, end: string): Promise<SharedDays> {
   const today = businessDateISO();
   const days: string[] = [];
-  for (let d = addDays(start, -1); d <= end && d < today; d = addDays(d, 1)) days.push(d);
+  for (let d = addDays(start, -1); d < end && d < today; d = addDays(d, 1)) days.push(d);
   const [drive, jolt] = await Promise.all([
     cachedDriveThruDays(days).catch(() => new Map<string, DriveThruPayload>()),
     completionByDay(days).catch(() => new Map<string, Map<string, number | null>>()),
