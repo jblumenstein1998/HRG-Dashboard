@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import ActivityTracker from "@/components/ActivityTracker";
 // The chat widget and its /api/chat route are removed from this branch while
 // the assistant is reworked — it was hanging without returning an answer, and a
 // disabled flag still shipped the function. The full implementation lives on
@@ -25,6 +26,7 @@ export default function RootLayout({
     <html lang="en" className={`${geistSans.variable} h-full`}>
       <body className="min-h-full bg-gray-50 antialiased">
         {children}
+        <ActivityTracker />
       </body>
     </html>
   );

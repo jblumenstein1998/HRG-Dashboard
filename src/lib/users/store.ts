@@ -293,7 +293,35 @@ export async function recordLogin(id: string, method: LoginMethod): Promise<void
   await sql`INSERT INTO app_login_events (user_id, method) VALUES (${id}, ${method})`;
 }
 
-/** Per-person sign-in counts for the admin usage view. */
+/**
+ * One heartbeat from components/ActivityTracker. A "view" is a page opened; an
+ * "active" is a click, scroll or keypress with the tab in front. Either marks
+ * the current five-minute block as used — the primary key makes repeats free.
+ */
+export async function recordActivity(
+  userId: string,
+  tab: string,
+  kind: "view" | "active",
+): Promise<void> {
+  await ensureUserSchema();
+  const views = kind === "view" ? 1 : 0;
+  await sql`
+    INSERT INTO app_activity (user_id, bucket, tab, views)
+    VALUES (
+      ${userId},
+      date_bin('5 minutes', now(), TIMESTAMPTZ '2000-01-01 00:00:00+00'),
+      ${tab},
+      ${views}
+    )
+    ON CONFLICT (user_id, bucket, tab)
+      DO UPDATE SET views = app_activity.views + EXCLUDED.views
+  `;
+}
+
+/** Minutes per activity block — keep in step with ActivityTracker. */
+export const ACTIVITY_BLOCK_MINUTES = 5;
+
+/** Per-person usage for the admin usage view. */
 export type LoginUsage = {
   userId: string;
   name: string;
@@ -301,8 +329,14 @@ export type LoginUsage = {
   positionId: string;
   logins7: number;
   logins30: number;
-  /** Distinct business days (HRG_TIME_ZONE) with a sign-in, last 30 days. */
+  /** Distinct business days (HRG_TIME_ZONE) with any activity, last 30 days. */
   days30: number;
+  /** Active minutes: distinct five-minute blocks × 5. */
+  minutes7: number;
+  minutes30: number;
+  /** Tabs by active minutes over 30 days, busiest first. */
+  tabs: { tab: string; minutes: number; views: number }[];
+  lastActiveAt: string | null;
   lastLoginAt: string | null;
 };
 
@@ -321,19 +355,60 @@ export type LoginEvent = {
  */
 export async function loginUsage(): Promise<LoginUsage[]> {
   await ensureUserSchema();
-  const rows = (await sql`
-    SELECT u.id, u.name, u.email, u.username, u.position_id, u.last_login_at,
-      count(e.id) FILTER (WHERE e.at > now() - interval '7 days')::int AS logins7,
-      count(e.id) FILTER (WHERE e.at > now() - interval '30 days')::int AS logins30,
-      count(DISTINCT (e.at AT TIME ZONE ${HRG_TIME_ZONE})::date)
-        FILTER (WHERE e.at > now() - interval '30 days')::int AS days30
-    FROM app_users u
-    LEFT JOIN app_login_events e ON e.user_id = u.id
-    WHERE u.disabled_at IS NULL
-    GROUP BY u.id
-    ORDER BY days30 DESC, logins30 DESC, u.last_login_at DESC NULLS LAST, u.name
-  `) as Record<string, unknown>[];
-  return rows.map((r) => ({
+  // Aggregated in subqueries before joining, so sign-ins and blocks don't
+  // multiply each other's counts.
+  const [rows, tabRows] = await Promise.all([
+    sql`
+      WITH logins AS (
+        SELECT user_id,
+          count(*) FILTER (WHERE at > now() - interval '7 days')::int AS logins7,
+          count(*)::int AS logins30
+        FROM app_login_events
+        WHERE at > now() - interval '30 days'
+        GROUP BY user_id
+      ), active AS (
+        SELECT user_id,
+          count(DISTINCT bucket) FILTER (WHERE bucket > now() - interval '7 days')::int AS blocks7,
+          count(DISTINCT bucket) FILTER (WHERE bucket > now() - interval '30 days')::int AS blocks30,
+          count(DISTINCT (bucket AT TIME ZONE ${HRG_TIME_ZONE})::date)
+            FILTER (WHERE bucket > now() - interval '30 days')::int AS days30,
+          max(bucket) AS last_active
+        FROM app_activity
+        GROUP BY user_id
+      )
+      SELECT u.id, u.name, u.email, u.username, u.position_id, u.last_login_at,
+        coalesce(l.logins7, 0) AS logins7, coalesce(l.logins30, 0) AS logins30,
+        coalesce(a.blocks7, 0) AS blocks7, coalesce(a.blocks30, 0) AS blocks30,
+        coalesce(a.days30, 0) AS days30, a.last_active
+      FROM app_users u
+      LEFT JOIN logins l ON l.user_id = u.id
+      LEFT JOIN active a ON a.user_id = u.id
+      WHERE u.disabled_at IS NULL
+      ORDER BY days30 DESC, blocks30 DESC, logins30 DESC,
+        a.last_active DESC NULLS LAST, u.last_login_at DESC NULLS LAST, u.name
+    `,
+    sql`
+      SELECT user_id, tab, count(*)::int AS blocks, sum(views)::int AS views
+      FROM app_activity
+      WHERE bucket > now() - interval '30 days'
+      GROUP BY user_id, tab
+      ORDER BY blocks DESC, views DESC
+    `,
+  ]);
+
+  const tabsByUser = new Map<string, LoginUsage["tabs"]>();
+  for (const r of tabRows as Record<string, unknown>[]) {
+    const list = tabsByUser.get(r.user_id as string) ?? [];
+    list.push({
+      tab: r.tab as string,
+      minutes: (r.blocks as number) * ACTIVITY_BLOCK_MINUTES,
+      views: r.views as number,
+    });
+    tabsByUser.set(r.user_id as string, list);
+  }
+
+  const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
+  return (rows as Record<string, unknown>[]).map((r) => ({
     userId: r.id as string,
     name: r.name as string,
     handle: loginHandle({ email: r.email as string | null, username: r.username as string | null }),
@@ -341,7 +416,11 @@ export async function loginUsage(): Promise<LoginUsage[]> {
     logins7: r.logins7 as number,
     logins30: r.logins30 as number,
     days30: r.days30 as number,
-    lastLoginAt: r.last_login_at ? new Date(r.last_login_at as string).toISOString() : null,
+    minutes7: (r.blocks7 as number) * ACTIVITY_BLOCK_MINUTES,
+    minutes30: (r.blocks30 as number) * ACTIVITY_BLOCK_MINUTES,
+    tabs: tabsByUser.get(r.id as string) ?? [],
+    lastActiveAt: iso(r.last_active),
+    lastLoginAt: iso(r.last_login_at),
   }));
 }
 

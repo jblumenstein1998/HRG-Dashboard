@@ -187,4 +187,33 @@ async function createUserSchema(): Promise<void> {
   await sql`
     CREATE INDEX IF NOT EXISTS app_login_events_at_idx ON app_login_events (at DESC)
   `;
+
+  /*
+   * Engagement, which sign-ins can't see: a tab left open all day and checked
+   * now and then is one sign-in but many visits.
+   *
+   * One row per person per five-minute block per tab in which they opened a
+   * page or clicked, scrolled or typed with the tab in front (see
+   * components/ActivityTracker). Active time is distinct blocks × 5 minutes.
+   * The primary key is the dedupe — two browser windows in the same block
+   * still make one row — and it keeps the table to a few rows per person per
+   * working day rather than one per ping.
+   *
+   * No foreign key, for the same reason as app_login_events.
+   */
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_activity (
+      user_id TEXT NOT NULL,
+      -- date_bin('5 minutes', now(), epoch): the start of the block.
+      bucket  TIMESTAMPTZ NOT NULL,
+      -- The top-level route, e.g. '/par' or '/admin'.
+      tab     TEXT NOT NULL,
+      -- Page opens in this block; 0 when the block came from activity alone.
+      views   INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, bucket, tab)
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS app_activity_bucket_idx ON app_activity (bucket DESC)
+  `;
 }
