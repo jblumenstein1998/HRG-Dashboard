@@ -581,8 +581,11 @@ export default function StaffingClient({
 
         <WorkstreamSyncBanner sync={data?.workstreamSync} />
 
-        {/* First on the page: the only section here that is a task rather than
-            a report. */}
+        {/* At the top (Josh, 2026-10-30): yesterday's projections against
+            what happened, and what each store expects today. */}
+        <ProjectionsSection filter={storeFilter} reloadKey={reloadKey} />
+
+        {/* The only section here that is a task rather than a report. */}
         <MissedClockOutSection filter={storeFilter} reloadKey={reloadKey} />
 
         <div ref={cardRef} className="flex flex-wrap items-baseline gap-x-3">
@@ -672,6 +675,147 @@ export default function StaffingClient({
  * closing shift running past midnight is measured in its own frame rather than
  * wrapping into a negative span.
  */
+// ── Projections ─────────────────────────────────────────────────────────────
+
+type ProjectionCell = { date: string; salesProjection: number | null; productivityProjection: number | null };
+type ProjectionRow = {
+  storeId: string;
+  storeName: string;
+  yesterday: ProjectionCell & { actualSales: number | null; actualProductivity: number | null };
+  today: ProjectionCell;
+  error: string | null;
+};
+type ProjectionsReport = { today: string; yesterday: string; stores: ProjectionRow[] };
+
+const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+const money2 = (n: number) => `$${n.toFixed(2)}`;
+
+/** Actual against projection: green at or above it, red below. */
+function Variance({ actual, projected, fmt }: { actual: number | null; projected: number | null; fmt: (n: number) => string }) {
+  if (actual === null || projected === null) return <span className="text-gray-300">—</span>;
+  const diff = actual - projected;
+  const pct = projected !== 0 ? (diff / projected) * 100 : null;
+  return (
+    <span className={diff >= 0 ? "text-green-700" : "text-red-600"}>
+      {diff >= 0 ? "+" : "−"}{fmt(Math.abs(diff))}
+      {pct !== null && <span className="text-gray-400"> ({diff >= 0 ? "+" : "−"}{Math.abs(pct).toFixed(1)}%)</span>}
+    </span>
+  );
+}
+
+/**
+ * Sales and productivity projections from each store's morning Slack report,
+ * against PAR's actuals — /api/staffing/projections. Yesterday is complete;
+ * today has projections only. "not posted" means the morning report had no
+ * projection (Portland leaves the lines blank), never that it was zero.
+ */
+function ProjectionsSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
+  const sorter = useColumnSort("desc");
+  const [state, setState] = useState<{ loaded: boolean; data: ProjectionsReport | null; error: string | null }>(
+    { loaded: false, data: null, error: null },
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/staffing/projections")
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed to load");
+        return json as ProjectionsReport;
+      })
+      .then((json) => { if (!cancelled) setState({ loaded: true, data: json, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ loaded: true, data: null, error: String(err?.message ?? err) }); });
+    return () => { cancelled = true; };
+  }, [reloadKey]);
+
+  const rows = useMemo(
+    () => (state.data ? state.data.stores.filter((s) => inFilter(filter.allowed, s.storeName)) : []),
+    [state.data, filter.allowed],
+  );
+
+  const notPosted = <span className="text-gray-300">not posted</span>;
+  const cell = "px-3 py-1 text-right text-xs tabular-nums whitespace-nowrap";
+
+  return (
+    <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-100">
+        <span className="text-sm font-semibold text-gray-900">Projections</span>
+        <span className="text-xs text-gray-400">
+          from each store&apos;s morning Slack report · actuals from PAR · productivity is sales per labor hour
+        </span>
+        {!state.loaded && <span className="text-xs text-gray-400 animate-pulse">Loading…</span>}
+      </div>
+
+      {state.error && <p className="px-3 py-3 text-sm text-red-700">{state.error}</p>}
+
+      {state.data && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] text-gray-500">
+                <th />
+                <th colSpan={6} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
+                  Yesterday · {dateHeader(state.data.yesterday)}
+                </th>
+                <th colSpan={2} className="px-3 pt-1.5 text-center font-semibold border-l border-gray-100">
+                  Today · {dateHeader(state.data.today)}
+                </th>
+              </tr>
+              <tr className="border-b border-gray-100">
+                <SortHeader label="Store" sortKey="store" align="left" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="Sales proj" sortKey="ySalesProj" arrow={sorter.arrow} onClick={sorter.toggle} className="border-l border-gray-100" />
+                <SortHeader label="Actual sales" sortKey="ySales" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="vs proj" sortKey="ySalesVar" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="Prod proj" sortKey="yProdProj" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="Actual prod" sortKey="yProd" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="vs proj" sortKey="yProdVar" arrow={sorter.arrow} onClick={sorter.toggle} />
+                <SortHeader label="Sales proj" sortKey="tSalesProj" arrow={sorter.arrow} onClick={sorter.toggle} className="border-l border-gray-100" />
+                <SortHeader label="Prod proj" sortKey="tProdProj" arrow={sorter.arrow} onClick={sorter.toggle} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorter.apply(rows, (s, key) => {
+                const y = s.yesterday;
+                const minus = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
+                switch (key) {
+                  case "store": return s.storeName;
+                  case "ySalesProj": return y.salesProjection;
+                  case "ySales": return y.actualSales;
+                  case "ySalesVar": return minus(y.actualSales, y.salesProjection);
+                  case "yProdProj": return y.productivityProjection;
+                  case "yProd": return y.actualProductivity;
+                  case "yProdVar": return minus(y.actualProductivity, y.productivityProjection);
+                  case "tSalesProj": return s.today.salesProjection;
+                  case "tProdProj": return s.today.productivityProjection;
+                  default: return null;
+                }
+              }).map((s) => {
+                const y = s.yesterday;
+                return (
+                  <tr key={s.storeId} className="border-b border-gray-50">
+                    <td className="px-3 py-1 font-medium text-gray-900 whitespace-nowrap">
+                      {s.storeName}
+                      {s.error && <span className="ml-2 text-xs text-red-600">{s.error}</span>}
+                    </td>
+                    <td className={`${cell} border-l border-gray-100`}>{y.salesProjection !== null ? money0(y.salesProjection) : notPosted}</td>
+                    <td className={`${cell} text-gray-800`}>{y.actualSales !== null ? money0(y.actualSales) : "—"}</td>
+                    <td className={cell}><Variance actual={y.actualSales} projected={y.salesProjection} fmt={money0} /></td>
+                    <td className={cell}>{y.productivityProjection !== null ? money2(y.productivityProjection) : notPosted}</td>
+                    <td className={`${cell} text-gray-800`}>{y.actualProductivity !== null ? money2(y.actualProductivity) : "—"}</td>
+                    <td className={cell}><Variance actual={y.actualProductivity} projected={y.productivityProjection} fmt={money2} /></td>
+                    <td className={`${cell} border-l border-gray-100`}>{s.today.salesProjection !== null ? money0(s.today.salesProjection) : notPosted}</td>
+                    <td className={cell}>{s.today.productivityProjection !== null ? money2(s.today.productivityProjection) : notPosted}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function OpenCloseSection({ filter, reloadKey }: { filter: StoreFilter; reloadKey: number }) {
   const [side, setSide] = useState<"open" | "close">("open");
   const sorter = useColumnSort("desc");

@@ -28,6 +28,9 @@ export type ReportFields = {
   laneSecs: number | null;
   joltPct: number | null;
   cashOverShort: number | null;
+  /** The morning report's "Current Day" forecasts — not checked, shown on Staffing. */
+  salesProjection: number | null;
+  productivityProjection: number | null;
   /** Hourly sales by the hour the bucket starts, 24-hour local: 11, 12, 13 … */
   hourly: Record<number, number>;
 };
@@ -38,7 +41,7 @@ export type ReportFields = {
  * counts when nothing separates it from what follows — "Comp -9.7" is
  * negative, "Cash - $0.37" is a separator and a positive 37 cents.
  */
-const NUMBER = String.raw`([+-]?)(\s?)\$?\s?([+-]?)\s?(\d[\d,]*(?:\.\d+)?|\.\d+)`;
+const NUMBER = String.raw`([+-]?)(\s?)\$?\s?([+-]?)\s?(\d[\d,]*(?:\.\d+)*|\.\d+)`;
 
 /** Text allowed between a label and its value: colons, dashes, stars, "=", "(", "%", spaces. */
 const SEP = String.raw`[\s:*=(%\-–]*?`;
@@ -57,6 +60,15 @@ const SPECS: Record<Exclude<keyof ReportFields, "hourly" | "windowSecs" | "laneS
     signed: true,
     skipLine: /\bcomp\b/i,
   },
+  // "Sales projection- $3894", "Sale projection 3973", "Projected sales:11,441",
+  // "*Sales projection$11.054.28*", Jefferson's "PJ: 6,863.18"
+  // (any spelling of "project…": Brentwood typed "Sales projecttion4186")
+  salesProjection: { labels: /\bsales?\s*project[a-z]*|projected\s*sales|^\W*PJ\b/i },
+  // "Prod projection- 62.3", "*Productivity projections 75.78*", "Projected prod:$88.93",
+  // "Projected SPLH: 62.52" (Beach), Jefferson's "(SPLH) P.P: 67.94"
+  productivityProjection: {
+    labels: /\bprod(?:uctivity)?\s*project[a-z]*|projected\s*(?:prod(?:uctivity)?|splh)\b|\bP\.\s?P\b/i,
+  },
 };
 
 const TIME_SPECS = {
@@ -72,6 +84,12 @@ const TIME_SPECS = {
  */
 function toNumber(raw: string): number {
   if (/^\d+,\d{2}$/.test(raw)) return Number(raw.replace(",", "."));
+  // "11.054.28" and "$5.119.90" (Hampton): a dot typed for the thousands
+  // comma. Only the last dot is the decimal point.
+  if ((raw.match(/\./g) ?? []).length > 1) {
+    const last = raw.lastIndexOf(".");
+    return Number(raw.slice(0, last).replace(/[.,]/g, "") + raw.slice(last));
+  }
   return Number(raw.replace(/,/g, ""));
 }
 
@@ -145,6 +163,8 @@ export function parseReportFields(text: string): ReportFields {
     laneSecs: readClock(rows, TIME_SPECS.laneSecs),
     joltPct: readField(rows, SPECS.joltPct),
     cashOverShort: readField(rows, SPECS.cashOverShort),
+    salesProjection: readField(rows, SPECS.salesProjection),
+    productivityProjection: readField(rows, SPECS.productivityProjection),
     hourly: readHourly(text),
   };
 }

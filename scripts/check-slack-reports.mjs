@@ -161,6 +161,21 @@ try {
     S.isReport("Gdm!!!  As you know we have completed the first week of period 10\n\nTotal net sales: 55316\nComp % : -1.33 (period)\nSales projections for the week: $52,343.00"), false);
   check("a daily report mentioning the week is still a report",
     S.isReport("Total NET SALES: $9123.55\nComp %: +20.22\nProductivity: 82.68\n\nDrive thru times were high, we are still on track for the week"), true);
+  check("brentwood projections", [brentwoodDay.salesProjection, brentwoodDay.productivityProjection], [4375, 55.08]);
+  check("hampton projections, dotted thousands", [hampton.salesProjection, hampton.productivityProjection], [11054.28, 75.78]);
+  check("dotted thousands in net sales", F.parseReportFields("Total net sales: $5.119.90").netSales, 5119.9);
+  check("spring hill 'projected' wording",
+    [F.parseReportFields("Projected sales:11,441\nProjected productivity: 99.92").salesProjection,
+     F.parseReportFields("Projected sales:11,441\nProjected productivity: 99.92").productivityProjection], [11441, 99.92]);
+  const colProj = F.parseReportFields("Productivity: $82.95\nProjected sales: $10,750\nProjected prod: $80.52");
+  check("columbia 'Projected prod'", [colProj.salesProjection, colProj.productivityProjection, colProj.splh], [10750, 80.52, 82.95]);
+  check("beach 'Projected SPLH'", F.parseReportFields("Productivity: $68.52\nProjected sales: $5257\nProjected SPLH: 62.52").productivityProjection, 62.52);
+  const jeff = F.parseReportFields("Netsales: 6,001.64\nSPLH: 90.25\nPJ: 6,863.18\n(SPLH) P.P: 67.94");
+  check("jefferson PJ / P.P", [jeff.salesProjection, jeff.productivityProjection, jeff.splh], [6863.18, 67.94, 90.25]);
+  check("misspelt 'projecttion'", F.parseReportFields("Net 4257\nSales projecttion4186\nProd projection 63.94").salesProjection, 4186);
+  check("a blank projection reads as none",
+    [F.parseReportFields("• Sales projection:\n• Productivity projection:").salesProjection,
+     F.parseReportFields("Sales projection: $ ?\nProductivity projections: $64.32*").salesProjection], [null, null]);
   check("projection lines don't read as productivity",
     F.parseReportFields("Net sales: $100\nSales Projection: $6,014.65\nProductivity Projection: $85.07").splh, null);
 
