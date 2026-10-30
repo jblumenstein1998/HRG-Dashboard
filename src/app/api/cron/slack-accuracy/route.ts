@@ -2,19 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { businessDateISO } from "@/lib/businessDay";
 import { addDays } from "@/lib/slackReports";
 import { runNightlyChecks } from "@/lib/slackAccuracy";
-import { KEEP_DAYS, pruneChecks } from "@/lib/slackAccuracyStore";
+import { KEEP_DAYS, pruneSourceCache } from "@/lib/sourceCache";
 
 /**
- * Nightly: check the numbers in the last two days' Slack reports and store the
- * results (lib/slackAccuracyStore.ts), so the admin table can show accuracy for
- * any range without pulling PAR orders on page load.
+ * Nightly: check the last two days' Slack reports, which reads every figure
+ * they need from its source and stores it (lib/sourceCache.ts, the rollup, the
+ * drive-thru cache), so the admin table can recompute accuracy for any range
+ * from the database without pulling PAR orders on page load.
  *
  * Runs at 12:15 UTC (7:15 AM Central), just after par-rollup writes the day's
  * PAR totals at 12:00 — earlier and getTotalsForRange would rebuild each store's
  * day from PAR live, doing the rollup's work twice.
  *
  * Two days, not one, so a report posted a day late is still checked. Anything
- * older than Slack's 90-day history is pruned.
+ * stored more than KEEP_DAYS ago is pruned.
  *
  * ?date=YYYY-MM-DD checks that one day instead — for backfilling, a day per
  * call to stay well inside the time limit.
@@ -35,11 +36,11 @@ export async function GET(req: NextRequest) {
   const end = date ?? addDays(today, -1);
 
   const results = await runNightlyChecks(start, end);
-  const pruned = await pruneChecks(addDays(today, -KEEP_DAYS));
+  const pruned = await pruneSourceCache(addDays(today, -KEEP_DAYS));
 
   const failed = results.filter((r) => r.error);
-  const saved = results.reduce((n, r) => n + r.saved, 0);
-  console.log(`[slack-accuracy] ${start}..${end}: ${saved} reports checked, ${failed.length} stores failed, ${pruned} pruned`);
+  const checked = results.reduce((n, r) => n + r.checked, 0);
+  console.log(`[slack-accuracy] ${start}..${end}: ${checked} reports checked, ${failed.length} stores failed, ${pruned} pruned`);
   for (const f of failed) console.log(`[slack-accuracy] ${f.store}: ${f.error}`);
-  return NextResponse.json({ ok: failed.length === 0, start, end, saved, pruned, results });
+  return NextResponse.json({ ok: failed.length === 0, start, end, checked, pruned, results });
 }

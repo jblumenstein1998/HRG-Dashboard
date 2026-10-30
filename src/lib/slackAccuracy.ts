@@ -32,21 +32,21 @@
  * 2–5. Hourly sales and lane time are the window's own.
  */
 
-import { getHourlyBreakdown, getTotalsForRange, type HourBucket } from "./parRollup";
-import { getCashSummary } from "./par";
+import { getHourlyBreakdown, getHourlyBreakdownMany, getPastDays, getTotalsForRange, type HourBucket } from "./parRollup";
+import { getCashSummary, getCashSummaryMany } from "./par";
 import { avgCheck, compPct, productivity, roundedTotals, tplh } from "./parFigures";
 import { getPriorYearRange } from "./fiscal";
-import { getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./berryData";
+import { businessDateISO } from "./businessDay";
+import { cachedDriveThruDays, getDriveThruMetrics, isClosedRange, type DriveThruPayload } from "./berryData";
 import { loginBerryService } from "./berryAuth";
 import { resolveSupersetTimeRange } from "./tools/dateRange";
-import { fetchStoreLists, type StoreListsReport } from "./jolt";
+import { completionByDay, fetchStoreLists, type StoreListsReport } from "./jolt";
 import { BONUS_STORES, SLACK_CHANNEL_IDS, storeTimeZone, type BonusStore } from "./bonus/storeMap";
 import { parseReportFields, type ReportFields } from "./slackFields";
 import {
   addDays, fetchChannelHistory, localMidnight, placeMessage, type SlackMessage, type SlackSlot,
 } from "./slackReports";
 import { labelled, mapLimit, STORE_CONCURRENCY } from "./slackCompletion";
-import { saveChecks } from "./slackAccuracyStore";
 
 export type FieldKey =
   | "netSales" | "compPct" | "splh" | "tplh" | "avgCheck"
@@ -184,14 +184,17 @@ function check(
  * Check one store's reports. Returns a check per message ts, for messages that
  * are reports dated within [start, end].
  *
- * Each day in the range costs a PAR orders pull (14 cold days took 72s), so
- * this runs nightly for the days just gone (runNightlyChecks, stored in
- * slack_report_checks) and live only for today.
+ * Runs every time the table opens, over its whole range. Past days come from
+ * the stored copies the tabs read too (a few batched queries per store), so it
+ * is quick once the nightly run has stored them; a day not stored yet costs a
+ * source pull (a cold PAR orders day is slow — 14 took 72s) and is saved.
+ * Today is live, as on the tabs.
  *
- * `strict` is for those stored checks: a source that still fails after its
- * retries throws, so the store's day is reported failed and left to re-run
- * instead of being saved with "couldn't check" in place of real numbers. The
- * live check for today is lenient and shows what it could get.
+ * `strict` is for the nightly run: a source that still fails after its retries
+ * throws, so the store is reported failed and re-run rather than left with
+ * "couldn't check". The table is lenient and shows what it could get.
+ * `shared` is loadSharedDays' drive-thru and Jolt days, loaded once for all
+ * stores.
  */
 export async function checkStoreReports(
   store: BonusStore,
@@ -199,7 +202,7 @@ export async function checkStoreReports(
   messages: SlackMessage[],
   start: string,
   end: string,
-  opts: { strict?: boolean } = {},
+  opts: { strict?: boolean; shared?: SharedDays } = {},
 ): Promise<Map<string, ReportCheck>> {
   const placed = messages
     .map((m) => ({ m, p: placeMessage(m, timeZone) }))
@@ -220,26 +223,54 @@ export async function checkStoreReports(
     };
   }
 
+  // ── Past days, read in a few queries for the whole range ────────────────
+  // The same stored rows the tabs read (the rollup, source_cache), batched so a
+  // 90-day table costs a handful of queries per store instead of one per day.
+  // Anything not stored yet falls through to the single-day function below,
+  // which fetches it from the source and saves it.
+  const today = businessDateISO();
+  const pastDays = (days: string[]) => [...new Set(days)].filter((d) => d < today).sort();
+  const morningDays = pastDays(placed.filter((x) => x.p.slot === "previous_day").map((x) => addDays(x.p.date, -1)));
+  const shiftDays = pastDays(placed.filter((x) => x.p.slot !== "previous_day").map((x) => x.p.date));
+  const firstLast = (days: string[]) => (days.length ? [days[0], days[days.length - 1]] as const : null);
+  const loaded = (async () => {
+    const span = firstLast(morningDays);
+    const pySpan = span && getPriorYearRange(span[0], span[1]);
+    const [ty, ly, hours, tills] = await Promise.all([
+      span ? getPastDays(store.storeId, span[0], span[1]) : null,
+      pySpan ? getPastDays(store.storeId, pySpan.start, pySpan.end) : null,
+      getHourlyBreakdownMany(store.storeId, shiftDays),
+      getCashSummaryMany(store.storeId, morningDays),
+    ]);
+    return { ty: ty?.days, ly: ly?.days, hours, tills };
+  })();
+  // A failed batch read isn't fatal: every figure has its single-day path.
+  const batch = loaded.catch(() => null);
+
   // ── System figures, fetched once per day ────────────────────────────────
-  const totals = memo("PAR totals", (day) => getTotalsForRange(store.storeId, day, day));
-  const priorTotals = memo("PAR prior year", (day) => {
+  const totals = memo("PAR totals", async (day) =>
+    (await batch)?.ty?.get(day) ?? getTotalsForRange(store.storeId, day, day));
+  const priorTotals = memo("PAR prior year", async (day) => {
     const py = getPriorYearRange(day, day);
-    return getTotalsForRange(store.storeId, py.start, py.end);
+    return (py.start === py.end ? (await batch)?.ly?.get(py.start) : undefined)
+      ?? getTotalsForRange(store.storeId, py.start, py.end);
   });
   const hourly = memo("PAR hourly", async (day) => {
-    const buckets = await getHourlyBreakdown(store.storeId, day);
+    const buckets = (await batch)?.hours.get(day) ?? await getHourlyBreakdown(store.storeId, day);
     // getHourlyBreakdown answers a failed orders pull with empty hours; a day
     // with reports in it and no sales at all is that, not a closed store.
     if (!buckets.some((b) => b.netSales > 0)) throw new Error(`fetch failed (no orders for ${day})`);
     return buckets;
   });
-  const cash = memo("PAR tills", (day) => getCashSummary(store.storeId, day));
+  const cash = memo("PAR tills", async (day) => (await batch)?.tills.get(day) ?? getCashSummary(store.storeId, day));
   const jolt = memo("Jolt", async (day) => {
+    const shared = opts.shared?.jolt.get(day);
+    if (shared) return shared.get(store.name) ?? null;
     const report = await joltDay(day);
     return report.stores.find((s) => s.store === store.name)?.completePct ?? null;
   });
   const drive = memo("BerryAI", async (day): Promise<DriveThruPayload["stores"][number] | null> => {
-    const payload = await driveThruDay(day);
+    const payload = opts.shared?.drive.get(day) ?? await driveThruDay(day);
     if (!payload) return null;
     return payload.stores.find((s) => s.store_name_and_id.includes(store.storeId)) ?? null;
   });
@@ -324,27 +355,55 @@ export async function checkStoreReports(
   return out;
 }
 
-export type NightlyResult = { store: string; saved: number; error?: string };
+export type NightlyResult = { store: string; checked: number; error?: string };
 
 /**
- * Check every store's reports dated within [start, end] and store the results.
- * What the nightly cron runs (for the last two days, so a report posted a day
- * late still gets checked) and what a backfill runs one day at a time.
+ * Check every store's reports dated within [start, end], strictly, so every
+ * figure they need is read from its source and stored (source_cache, the
+ * rollup, drive_thru_cache) before anyone opens the table. No results are
+ * kept: the table recomputes them from that stored data each time it opens,
+ * so a check can never drift from the tab showing the same data. What the
+ * nightly cron runs (for the last two days, so a report posted a day late is
+ * covered) and what a backfill runs one day at a time.
  */
 export async function runNightlyChecks(start: string, end: string): Promise<NightlyResult[]> {
+  const shared = await loadSharedDays(start, end);
   return mapLimit(BONUS_STORES, STORE_CONCURRENCY, async (store) => {
     try {
       const channel = SLACK_CHANNEL_IDS[store.storeId];
-      if (!channel) return { store: store.name, saved: 0, error: "no Slack channel" };
+      if (!channel) return { store: store.name, checked: 0, error: "no Slack channel" };
       const timeZone = storeTimeZone(store);
       // Catch-up reports for these days can arrive up to a few days later.
       const messages = await labelled("Slack", () =>
         fetchChannelHistory(channel, localMidnight(start, timeZone), localMidnight(addDays(end, 3), timeZone)),
       );
-      const checks = await checkStoreReports(store, timeZone, messages, start, end, { strict: true });
-      return { store: store.name, saved: await labelled("Postgres", () => saveChecks(store.storeId, checks)) };
+      const checks = await checkStoreReports(store, timeZone, messages, start, end, { strict: true, shared });
+      return { store: store.name, checked: checks.size };
     } catch (err) {
-      return { store: store.name, saved: 0, error: err instanceof Error ? err.message : String(err) };
+      return { store: store.name, checked: 0, error: err instanceof Error ? err.message : String(err) };
     }
   });
+}
+
+/** The past days, drive-thru and Jolt, that one payload serves for every store. */
+export type SharedDays = {
+  drive: Map<string, DriveThruPayload>;
+  jolt: Map<string, Map<string, number | null>>;
+};
+
+/**
+ * Load the shared sources for a range once per request rather than once per
+ * store. Morning reports are checked against the day before, so the range
+ * starts a day early. Days not stored yet are left to each store's single-day
+ * path, which fetches and saves them; today is never preloaded (it's live).
+ */
+export async function loadSharedDays(start: string, end: string): Promise<SharedDays> {
+  const today = businessDateISO();
+  const days: string[] = [];
+  for (let d = addDays(start, -1); d <= end && d < today; d = addDays(d, 1)) days.push(d);
+  const [drive, jolt] = await Promise.all([
+    cachedDriveThruDays(days).catch(() => new Map<string, DriveThruPayload>()),
+    completionByDay(days).catch(() => new Map<string, Map<string, number | null>>()),
+  ]);
+  return { drive, jolt };
 }
