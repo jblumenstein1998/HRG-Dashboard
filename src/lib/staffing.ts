@@ -466,6 +466,79 @@ export async function getStaffingAt(
   };
 }
 
+// ── Team on duty during a window ────────────────────────────────────────────
+
+/** Somebody on the clock at some point during a window, and how. */
+export type TeamMember = Omit<StaffOnClock, "payRate" | "wtdMinutes" | "wtdShifts" | "minutesElapsedAtQuery" | "onBreak" | "workstream"> & {
+  /** Workstream's title of record, where linked. */
+  position: string | null;
+  /** On a break for the whole window — present on paper, not on the floor. */
+  onBreakThroughout: boolean;
+};
+
+export type TeamDuring = {
+  storeId: string;
+  storeName: string;
+  localDate: string;
+  startMinutes: number;
+  endMinutes: number;
+  team: TeamMember[];
+  error: string | null;
+};
+
+/**
+ * Everyone on one store's clock at any minute from `startMinutes` to
+ * `endMinutes` (inclusive) of a local date, for tying something that happened
+ * at the store — a guest's visit, a missed list — to the people working it.
+ *
+ * The same store-day load and the same rosterAt the Staffing tab uses, asked
+ * once per minute of the window, so this can never disagree with that screen
+ * about who was on. Pay is left out: this is shown on tabs that aren't the
+ * Staffing tab, to people who don't see pay there.
+ */
+export async function getTeamDuring(
+  storeId: string,
+  localDate: string,
+  startMinutes: number,
+  endMinutes: number,
+): Promise<TeamDuring> {
+  const loc = PAR_LOCATIONS.find((l) => l.storeId === storeId);
+  const base = { storeId, storeName: loc?.name ?? storeId, localDate, startMinutes, endMinutes };
+  if (!loc) return { ...base, team: [], error: `Store ${storeId} isn't connected to PAR` };
+
+  // A past date reads stored history; only today's would touch PAR live.
+  const [day] = await withParPriority(PAR_PRIORITY.onClock, () => storeDaysFor(loc, [localDate], false));
+  if (day.error) return { ...base, team: [], error: day.error };
+
+  const byShift = new Map<string, { member: StaffOnClock; breakMinutes: number; minutes: number }>();
+  for (let m = startMinutes; m <= endMinutes; m++) {
+    for (const p of rosterAt(day, m).onClock) {
+      const key = `${p.employeeId ?? p.name}|${p.startMinutes}`;
+      const seen = byShift.get(key) ?? { member: p, breakMinutes: 0, minutes: 0 };
+      seen.minutes++;
+      if (p.onBreak) seen.breakMinutes++;
+      byShift.set(key, seen);
+    }
+  }
+
+  const team = [...byShift.values()].map(({ member, breakMinutes, minutes }): TeamMember => ({
+    employeeId: member.employeeId,
+    name: member.name,
+    job: member.job,
+    jobId: member.jobId,
+    startMinutes: member.startMinutes,
+    endMinutes: member.endMinutes,
+    startLabel: member.startLabel,
+    endLabel: member.endLabel,
+    isOpen: member.isOpen,
+    minutesWorked: member.minutesWorked,
+    position: member.workstream?.position ?? null,
+    onBreakThroughout: breakMinutes === minutes,
+  }));
+  team.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
+  return { ...base, team, error: null };
+}
+
 // ── Hours by store by week ───────────────────────────────────────────────────
 
 /**

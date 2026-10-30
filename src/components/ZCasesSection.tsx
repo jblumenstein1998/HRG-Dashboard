@@ -683,6 +683,7 @@ function OutstandingRow({
   detail: ZCaseDetail | null;
   state: DetailState;
 }) {
+  const [teamOpen, setTeamOpen] = useState(false);
   const hrs = row.openHours ?? 0;
   const stripe = hrs >= 24 ? "bg-red-600" : hrs >= 12 ? "bg-amber-600" : "bg-gray-300";
 
@@ -711,6 +712,7 @@ function OutstandingRow({
             <span className="text-sm font-semibold text-gray-900">{storeLabel(row.store, row.unitName)}</span>
             <CaseLink row={row} />
             <TypeTag type={row.type} />
+            <TeamButton open={teamOpen} onClick={() => setTeamOpen((v) => !v)} />
             {hrs >= 24 && (
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
                 Past 24 hrs
@@ -730,6 +732,11 @@ function OutstandingRow({
           ▼
         </span>
       </div>
+      {teamOpen && (
+        <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3 pt-0.5">
+          <TeamPanel caseKey={row.caseKey} />
+        </div>
+      )}
       {expanded && (
         // Indented to line up with the store name, past the stripe.
         <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3.5 pt-0.5">
@@ -846,38 +853,174 @@ function StoreRow({
                 <div className="py-2 text-xs text-gray-500">No ZCases for this store in the window.</div>
               )}
               {cases.map((c) => (
-                <div
-                  key={c.caseKey}
-                  className="flex items-center gap-3 py-1.5 border-b border-gray-100 last:border-b-0 text-[12.5px]"
-                >
-                  <CaseLink row={c} />
-                  <TypeTag type={c.type} />
-                  {c.escalated && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-700">
-                      Escalated
-                    </span>
-                  )}
-                  <span className="ml-auto text-gray-500 tabular-nums">{shortDate(c.eventAt)}</span>
-                  <span className="w-24 text-right tabular-nums">
-                    {c.resolvedAt === null ? (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
-                        open {c.openHours ?? 0} hrs
-                      </span>
-                    ) : (c.resolutionHours ?? 0) > 24 ? (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
-                        {c.resolutionHours} hrs
-                      </span>
-                    ) : (
-                      <span className="text-gray-700">{c.resolutionHours} hrs</span>
-                    )}
-                  </span>
-                </div>
+                <CaseLine key={c.caseKey} c={c} />
               ))}
             </div>
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** One case under an expanded store row, with its team-on-duty panel. */
+function CaseLine({ c }: { c: ZCaseRow }) {
+  const [teamOpen, setTeamOpen] = useState(false);
+  return (
+    <div className="border-b border-gray-100 last:border-b-0">
+      <div className="flex items-center gap-3 py-1.5 text-[12.5px]">
+        <CaseLink row={c} />
+        <TypeTag type={c.type} />
+        <TeamButton open={teamOpen} onClick={() => setTeamOpen((v) => !v)} />
+        {c.escalated && (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-700">
+            Escalated
+          </span>
+        )}
+        <span className="ml-auto text-gray-500 tabular-nums">{shortDate(c.eventAt)}</span>
+        <span className="w-24 text-right tabular-nums">
+          {c.resolvedAt === null ? (
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+              open {c.openHours ?? 0} hrs
+            </span>
+          ) : (c.resolutionHours ?? 0) > 24 ? (
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+              {c.resolutionHours} hrs
+            </span>
+          ) : (
+            <span className="text-gray-700">{c.resolutionHours} hrs</span>
+          )}
+        </span>
+      </div>
+      {teamOpen && (
+        <div className="pb-2.5">
+          <TeamPanel caseKey={c.caseKey} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+type TeamMember = {
+  employeeId: string | null;
+  name: string;
+  job: string | null;
+  position: string | null;
+  startLabel: string;
+  endLabel: string;
+  onBreakThroughout: boolean;
+};
+
+type TeamResponse = {
+  storeName: string;
+  localDate: string;
+  startMinutes: number;
+  endMinutes: number;
+  wholeHour: boolean;
+  team: TeamMember[];
+  error: string | null;
+};
+
+/**
+ * Who was running the shift, by what they clocked in as — Workstream's title
+ * only when PAR has no job on the shift. The title isn't the night: AGMs hold
+ * "Director" in Workstream and a Shift Leader can hold "Cashier". PAR prefixes
+ * its job names with the pay type ("Hourly - Assistant Manager", "Salary -
+ * General Manager"), hence a pattern; on 2026-10-30 it matched exactly those
+ * two and "Shift Leader" across every job on the clock.
+ */
+const LEADER = /manager|\bmgr\b|shift lead|\bgm\b|\bagm\b|director/i;
+const isLeader = (p: TeamMember) => LEADER.test(p.job ?? p.position ?? "");
+
+/** Same clean-up the Staffing tab does: the pay-type prefix off PAR's job name. */
+const cleanJob = (job: string | null) => job?.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
+
+const clock = (minutes: number) => {
+  const h24 = Math.floor(minutes / 60) % 24;
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(minutes % 60).padStart(2, "0")}${h24 < 12 ? "am" : "pm"}`;
+};
+
+function TeamButton({ open, onClick }: { open: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      // Sits inside rows that expand on click; this shouldn't toggle them too.
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+      className={`text-[10.5px] font-medium px-2 py-0.5 rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-gray-400 ${
+        open ? "bg-gray-800 border-gray-800 text-white" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-100"
+      }`}
+    >
+      Team on duty
+    </button>
+  );
+}
+
+/** The people on the clock at the guest's visit, managers first. */
+function TeamPanel({ caseKey }: { caseKey: string }) {
+  const [data, setData] = useState<TeamResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/smg/zcase/${caseKey}/team`)
+      .then(async (r) => {
+        const body = await r.json();
+        if (!live) return;
+        if (!r.ok || body.error) setError(body.error ?? `HTTP ${r.status}`);
+        else setData(body);
+      })
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [caseKey]);
+
+  if (error) return <div className="py-1.5 text-xs text-amber-700">Couldn&apos;t load the team: {error}</div>;
+  if (!data) return <div className="py-1.5 text-xs text-gray-400 animate-pulse">Loading team on duty…</div>;
+
+  const [, m, d] = data.localDate.split("-");
+  const when = data.wholeHour
+    ? `${clock(data.startMinutes)}–${clock(data.endMinutes)}`
+    : `at ${clock(data.startMinutes)}`;
+  const leaders = data.team.filter(isLeader);
+  const crew = data.team.filter((p) => !isLeader(p));
+
+  return (
+    <div className="rounded-md border border-gray-200 bg-white px-3 py-2">
+      <div className="text-[11px] text-gray-500">
+        On the clock {when}, {Number(m)}/{Number(d)} — guest&apos;s visit time
+        {data.wholeHour && " (given to the hour)"}
+      </div>
+      {data.team.length === 0 ? (
+        <div className="py-1.5 text-xs text-gray-500">Nobody was on the clock at that time.</div>
+      ) : (
+        <div className="mt-1.5 flex flex-col gap-1">
+          {[...leaders, ...crew].map((p) => (
+            <div key={`${p.employeeId ?? p.name}|${p.startLabel}`} className="flex items-baseline gap-2 text-[12.5px]">
+              {isLeader(p) && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                  Manager
+                </span>
+              )}
+              <span className="font-medium text-gray-900">{p.name}</span>
+              <span className="text-gray-500">{cleanJob(p.job) ?? p.position ?? "—"}</span>
+              {p.onBreakThroughout && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">on break</span>
+              )}
+              <span className="ml-auto text-gray-500 tabular-nums">
+                {p.startLabel}–{p.endLabel}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
