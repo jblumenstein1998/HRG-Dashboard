@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { unstable_cache } from "next/cache";
+import { readMany, readThrough } from "@/lib/sourceCache";
 
 const ACCESS_TOKEN = process.env.PAR_ACCESS_TOKEN ?? "";
 const BASE_URL     = process.env.PAR_BASE_URL ?? "https://api-apiint.brinkpos.net";
@@ -652,7 +653,7 @@ export type PARCashSummary = {
   uncountedTills: number;
 };
 
-export const getCashSummary = unstable_cache(
+const fetchCashSummary = unstable_cache(
   async (storeId: string, businessDate: string): Promise<PARCashSummary> => {
     const xml = await soapPost(
       "Sales2.svc",
@@ -680,6 +681,22 @@ export const getCashSummary = unstable_cache(
   ["par-cash-v2", PARSE_VERSION],
   { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
 );
+
+/** A store's tills for a day. A past day is read from source_cache, fetched and saved the first time. */
+export function getCashSummary(storeId: string, businessDate: string): Promise<PARCashSummary> {
+  return readThrough("par_cash", `${storeId}:${businessDate}`, businessDate, () => fetchCashSummary(storeId, businessDate));
+}
+
+/** Several days' tills at once, for the Slack checks of a whole range. */
+export async function getCashSummaryMany(storeId: string, days: string[]): Promise<Map<string, PARCashSummary>> {
+  const stored = await readMany("par_cash", days.map((d) => `${storeId}:${d}`));
+  const out = new Map<string, PARCashSummary>();
+  for (const d of days) {
+    const hit = stored.get(`${storeId}:${d}`) as PARCashSummary | undefined;
+    if (hit) out.set(d, hit);
+  }
+  return out;
+}
 
 export async function getOrdersLive(storeId: string, businessDate: string): Promise<PAROrder[]> {
   const token = getLocationToken(storeId);

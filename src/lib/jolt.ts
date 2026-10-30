@@ -17,6 +17,8 @@
 // endpoint, so `scripts/jolt-explore.mjs` can enumerate the schema rather than
 // guessing at it.
 
+import { readManyPaths, readThrough } from "@/lib/sourceCache";
+
 const APP = "https://app.joltup.com";
 const API = "https://api.joltup.com/graphql";
 const UA =
@@ -813,7 +815,44 @@ function personName(p: { firstName: string; lastName: string } | null): string |
   return name || null;
 }
 
+/**
+ * Every store's lists for a window. A single finished day — the Jolt tab's
+ * Yesterday, and what each morning Slack report is checked against — is read
+ * from source_cache, so both read one copy; it's fetched from Jolt and saved
+ * the first time. Longer and rolling windows come from Jolt as before.
+ */
 export async function fetchStoreLists(
+  startDate: string,
+  endDate: string,
+  opts: { bust?: boolean; hours?: number } = {},
+): Promise<StoreListsReport> {
+  if (startDate !== endDate || opts.hours) return fetchStoreListsFromJolt(startDate, endDate, opts);
+  return readThrough("jolt_store_lists", storeListsKey(startDate), endDate,
+    () => fetchStoreListsFromJolt(startDate, endDate, opts), { bust: opts.bust });
+}
+
+const storeListsKey = (day: string) => `${day}__${day}`;
+
+/** Each store's completePct for several past days, by day then store name. */
+export async function completionByDay(days: string[]): Promise<Map<string, Map<string, number | null>>> {
+  const stored = await readManyPaths("jolt_store_lists", days.map(storeListsKey), {
+    store: "$.stores[*].store",
+    pct: "$.stores[*].completePct",
+  });
+  const out = new Map<string, Map<string, number | null>>();
+  await Promise.all(days.map(async (day) => {
+    const hit = stored.get(storeListsKey(day));
+    if (hit) {
+      out.set(day, new Map(hit.store.map((s, i) => [String(s), (hit.pct[i] as number | null) ?? null])));
+      return;
+    }
+    const report = await fetchStoreLists(day, day);
+    out.set(day, new Map(report.stores.map((s) => [s.store, s.completePct])));
+  }));
+  return out;
+}
+
+async function fetchStoreListsFromJolt(
   startDate: string,
   endDate: string,
   opts: { bust?: boolean; hours?: number } = {},

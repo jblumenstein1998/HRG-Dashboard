@@ -3,8 +3,7 @@ import { requireTabApi } from "@/lib/users/adminGuard";
 import { BONUS_STORES, storeById } from "@/lib/bonus/storeMap";
 import { businessDateISO } from "@/lib/businessDay";
 import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "@/lib/slackCompletion";
-import { checkStoreReports, type ReportCheck } from "@/lib/slackAccuracy";
-import { getChecks } from "@/lib/slackAccuracyStore";
+import { checkStoreReports, loadSharedDays } from "@/lib/slackAccuracy";
 import { addDays, fetchUserNames, GRACE_MINUTES, localParts, placeMessage, SLACK_SLOTS } from "@/lib/slackReports";
 
 /**
@@ -18,7 +17,8 @@ import { addDays, fetchUserNames, GRACE_MINUTES, localParts, placeMessage, SLACK
  *     → that store again, plus every message in the window and how it was read
  *
  * Reads Slack live on every call and stores nothing (Josh, 2026-10-29: this
- * isn't needed forever). The workspace keeps 90 days of history, so a start
+ * isn't needed forever). Accuracy is recomputed on every call too, from the
+ * stored data the tabs read (see checkStoreReports). The workspace keeps 90 days of history, so a start
  * older than that is moved up to the oldest day Slack still has, and the
  * response says so. The end can be today: slots not yet due are shown as
  * upcoming and not counted (see scoreSlackReports).
@@ -67,6 +67,9 @@ export async function GET(req: NextRequest) {
   const one = storeParam ? storeById(storeParam) : null;
   if (storeParam && !one) return NextResponse.json({ error: `Unknown store "${storeParam}"` }, { status: 400 });
 
+  // Drive-thru and Jolt days serve every store; loaded once, alongside Slack.
+  const shared = loadSharedDays(start, end);
+
   const stores = await mapLimit(one ? [one] : BONUS_STORES, STORE_CONCURRENCY,
     async (store) => {
       try {
@@ -86,15 +89,10 @@ export async function GET(req: NextRequest) {
           ),
         }));
 
-        // Accuracy: past days from the nightly checks, today checked live.
-        const lastStored = end < today ? end : addDays(today, -1);
-        const [stored, live] = await Promise.all([
-          start <= lastStored ? getChecks(store.storeId, start, lastStored) : new Map<string, ReportCheck>(),
-          end >= today
-            ? checkStoreReports(store, timeZone, messages, today, today)
-            : new Map<string, ReportCheck>(),
-        ]);
-        const checks = new Map([...stored, ...live]);
+        // Accuracy, worked out now from the data the tabs show — stored days
+        // from the database, today live — never from saved results, so a
+        // check can't disagree with a tab (Josh, 2026-10-30).
+        const checks = await checkStoreReports(store, timeZone, messages, start, end, { shared: await shared });
         // % Accurate is by item, not by report (Josh, 2026-10-29): every figure
         // a report posted counts once, so a report with one figure off is 9/10
         // rather than a miss. "Data not available" counts as correct. A report
