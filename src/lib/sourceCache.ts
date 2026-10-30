@@ -11,12 +11,21 @@ import { businessDateISO } from "@/lib/businessDay";
  *
  * A day is final at 12:00 UTC (7 AM Central) the next day: past PAR's 2:15 AM
  * end of day, plus the hours BerryAI and Jolt take to catch up. A copy fetched
- * before then refreshes after FRESH_MS, so a day read at 3 AM doesn't stick.
+ * before then refreshes once it's older than its source's refreshMs, so a day
+ * read at 3 AM doesn't stick.
+ *
+ * Jolt gets one settling day on top (Josh, 2026-10-30): a list can be finished
+ * late, after its deadline day is over, and should still show without anyone
+ * pressing Refresh. Its copy refreshes hourly until 7 AM two mornings later.
  */
 
 export type CacheSource = "par_hourly" | "par_cash" | "jolt_store_lists";
 
-const FRESH_MS = 5 * 60_000;
+const SETTLING: Record<CacheSource, { extraDays: number; refreshMs: number }> = {
+  par_hourly: { extraDays: 0, refreshMs: 5 * 60_000 },
+  par_cash: { extraDays: 0, refreshMs: 5 * 60_000 },
+  jolt_store_lists: { extraDays: 1, refreshMs: 60 * 60_000 },
+};
 
 /** How long a day stays here. Slack keeps 90 days, and the checks are the reason for storing. */
 export const KEEP_DAYS = 120;
@@ -54,8 +63,10 @@ export function isPastDay(day: string): boolean {
 }
 
 /** A stored copy that can be served without going back to the source. */
-function usable(lastDate: string, fetchedAt: Date): boolean {
-  return fetchedAt.getTime() >= finalAfter(lastDate) || Date.now() - fetchedAt.getTime() < FRESH_MS;
+function usable(source: CacheSource, lastDate: string, fetchedAt: Date): boolean {
+  const { extraDays, refreshMs } = SETTLING[source];
+  const final = finalAfter(lastDate) + extraDays * 86_400_000;
+  return fetchedAt.getTime() >= final || Date.now() - fetchedAt.getTime() < refreshMs;
 }
 
 const isoDate = (v: string | Date) => (typeof v === "string" ? v.slice(0, 10) : v.toISOString().slice(0, 10));
@@ -78,7 +89,7 @@ export async function readThrough<T>(
     const rows = (await sql`
       SELECT payload, fetched_at FROM source_cache WHERE source = ${source} AND key = ${key}
     `) as { payload: T; fetched_at: string }[];
-    if (rows[0] && usable(lastDate, new Date(rows[0].fetched_at))) return rows[0].payload;
+    if (rows[0] && usable(source, lastDate, new Date(rows[0].fetched_at))) return rows[0].payload;
   }
   const value = await fetch();
   await sql`
@@ -104,7 +115,7 @@ export async function readMany(
     SELECT key, last_date, fetched_at, payload FROM source_cache
     WHERE source = ${source} AND key = ANY(${keys}::text[])
   `) as { key: string; last_date: string | Date; fetched_at: string; payload: unknown }[];
-  return new Map(rows.filter((r) => usable(isoDate(r.last_date), new Date(r.fetched_at))).map((r) => [r.key, r.payload]));
+  return new Map(rows.filter((r) => usable(source, isoDate(r.last_date), new Date(r.fetched_at))).map((r) => [r.key, r.payload]));
 }
 
 /**
@@ -130,7 +141,7 @@ export async function readManyPaths(
   `) as { key: string; last_date: string | Date; fetched_at: string; picked: unknown[][] }[];
   const out = new Map<string, Record<string, unknown[]>>();
   for (const r of rows) {
-    if (!usable(isoDate(r.last_date), new Date(r.fetched_at))) continue;
+    if (!usable(source, isoDate(r.last_date), new Date(r.fetched_at))) continue;
     out.set(r.key, Object.fromEntries(names.map((n, i) => [n, r.picked[i] ?? []])));
   }
   return out;
