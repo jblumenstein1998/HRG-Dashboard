@@ -180,6 +180,12 @@ try {
   const bareCurrent = F.parseReportFields("Net sales: $4,000\nProductivity: $60.00\nCurrent Day:\nSales: $5,100\nProductivity: $70.00");
   check("bare sales and productivity under Current Day",
     [bareCurrent.netSales, bareCurrent.splh, bareCurrent.salesProjection, bareCurrent.productivityProjection], [4000, 60, 5100, 70]);
+  const jeff1029 = F.parseReportFields(
+    "Net sales 5582.86\nComp -2.99\n86.32/72.32/79.5\nProductivity 79.13\nTplh 6.38\nAverage $17.67\nThirdparty: 20.79\nTotal window 1:15\nTotal lane 3:19\nJolt 100%\nPj sales 5582.86\nPp 53.55\nCash 2.31 over",
+  );
+  check("jefferson 'Pj sales' / 'Pp'",
+    [jeff1029.salesProjection, jeff1029.productivityProjection, jeff1029.splh, jeff1029.netSales, jeff1029.cashOverShort],
+    [5582.86, 53.55, 79.13, 5582.86, 2.31]);
   check("misspelt 'projecttion'", F.parseReportFields("Net 4257\nSales projecttion4186\nProd projection 63.94").salesProjection, 4186);
   check("a blank projection reads as none",
     [F.parseReportFields("• Sales projection:\n• Productivity projection:").salesProjection,

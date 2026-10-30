@@ -63,11 +63,13 @@ const SPECS: Record<Exclude<keyof ReportFields, "hourly" | "windowSecs" | "laneS
   // "Sales projection- $3894", "Sale projection 3973", "Projected sales:11,441",
   // "*Sales projection$11.054.28*", Jefferson's "PJ: 6,863.18"
   // (any spelling of "project…": Brentwood typed "Sales projecttion4186")
-  salesProjection: { labels: /\bsales?\s*project[a-z]*|projected\s*sales|^\W*PJ\b/i },
+  // Jefferson also writes "Pj sales 5582.86".
+  salesProjection: { labels: /\bsales?\s*project[a-z]*|projected\s*sales|^\W*PJ(?:\s*sales?)?\b/i },
   // "Prod projection- 62.3", "*Productivity projections 75.78*", "Projected prod:$88.93",
-  // "Projected SPLH: 62.52" (Beach), Jefferson's "(SPLH) P.P: 67.94"
+  // "Projected SPLH: 62.52" (Beach), Jefferson's "(SPLH) P.P: 67.94" and "Pp 53.55"
+  // (PP only at the start of a line, so it can't catch a stray "pp" elsewhere)
   productivityProjection: {
-    labels: /\bprod(?:uctivity)?\s*project[a-z]*|projected\s*(?:prod(?:uctivity)?|splh)\b|\bP\.\s?P\b/i,
+    labels: /\bprod(?:uctivity)?\s*project[a-z]*|projected\s*(?:prod(?:uctivity)?|splh)\b|^\W*(?:\(splh\)\s*)?P\.?\s?P\b/i,
   },
 };
 
@@ -157,8 +159,9 @@ const ANY_PROJECTION_RE = new RegExp(`${SPECS.salesProjection.labels.source}|${S
 /**
  * The morning report has two halves, per the Slack Reporting doc: the full
  * previous day, then "Current Day" — today's projections. The split is read
- * from the report itself: the "Current Day" heading, or failing that the first
- * projection line (Beach has no heading).
+ * from the report itself: the "Current Day" heading. Without one (Beach,
+ * Jefferson) only the projection lines are current-day — Jefferson puts
+ * "Cash 2.31 over" after its "Pj sales / Pp" lines, and that is yesterday's.
  *
  * Everything under it is a projection whatever it is called. Oyster's
  * 10/29 report reads "Current Day / Sales Projections $6645.15 / Productivity
@@ -167,9 +170,12 @@ const ANY_PROJECTION_RE = new RegExp(`${SPECS.salesProjection.labels.source}|${S
  * are read only from above it, so a projection can't be checked as an actual.
  */
 function splitCurrentDay(rows: string[]): { previous: string[]; current: string[] } {
-  let at = rows.findIndex((l) => CURRENT_DAY_RE.test(l));
-  if (at < 0) at = rows.findIndex((l) => ANY_PROJECTION_RE.test(l));
-  return at < 0 ? { previous: rows, current: [] } : { previous: rows.slice(0, at), current: rows.slice(at) };
+  const at = rows.findIndex((l) => CURRENT_DAY_RE.test(l));
+  if (at >= 0) return { previous: rows.slice(0, at), current: rows.slice(at) };
+  return {
+    previous: rows.filter((l) => !ANY_PROJECTION_RE.test(l)),
+    current: rows.filter((l) => ANY_PROJECTION_RE.test(l)),
+  };
 }
 
 export function parseReportFields(text: string): ReportFields {
