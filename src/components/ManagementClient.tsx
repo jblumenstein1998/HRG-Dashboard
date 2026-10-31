@@ -124,7 +124,7 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
   const [data, setData] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "position", dir: "asc" });
+  const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "zcases", dir: "desc" });
   // Only the newest request may land, so a slow range can't overwrite a quick one.
   const latest = useRef(0);
 
