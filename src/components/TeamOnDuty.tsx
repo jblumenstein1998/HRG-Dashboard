@@ -33,6 +33,12 @@ type TeamResponse = {
   error: string | null;
 };
 
+/** The tiers shown, most senior first. Crew and Other are left out. */
+const LEADER_TIERS = ["leadership", "directors", "managers"].map((key) => {
+  const g = JOB_GROUPS.find((j) => j.key === key)!;
+  return { key: g.key, label: g.label };
+});
+
 const clock = (minutes: number) => {
   const h24 = Math.floor(minutes / 60) % 24;
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
@@ -73,10 +79,25 @@ export function TeamButton({
  * "currently clocked in" cards (lib/staffGroups), so a person is the same
  * thing on every tab.
  *
- * `note` says what the window is ("guest's visit time", "daypart 2"); `narrow`
- * keeps the tiers in one column for a panel inside a card.
+ * Leaders only — Leadership, Directors, Managers. The question every caller is
+ * asking is who was in charge, and crew made the panel tall without answering
+ * it. "Other" (not linked to Workstream, so no known tier) goes with them.
+ *
+ * `note` says what the window is ("guest's visit time", "daypart 2").
+ * `layout` fits the panel to its space: "row" puts the three tiers side by
+ * side, always all three so the columns line up panel to panel, for full-width
+ * rows (ZCases, Jolt); "stacked" keeps them in one column and drops empty
+ * tiers, for tight spots (a drive-thru card, the Slack report grid).
  */
-export function TeamPanel({ url, note, narrow = false }: { url: string; note: string; narrow?: boolean }) {
+export function TeamPanel({
+  url,
+  note,
+  layout = "row",
+}: {
+  url: string;
+  note: string;
+  layout?: "row" | "stacked";
+}) {
   const [data, setData] = useState<TeamResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,55 +124,63 @@ export function TeamPanel({ url, note, narrow = false }: { url: string; note: st
     data.startMinutes === data.endMinutes
       ? `at ${clock(data.startMinutes)}`
       : `${clock(data.startMinutes)}–${clock(data.endMinutes)}`;
-  // Most senior first — the question here is who was in charge. Other stays
-  // last: it is people Workstream can't place, not a tier.
-  const sections = [
-    ...[...JOB_GROUPS].reverse().map((g) => ({ key: g.key, label: g.label })),
-    { key: "other", label: "Other" },
-  ]
+  // Most senior first.
+  const row = layout === "row";
+  const sections = [...LEADER_TIERS]
     .map((s) => ({ ...s, people: data.team.filter((p) => groupOf(p.position) === s.key) }))
-    .filter((s) => s.people.length > 0);
+    .filter((s) => row || s.people.length > 0);
+  const leaders = sections.reduce((n, s) => n + s.people.length, 0);
 
   return (
     <div className="rounded-md border border-gray-200 bg-white px-3 py-2">
       <div className="text-[11px] text-gray-500">
-        On the clock {when}, {Number(m)}/{Number(d)} — {note}
+        Leaders on the clock {when}, {Number(m)}/{Number(d)} — {note}
         {data.wholeHour && " (given to the hour)"}
       </div>
-      {data.team.length === 0 ? (
-        <div className="py-1.5 text-xs text-gray-500">Nobody was on the clock at that time.</div>
+      {leaders === 0 ? (
+        <div className="py-1.5 text-xs text-gray-500">No leadership, directors or managers on the clock then.</div>
       ) : (
-        <div className={`mt-1.5 grid gap-2 ${narrow ? "" : "sm:grid-cols-2"}`}>
+        <div className={`mt-1.5 grid gap-2 ${row ? "sm:grid-cols-3" : ""}`}>
           {sections.map((s) => (
-            <div key={s.key} className={`rounded-lg border ${GROUP_TONE[s.key] ?? GROUP_TONE.other}`}>
+            <div key={s.key} className={`rounded-lg border ${GROUP_TONE[s.key]}`}>
               <div className="px-2.5 py-1 flex items-baseline gap-2 border-b border-black/5">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-700">{s.label}</span>
                 <span className="text-[11px] text-gray-500">{s.people.length}</span>
               </div>
-              <ul className="divide-y divide-black/5">
-                {s.people.map((p) => (
-                  <li
-                    key={`${p.employeeId ?? p.name}|${p.startLabel}`}
-                    className="px-2.5 py-1 flex items-baseline gap-2 text-[12.5px]"
-                  >
-                    <span className="font-medium text-gray-900 truncate">
-                      {p.name}
-                      {titleOf(p.position, p.job) && (
-                        <span className="font-normal text-gray-500">
-                          {" — "}
-                          {titleOf(p.position, p.job)}
+              {s.people.length === 0 ? (
+                <div className="px-2.5 py-1 text-[12.5px] text-gray-400">—</div>
+              ) : (
+                <ul className="divide-y divide-black/5">
+                  {s.people.map((p) => (
+                    <li
+                      key={`${p.employeeId ?? p.name}|${p.startLabel}`}
+                      // In a row the columns are a third wide, so the shift
+                      // times drop under the name rather than squeezing it.
+                      className={`px-2.5 py-1 text-[12.5px] ${row ? "" : "flex items-baseline gap-2"}`}
+                    >
+                      <div className={`flex items-baseline gap-2 min-w-0 ${row ? "" : "contents"}`}>
+                        <span className="font-medium text-gray-900 truncate">
+                          {p.name}
+                          {titleOf(p.position, p.job) && (
+                            <span className="font-normal text-gray-500">
+                              {" — "}
+                              {titleOf(p.position, p.job)}
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </span>
-                    {p.onBreakThroughout && (
-                      <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
-                    )}
-                    <span className="ml-auto text-[11px] text-gray-500 tabular-nums whitespace-nowrap">
-                      {p.startLabel}–{p.endLabel}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                        {p.onBreakThroughout && (
+                          <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
+                        )}
+                      </div>
+                      <span
+                        className={`text-[11px] text-gray-500 tabular-nums whitespace-nowrap ${row ? "block" : "ml-auto"}`}
+                      >
+                        {p.startLabel}–{p.endLabel}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ))}
         </div>

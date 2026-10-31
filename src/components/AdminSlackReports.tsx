@@ -633,7 +633,7 @@ function StoreDetail({
               key={team}
               url={`/api/team-on-duty?store=${row.storeId}&date=${teamDate}&start=${teamMinutes}&end=${teamMinutes}`}
               note={`${SLOT_SHORT[teamSlot!]} report due`}
-              narrow
+              layout="stacked"
             />
           </div>
         )}

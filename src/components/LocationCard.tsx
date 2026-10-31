@@ -237,7 +237,7 @@ function DaypartView({
                   // Daypart ends are exclusive; the route's are inclusive.
                   url={`/api/team-on-duty?store=${encodeURIComponent(store)}&date=${teamDate}&start=${slot!.startMinutes}&end=${slot!.endMinutes - 1}`}
                   note={`daypart ${dp}${slot!.nickname ? ` (${slot!.nickname})` : ""}`}
-                  narrow
+                  layout="stacked"
                 />
               )}
             </Fragment>
