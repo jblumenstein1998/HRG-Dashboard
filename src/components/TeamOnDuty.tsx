@@ -103,8 +103,10 @@ export function TeamPanel({ url, note, narrow = false }: { url: string; note: st
     data.startMinutes === data.endMinutes
       ? `at ${clock(data.startMinutes)}`
       : `${clock(data.startMinutes)}–${clock(data.endMinutes)}`;
+  // Most senior first — the question here is who was in charge. Other stays
+  // last: it is people Workstream can't place, not a tier.
   const sections = [
-    ...JOB_GROUPS.map((g) => ({ key: g.key, label: g.label })),
+    ...[...JOB_GROUPS].reverse().map((g) => ({ key: g.key, label: g.label })),
     { key: "other", label: "Other" },
   ]
     .map((s) => ({ ...s, people: data.team.filter((p) => groupOf(p.position) === s.key) }))
