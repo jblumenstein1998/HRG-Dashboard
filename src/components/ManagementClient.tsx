@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
+import { PERIODS } from "@/lib/fiscal";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import type { Tab } from "@/lib/users/tabs";
 
@@ -37,22 +38,47 @@ type Row = {
 type Report = {
   start: string;
   end: string;
-  label: string;
   slackFrom: string | null;
+  clampedFrom: string | null;
   rows: Row[];
   warnings: string[];
   error?: string;
 };
 
-const RANGES = [
-  { key: "yesterday", label: "Yesterday" },
-  { key: "wtd", label: "WTD" },
-  { key: "last_week", label: "Last Week" },
-  { key: "t7", label: "T7" },
-  { key: "mtd", label: "PTD" },
-  { key: "last_period", label: "Last Period" },
-] as const;
-type RangeKey = (typeof RANGES)[number]["key"];
+// ── Ranges: the Admin tab's Slack-report controls, the same choices and bounds ─
+
+type Range = { start: string; end: string };
+
+/** Slack keeps 90 days, so no range starts earlier than that. */
+const HISTORY_DAYS = 90;
+
+function toIso(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function shift(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return toIso(new Date(y, m - 1, d + days));
+}
+const today = () => toIso(new Date());
+const yesterday = () => shift(today(), -1);
+const oldest = () => shift(today(), -(HISTORY_DAYS - 1));
+
+function ptd(): Range {
+  const p = PERIODS.find((q) => q.start <= today() && today() <= q.end);
+  return { start: p?.start ?? today(), end: today() };
+}
+function lastWeek(): Range {
+  const t = new Date();
+  const thisMonday = toIso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() + 6) % 7)));
+  return { start: shift(thisMonday, -7), end: shift(thisMonday, -1) };
+}
+
+const QUICK: { key: string; label: string; range: () => Range }[] = [
+  { key: "today", label: "Today", range: () => ({ start: today(), end: today() }) },
+  { key: "yesterday", label: "Yesterday", range: () => ({ start: yesterday(), end: yesterday() }) },
+  { key: "last_week", label: "Last Week", range: lastWeek },
+  { key: "ptd", label: "PTD", range: ptd },
+];
 
 type ColKey =
   | "name" | "position" | "store" | "pay"
@@ -60,10 +86,18 @@ type ColKey =
 
 const COUNT_COLS: { key: ColKey; label: string; title: string }[] = [
   { key: "zcases", label: "zCases", title: "zCases whose guest visit fell during their shift" },
-  { key: "slowLane", label: "Total time > 1 min off", title: "Dayparts where total lane time was more than 1:00 slower than the 100% goal" },
-  { key: "slowWindow", label: "Window > 30s off", title: "Dayparts where window time was more than 0:30 slower than the 100% goal" },
-  { key: "joltProtein", label: "Jolt Protein", title: "Protein Traceability lists missed while the list was open" },
-  { key: "joltTimeTemp", label: "Jolt Time Temp", title: "Time/Temperature lists missed while the list was open" },
+  {
+    key: "slowLane",
+    label: "Total time > 1 min over goal",
+    title: "Dayparts where total lane time was more than 1:00 over the 100% goal (3:40 at ≤ $85k/week, 4:00 above)",
+  },
+  {
+    key: "slowWindow",
+    label: "Window > 30s over goal",
+    title: "Dayparts where window time was more than 0:30 over the 100% goal (1:10 at ≤ $45k/week, 0:57 above)",
+  },
+  { key: "joltProtein", label: "Jolt Protein", title: "Protein Traceability lists missed or late, while the list was open" },
+  { key: "joltTimeTemp", label: "Jolt Time Temp", title: "Time/Temperature lists missed or late, while the list was open" },
   { key: "slackMissedLate", label: "Slack missed / late", title: "Slack reports missed or late, on the clock at the deadline" },
   { key: "slackAccuracyPct", label: "Slack % accuracy", title: "Figures accurate ÷ figures posted, on reports due while on the clock" },
 ];
@@ -84,29 +118,49 @@ function pay(r: Row): string {
 export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[] }) {
   const router = useRouter();
   const storeFilter = useStoreFilter(leaders);
-  const [range, setRange] = useState<RangeKey>("last_week");
+  const [quick, setQuick] = useState<string | null>("last_week");
+  const [start, setStart] = useState(() => lastWeek().start);
+  const [end, setEnd] = useState(() => lastWeek().end);
   const [data, setData] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "position", dir: "asc" });
+  // Only the newest request may land, so a slow range can't overwrite a quick one.
+  const latest = useRef(0);
 
-  useEffect(() => {
-    let live = true;
+  async function load(r: Range) {
+    const id = ++latest.current;
     setLoading(true);
     setError(null);
-    fetch(`/api/management?range=${range}`)
-      .then(async (r) => {
-        const body = (await r.json()) as Report;
-        if (!live) return;
-        if (!r.ok || body.error) setError(body.error ?? `HTTP ${r.status}`);
-        else setData(body);
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => live && setLoading(false));
-    return () => {
-      live = false;
-    };
-  }, [range]);
+    try {
+      const res = await fetch(`/api/management?start=${r.start}&end=${r.end}`);
+      const body = (await res.json()) as Report;
+      if (id !== latest.current) return;
+      if (!res.ok || body.error) throw new Error(body.error ?? `HTTP ${res.status}`);
+      setData(body);
+      setStart(body.start);
+      setEnd(body.end);
+    } catch (e) {
+      if (id === latest.current) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (id === latest.current) setLoading(false);
+    }
+  }
+
+  // Last Week on arrival: a whole week is the usual question here.
+  useEffect(() => {
+    load(lastWeek());
+  }, []);
+
+  function apply(r: Range, key: string | null) {
+    setQuick(key);
+    setStart(r.start);
+    setEnd(r.end);
+    load(r);
+  }
+
+  // Finished periods that start inside Slack's 90 days; PTD covers the current one.
+  const periodOptions = PERIODS.filter((p) => p.start >= oldest() && p.end <= yesterday()).slice().reverse();
 
   const rows = useMemo(() => {
     const visible = (data?.rows ?? []).filter((r) =>
@@ -178,21 +232,79 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 ml-auto">
-            {RANGES.map((r) => (
-              <button
-                key={r.key}
-                onClick={() => setRange(r.key)}
-                className={`text-xs px-2.5 py-1 rounded-lg border transition ${
-                  range === r.key
-                    ? "bg-gray-900 border-gray-900 text-white"
-                    : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-            <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} stores />
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <StoreFilterPicker
+              leaders={leaders}
+              value={storeFilter.value}
+              onChange={storeFilter.setValue}
+              className="py-1.5"
+              stores
+            />
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+              {QUICK.map((b) => (
+                <button
+                  key={b.key}
+                  onClick={() => apply(b.range(), b.key)}
+                  disabled={loading}
+                  className={`text-xs px-3 py-1.5 transition disabled:opacity-50 ${
+                    quick === b.key ? "bg-red-700 text-white font-medium" : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={quick?.startsWith("p:") ? quick : ""}
+              onChange={(e) => {
+                const p = PERIODS.find((q) => `p:${q.period}` === e.target.value);
+                if (p) apply({ start: p.start, end: p.end }, e.target.value);
+              }}
+              disabled={loading}
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300"
+            >
+              <option value="">Period…</option>
+              {periodOptions.map((p) => (
+                <option key={p.period} value={`p:${p.period}`}>
+                  P{p.period}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={start}
+                min={oldest()}
+                max={end}
+                onChange={(e) => {
+                  setStart(e.target.value);
+                  setQuick(null);
+                }}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+              <span className="text-xs text-gray-400">to</span>
+              <input
+                type="date"
+                value={end}
+                min={start}
+                max={today()}
+                onChange={(e) => {
+                  setEnd(e.target.value);
+                  setQuick(null);
+                }}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
+
+            <button
+              onClick={() => apply({ start, end }, quick)}
+              disabled={loading}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+            >
+              {loading ? "Reading…" : "Fetch"}
+            </button>
           </div>
         </div>
       </header>
@@ -200,9 +312,9 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-3">
         <p className="text-xs text-gray-500">
           Leadership and Directors from Workstream. Each count is the events at any store while that person was on the
-          PAR clock — the same people the team-on-duty buttons show. Ranges run through yesterday.
-          {data?.slackFrom && (
-            <span className="text-amber-700"> Slack only keeps 90 days, so the Slack columns start {fmtDate(data.slackFrom)}.</span>
+          PAR clock — the same people the team-on-duty buttons show. Today counts against PAR&apos;s live clock.
+          {data?.clampedFrom && (
+            <span className="text-amber-700"> Slack only keeps 90 days, so the range starts {fmtDate(data.start)}.</span>
           )}
         </p>
 

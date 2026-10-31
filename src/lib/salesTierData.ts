@@ -115,3 +115,18 @@ export async function getSalesTierData(rangeKey: RangeKey): Promise<SalesTierDat
 
   return { salesByStoreId, productivityByStoreId, driveThruLabel, salesLabel };
 }
+
+/**
+ * Just the tier sales, for any start/end rather than a named range — the
+ * Management tab takes arbitrary dates. Same weekly-equivalent rule.
+ */
+export async function getTierSalesForDates(start: string, end: string): Promise<Record<string, number>> {
+  const t7 = resolveDateBounds("t7" as RangeKey);
+  const out: Record<string, number> = {};
+  await Promise.all(
+    PAR_LOCATIONS.map(async (loc) => {
+      out[loc.storeId] = (await getTierSales(loc.storeId, start, end, t7)).value;
+    }),
+  );
+  return out;
+}

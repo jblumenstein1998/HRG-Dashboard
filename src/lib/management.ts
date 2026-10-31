@@ -9,7 +9,7 @@
  *
  *   zCases                the guest's visit (the whole hour when it came on the hour)
  *   slow dayparts         the daypart's hours on that day
- *   Jolt Protein / Time Temp, missed   shown → deadline
+ *   Jolt Protein / Time Temp, missed or late   shown → deadline
  *   Slack missed / late   the slot's deadline
  *   Slack accuracy        the slot's deadline, figures accurate ÷ figures posted
  *
@@ -17,13 +17,14 @@
  * in those panels. Overlap is decided in one SQL join against par_shifts, so
  * the work is a handful of reads however many events there are.
  *
- * The range runs through yesterday: par_shifts is filled nightly, so today's
- * shifts aren't there to attribute anything to.
+ * par_shifts is filled nightly, so a store-day it doesn't hold yet — today,
+ * and yesterday until the morning cron — is read from PAR live instead, the
+ * way the Staffing tab's "Now" is.
  */
 
 import { sql } from "./db";
 import { addDays, localMidnight, SLACK_SLOTS, type SlackSlot } from "./slackReports";
-import { PAR_LOCATIONS, getStoreTimeZone } from "./par";
+import { PAR_LOCATIONS, getStoreTimeZone, getShiftsRecent } from "./par";
 import { getLinkedRoster } from "./workstreamRoster";
 import { fetchStoreLists } from "./jolt";
 import { cachedDriveThruDays, dayTimeRange, getDriveThruMetrics, type DriveThruPayload } from "./berryData";
@@ -188,7 +189,7 @@ async function daypartEvents(
   return out;
 }
 
-/** Missed Protein Traceability and Time/Temperature lists. */
+/** Missed or late Protein Traceability and Time/Temperature lists. */
 async function joltEvents(start: string, end: string): Promise<Event[]> {
   const report = await fetchStoreLists(start, end);
   const out: Event[] = [];
@@ -196,7 +197,7 @@ async function joltEvents(start: string, end: string): Promise<Event[]> {
     const storeId = storeIdByName.get(store.store.toLowerCase());
     if (!storeId) continue;
     for (const row of store.rows) {
-      if (row.status !== "missed" || row.deadline === null) continue;
+      if ((row.status !== "missed" && row.status !== "late") || row.deadline === null) continue;
       const kind: Kind | null = /protein/i.test(row.title)
         ? "joltProtein"
         : /time\s*\/?\s*temp/i.test(row.title)
@@ -291,6 +292,66 @@ async function leaders(): Promise<{ people: Leader[]; byParKey: Map<string, stri
   return { people, byParKey };
 }
 
+// ── Shifts par_shifts doesn't hold yet ───────────────────────────────────────
+
+/** Most store-days read live in one report — today and yesterday is 26. */
+const MAX_LIVE_STORE_DAYS = 60;
+
+type LiveShift = { storeId: string; date: string; employeeId: string; from: number; to: number };
+
+/**
+ * Leaders' shifts for every store-day in the range (and the day before, for
+ * overnight closes) that par_shift_days has no good copy of — today always,
+ * yesterday until the nightly cron. Read from PAR as Staffing reads "Now":
+ * cached two minutes, an open shift running to the present.
+ */
+async function liveLeaderShifts(
+  start: string,
+  end: string,
+  byParKey: Map<string, string>,
+  warnings: string[],
+): Promise<LiveShift[]> {
+  const stored = new Set(
+    ((await sql`
+      SELECT store_id, business_date::text AS d FROM par_shift_days
+      WHERE status = 'ok' AND business_date BETWEEN ${addDays(start, -1)}::date AND ${end}::date
+    `) as { store_id: string; d: string }[]).map((r) => `${r.store_id}|${r.d}`),
+  );
+  const missing = PAR_LOCATIONS.flatMap((loc) =>
+    daysIn(addDays(start, -1), end)
+      .filter((d) => !stored.has(`${loc.storeId}|${d}`))
+      .map((d) => ({ storeId: loc.storeId, date: d })),
+  );
+  if (missing.length > MAX_LIVE_STORE_DAYS) {
+    warnings.push(`${missing.length} store-days of shifts aren't stored yet; read the newest ${MAX_LIVE_STORE_DAYS} from PAR`);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const read = await mapLimit(
+    missing.sort((a, b) => b.date.localeCompare(a.date)).slice(0, MAX_LIVE_STORE_DAYS),
+    5,
+    async ({ storeId, date }) => {
+      try {
+        const shifts = await getShiftsRecent(storeId, date);
+        return shifts
+          .filter((s) => s.employeeId && byParKey.has(`${storeId}|${s.employeeId}`))
+          .map((s) => ({
+            storeId,
+            date,
+            employeeId: s.employeeId!,
+            from: localInstant(storeId, date, s.startMinutes),
+            // endMinutes is in the same frame as startMinutes (an overnight
+            // close passes 1440); an open shift is still going.
+            to: s.isOpen ? now : localInstant(storeId, date, s.endMinutes),
+          }));
+      } catch (err) {
+        warnings.push(`PAR shifts ${storeNameById.get(storeId)} ${date}: ${err instanceof Error ? err.message : String(err)}`);
+        return [];
+      }
+    },
+  );
+  return read.flat();
+}
+
 // ── The report ───────────────────────────────────────────────────────────────
 
 export async function getManagementReport(
@@ -298,10 +359,10 @@ export async function getManagementReport(
   endRequested: string,
   tierSales: Record<string, number>,
 ): Promise<ManagementReport> {
-  const yesterday = addDays(businessDateISO(), -1);
-  const end = endRequested > yesterday ? yesterday : endRequested;
+  const today = businessDateISO();
+  const end = endRequested > today ? today : endRequested;
   const warnings: string[] = [];
-  if (start > end) return { start, end, slackFrom: null, rows: [], warnings: ["Nothing finished in this range yet."] };
+  if (start > end) return { start, end, slackFrom: null, rows: [], warnings: ["Nothing in this range yet."] };
 
   const slackOldest = addDays(businessDateISO(), -(SLACK_HISTORY_DAYS - 1));
   const slackStart = start < slackOldest ? slackOldest : start;
@@ -320,6 +381,7 @@ export async function getManagementReport(
     slackStart <= end ? settle("Slack", slackEvents(slackStart, end, warnings)) : Promise.resolve([]),
   ]);
   const events = eventLists.flat();
+  const live = await liveLeaderShifts(start, end, byParKey, warnings);
 
   // Who worked at all in the range, so a row of zeros can say why.
   const parKeys = [...byParKey.keys()];
@@ -332,6 +394,7 @@ export async function getManagementReport(
         `) as { store_id: string; employee_id: string }[]).map((r) => byParKey.get(`${r.store_id}|${r.employee_id}`)!)
       : [],
   );
+  for (const s of live) if (s.date >= start) worked.add(byParKey.get(`${s.storeId}|${s.employeeId}`)!);
   const matched = new Set(byParKey.values());
 
   // Every (event, leader shift) overlap in one join. Shifts are PAR's UTC
@@ -356,6 +419,14 @@ export async function getManagementReport(
           AND s.business_date BETWEEN ${addDays(start, -1)}::date AND ${end}::date
       `) as { idx: number; store_id: string; employee_id: string }[])
     : [];
+  // And the days par_shifts doesn't hold yet, against PAR's live shifts.
+  events.forEach((e, idx) => {
+    for (const s of live) {
+      if (s.storeId === e.storeId && s.from <= e.to && s.to >= e.from) {
+        hits.push({ idx, store_id: s.storeId, employee_id: s.employeeId });
+      }
+    }
+  });
 
   // One count per event per person, however many of their shifts overlapped
   // it (a break splits a day into two).
