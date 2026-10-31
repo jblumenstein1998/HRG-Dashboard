@@ -93,6 +93,12 @@ export const GOOGLE_PLACE_IDS: Record<string, string> = {
   "57004": "ChIJ33C-l02guokR1E_xH7WF6DU", // Chesapeake — 2316 Chesapeake Square Ring Rd., Chesapeake, VA 23321
   "57006": "ChIJj8yitn2wuokRK72I8td8S3E", // Hillcrest — 125 Hillcrest Pkwy., Chesapeake, VA 23322
   "57007": "ChIJ77ptGADBuokRgqNLt4w7CbU", // Beach — 2332 Elson Green Ave., Virginia Beach, VA 23456
+  "53003": "ChIJ3bIZ8aa0WoYRDAudiuR_Nsc", // Killeen — 2150 S Clear Creek Rd, Killeen, TX 76549
+  "53004": "ChIJIxqkKW9rRYYRMJDOTPEu3Qg", // Temple — 2002 S 31st St, Temple, TX 76504
+  "53005": "ChIJacHQNXnFRIYRCCvFi5dOQfk", // Pflugerville — 1301 FM 685, Pflugerville, TX 78660
+  "62802": "ChIJV6cAxw2TXIYRKyWQ5IPIEd0", // Cibolo — 176 W Borgfeld Rd, Cibolo, TX 78108
+  "62804": "ChIJjcmR_1D1XIYR9ldVW15jBsk", // Windcrest — 7304 N Interstate 35, Windcrest, TX 78218
+  "62803": "ChIJk6rgmlZDXIYR1eZ3-ZqtgJA", // Alamo — 11903 Alamo Ranch Pkwy, San Antonio, TX 78253
 };
 
 /**
@@ -142,7 +148,7 @@ export const BONUS_STORES: BonusStore[] = [
   // right and the word is wrong; this is the one the evidence saved.
   { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006", workstreamLocationUuid: "51a81a04-d1e9-4746-9520-c92bbdd11bdc" },
   { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007", workstreamLocationUuid: "ab838180-2577-48d7-a77c-c2875a7fe625" },
-  // Texas — acquired October 2026. PAR and BerryAI are connected; Net-Chef
+  // Texas — acquired October 2026. PAR, BerryAI, SMG and Google are connected; Net-Chef
   // doesn't list them for HRG's login yet and Workstream uuids are unconfirmed.
   // Each null reads as "no data" for that vendor until its id is filled in here.
   //
