@@ -186,14 +186,18 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
     });
   }, [data, storeFilter.allowed, sort]);
 
-  const th = (key: ColKey, label: string, title?: string, align: "left" | "right" = "right") => (
+  // The count headers wrap, in a column about as wide as its numbers, so the
+  // whole table fits without scrolling sideways; the person columns don't.
+  const th = (key: ColKey, label: string, title?: string, align: "left" | "right" = "right", wrap = false) => (
     <th
       key={key}
       title={title}
       onClick={() =>
         setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: align === "left" ? "asc" : "desc" }))
       }
-      className={`px-3 py-2 font-medium cursor-pointer select-none whitespace-nowrap hover:text-gray-800 ${align === "right" ? "text-right" : "text-left"}`}
+      className={`px-3 py-2 font-medium cursor-pointer select-none hover:text-gray-800 align-bottom leading-tight ${
+        wrap ? "w-24 min-w-[5.5rem]" : "whitespace-nowrap"
+      } ${align === "right" ? "text-right" : "text-left"}`}
     >
       {label}
       {sort.key === key && <span className="ml-1 text-gray-400">{sort.dir === "asc" ? "▲" : "▼"}</span>}
@@ -338,7 +342,7 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
                 {th("position", "Position", undefined, "left")}
                 {th("store", "Store", undefined, "left")}
                 {th("pay", "Pay")}
-                {COUNT_COLS.map((c) => th(c.key, c.label, c.title))}
+                {COUNT_COLS.map((c) => th(c.key, c.label, c.title, "right", true))}
               </tr>
             </thead>
             <tbody className={loading ? "opacity-50" : ""}>
