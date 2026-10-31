@@ -11,6 +11,7 @@ import { CopyableTitle } from "@/components/CopyImageButton";
 import PosWeeklyTrendChart from "@/components/PosWeeklyTrendChart";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
 import { businessDate } from "@/lib/businessDay";
+import { avgCheck, compPct, productivity, tplh } from "@/lib/parFigures";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -413,9 +414,6 @@ const COMP_RANGE_COLS: { field: RangeField; label: string }[] = [
   { field: "ytd", label: "YTD" },
 ];
 
-function derivedCompPct(value: number, prior: number): number | null {
-  return prior === 0 ? null : ((value - prior) / prior) * 100;
-}
 
 // Group comp % is same-store. A store with nothing a year ago — one that opened
 // inside the window, as Portland did on 2026-10-05 — still adds to the group's
@@ -425,7 +423,7 @@ function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure 
   const value = stores.reduce((s, r) => s + r[field].value, 0);
   const prior = stores.reduce((s, r) => s + r[field].prior, 0);
   const compValue = stores.filter(r => r[field].prior > 0).reduce((s, r) => s + r[field].value, 0);
-  return { value, prior, compPct: derivedCompPct(compValue, prior) };
+  return { value, prior, compPct: compPct(compValue, prior) };
 }
 
 /**
@@ -586,15 +584,12 @@ type AvgCheckRaw = {
 };
 type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" | "TX" } & Record<RangeField, AvgCheckRaw>;
 
-function avgCheck(netSales: number, tx: number): number {
-  return tx > 0 ? netSales / tx : 0;
-}
 
 function deriveAvgCheckFigure(raw: AvgCheckRaw): MetricFigure {
   const value = avgCheck(raw.netSalesTY, raw.txTY);
   const prior = avgCheck(raw.netSalesLY, raw.txLY);
   const compValue = avgCheck(raw.compNetSalesTY ?? raw.netSalesTY, raw.compTxTY ?? raw.txTY);
-  return { value, prior, compPct: derivedCompPct(compValue, prior) };
+  return { value, prior, compPct: compPct(compValue, prior) };
 }
 
 function sumAvgCheckRaw(stores: StoreAvgCheckRaw[], field: RangeField): AvgCheckRaw {
@@ -793,10 +788,10 @@ function snapshotRangeLabel(range: SnapshotRange): string {
 }
 
 function deriveNetSalesFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.compNetSalesTY ?? r.netSalesTY, r.netSalesLY) };
+  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: compPct(r.compNetSalesTY ?? r.netSalesTY, r.netSalesLY) };
 }
 function deriveTxFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.compTxTY ?? r.txTY, r.txLY) };
+  return { value: r.txTY, prior: r.txLY, compPct: compPct(r.compTxTY ?? r.txTY, r.txLY) };
 }
 function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
   return deriveAvgCheckFigure(r);
@@ -804,10 +799,10 @@ function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
 // Productivity ($/labor hour) and TPLH (transactions/labor hour) are
 // this-year-only — the snapshot carries no prior-year labor hours.
 function deriveSplh(r: SnapshotRaw): number | null {
-  return r.laborHoursTY > 0 ? r.netSalesTY / r.laborHoursTY : null;
+  return productivity(r.netSalesTY, r.laborHoursTY);
 }
 function deriveSnapshotTplh(r: SnapshotRaw): number | null {
-  return r.laborHoursTY > 0 ? r.txTY / r.laborHoursTY : null;
+  return tplh(r.txTY, r.laborHoursTY);
 }
 function sumSnapshotRaw(stores: SnapshotRaw[]): SnapshotRaw {
   const clockedIn = stores.filter(r => r.clockedInTY != null);

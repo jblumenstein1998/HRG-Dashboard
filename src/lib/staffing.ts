@@ -45,7 +45,7 @@ import { sql } from "./db";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
 import { clockLabel, rosterAt, type StoreDay } from "./staffingRoster";
-import { storeHoursFor } from "./storeHours";
+import { storeHoursFor, type DayHours } from "./storeHours";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -464,6 +464,96 @@ export async function getStaffingAt(
     fetchedAt: Date.now(),
     workstreamSync,
   };
+}
+
+// ── Team on duty during a window ────────────────────────────────────────────
+
+/** Somebody on the clock at some point during a window, and how. */
+export type TeamMember = Omit<StaffOnClock, "payRate" | "wtdMinutes" | "wtdShifts" | "minutesElapsedAtQuery" | "onBreak" | "workstream"> & {
+  /** Workstream's title of record, where linked. */
+  position: string | null;
+  /** On a break for the whole window — present on paper, not on the floor. */
+  onBreakThroughout: boolean;
+};
+
+export type TeamDuring = {
+  storeId: string;
+  storeName: string;
+  localDate: string;
+  startMinutes: number;
+  endMinutes: number;
+  team: TeamMember[];
+  error: string | null;
+};
+
+/**
+ * Everyone on one store's clock at any minute from `startMinutes` to
+ * `endMinutes` (inclusive) of a local date, for tying something that happened
+ * at the store — a guest's visit, a missed list — to the people working it.
+ *
+ * `endMinutes` may pass 1439: minutes after midnight on the same business
+ * date, which is how a closing list due at 12:00 AM stays one window. The
+ * date's own shifts are measured in that frame already (an overnight close
+ * ends at 1575), so rosterAt answers them without change.
+ *
+ * The same store-day load and the same rosterAt the Staffing tab uses, asked
+ * once per minute of the window, so this can never disagree with that screen
+ * about who was on. Pay is left out: this is shown on tabs that aren't the
+ * Staffing tab, to people who don't see pay there.
+ */
+export async function getTeamDuring(
+  storeId: string,
+  localDate: string,
+  startMinutes: number,
+  endMinutes: number,
+): Promise<TeamDuring> {
+  const loc = PAR_LOCATIONS.find((l) => l.storeId === storeId);
+  const base = { storeId, storeName: loc?.name ?? storeId, localDate, startMinutes, endMinutes };
+  if (!loc) return { ...base, team: [], error: `Store ${storeId} isn't connected to PAR` };
+
+  // A past date reads stored history; only today's would touch PAR live.
+  const [day] = await withParPriority(PAR_PRIORITY.onClock, () => storeDaysFor(loc, [localDate], false));
+  if (day.error) return { ...base, team: [], error: day.error };
+
+  /*
+   * One entry per person, not per shift. Somebody who clocks out for a break
+   * and back in is two PAR shifts, and a window spanning the break found them
+   * both — the same name listed twice. Their shifts are merged into one span,
+   * first clock-in to last clock-out; the gap is a break, not a second person.
+   */
+  const byPerson = new Map<string, { shifts: Map<number, StaffOnClock>; breakMinutes: number; minutes: number }>();
+  for (let m = startMinutes; m <= endMinutes; m++) {
+    for (const p of rosterAt(day, m).onClock) {
+      const key = p.employeeId ?? p.name;
+      const seen = byPerson.get(key) ?? { shifts: new Map(), breakMinutes: 0, minutes: 0 };
+      seen.shifts.set(p.startMinutes, p);
+      seen.minutes++;
+      if (p.onBreak) seen.breakMinutes++;
+      byPerson.set(key, seen);
+    }
+  }
+
+  const team = [...byPerson.values()].map(({ shifts, breakMinutes, minutes }): TeamMember => {
+    const list = [...shifts.values()].sort((a, b) => a.startMinutes - b.startMinutes);
+    const first = list[0];
+    const last = list.reduce((a, b) => (b.isOpen || (!a.isOpen && b.endMinutes > a.endMinutes) ? b : a));
+    return {
+      employeeId: first.employeeId,
+      name: first.name,
+      job: first.job,
+      jobId: first.jobId,
+      startMinutes: first.startMinutes,
+      endMinutes: last.endMinutes,
+      startLabel: first.startLabel,
+      endLabel: last.endLabel,
+      isOpen: last.isOpen,
+      minutesWorked: list.reduce((sum, s) => sum + s.minutesWorked, 0),
+      position: first.workstream?.position ?? null,
+      onBreakThroughout: breakMinutes === minutes,
+    };
+  });
+  team.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
+  return { ...base, team, error: null };
 }
 
 // ── Hours by store by week ───────────────────────────────────────────────────
@@ -960,6 +1050,13 @@ export type MissedPunch = {
    * shown so the size of the correction is visible, not as a fact.
    */
   minutesWorked: number;
+  /**
+   * When the store closed that business date (lib/storeHours), in minutes past
+   * its midnight — past 1440 for a close after twelve. The moment the closing
+   * leaders should have seen everybody off the clock. Null if the store has no
+   * hours on file for the date.
+   */
+  closeMinutes: number | null;
 };
 
 export type StoreMissedPunches = {
@@ -987,9 +1084,12 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreMissedPunches> => {
       try {
-        const [employees, jobs, ...days] = await Promise.all([
+        const [employees, jobs, hours, ...days] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
+          // Only feeds the "team at close" button, so missing hours cost the
+          // button, not the report.
+          storeHoursFor(loc.storeId, dates).catch(() => new Map<string, DayHours | null>()),
           ...dates.map((d) => getShiftsHistory(loc.storeId, d)),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
@@ -1011,6 +1111,7 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
               endLabel: sh.isOpen ? "still open" : clockLabel(sh.endMinutes),
               stillOpen: sh.isOpen,
               minutesWorked: sh.minutesWorked,
+              closeMinutes: hours.get(businessDate)?.closeMinutes ?? null,
             });
           }
         });

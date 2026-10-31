@@ -38,6 +38,7 @@ export default function AdminClient({
   initialUsers,
   initialPositions,
   initialLeaders,
+  uses,
   allTabs,
   viewerId,
   viewerTabs,
@@ -45,6 +46,8 @@ export default function AdminClient({
   initialUsers: User[];
   initialPositions: Position[];
   initialLeaders: Leader[];
+  /** Uses in the last 30 days by user id; see usesLast30Days. */
+  uses: Record<string, number>;
   allTabs: Tab[];
   viewerId: string;
   viewerTabs: Tab[];
@@ -152,6 +155,13 @@ export default function AdminClient({
                   <th className="px-4 py-2 text-left font-semibold">Signs in as</th>
                   <th className="px-4 py-2 text-left font-semibold">Position</th>
                   <th className="px-4 py-2 text-left font-semibold">Last sign-in</th>
+                  {/* A use ends after 30 idle minutes — see usesLast30Days. */}
+                  <th
+                    className="px-4 py-2 text-right font-semibold"
+                    title="Separate times they used the dashboard; 30 minutes without a click, scroll or keypress ends a use"
+                  >
+                    Uses (30d)
+                  </th>
                   <th className="px-4 py-2 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
@@ -203,6 +213,9 @@ export default function AdminClient({
                       ) : (
                         !u.disabledAt && <div className="text-gray-400">Never signed in</div>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-gray-900">
+                      {uses[u.id] ?? 0}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       {/* You can't delete yourself — that's a one-way trip out

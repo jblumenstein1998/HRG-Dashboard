@@ -20,6 +20,7 @@ export const ALL_TABS = [
   "/zu",
   "/jolt",
   "/staffing",
+  "/management",
   "/admin-links",
 ] as const;
 export type Tab = (typeof ALL_TABS)[number];
@@ -36,6 +37,9 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/jolt": "Jolt",
   // Who is on the clock, from PAR's shift records.
   "/staffing": "Staffing",
+  // Each leader's zCases, slow dayparts, missed Jolt lists and Slack reports
+  // while they were on the clock.
+  "/management": "Management",
   // The route is /admin-links because /admin is the Users & Access screen; the
   // label is what people see, and this tab is "Admin".
   "/admin-links": "Admin",

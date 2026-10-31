@@ -113,6 +113,51 @@ async function createBonusSchema(): Promise<void> {
       snapshot     JSONB       NOT NULL
     )
   `;
+  // The edit lock on one store's scorecard for one period — not the pay lock
+  // above, which freezes a whole period, computed values included. No row means
+  // locked, so the entries that existed before this table keep standing.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bonus_store_locks (
+      store_id     TEXT        NOT NULL,
+      period_label TEXT        NOT NULL,
+      locked       BOOLEAN     NOT NULL,
+      changed_by   TEXT,
+      changed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (store_id, period_label)
+    )
+  `;
+  // Who held each position on a store's scorecard for a period, one row per
+  // person — a position can be held by two people, who split its bonus. See
+  // assignments.ts: a period with no rows reads the previous period's team.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bonus_team (
+      store_id        TEXT        NOT NULL,
+      period_label    TEXT        NOT NULL,
+      slot            INTEGER     NOT NULL,
+      position_id     TEXT        NOT NULL,
+      name            TEXT        NOT NULL,
+      workstream_uuid TEXT,
+      changed_by      TEXT,
+      changed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (store_id, period_label, slot)
+    )
+  `;
+  // Each store's period figures from a dropped-in P&L — see financials.ts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bonus_financials (
+      store_id            TEXT        NOT NULL,
+      period_label        TEXT        NOT NULL,
+      labor_pct           NUMERIC,
+      controllable_income NUMERIC,
+      ebitda              NUMERIC,
+      total_sales         NUMERIC,
+      lines               JSONB       NOT NULL,
+      source_file         TEXT,
+      uploaded_by         TEXT,
+      uploaded_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (store_id, period_label)
+    )
+  `;
   await sql`
     CREATE TABLE IF NOT EXISTS netchef_costs (
       store_id     TEXT        NOT NULL,
@@ -220,6 +265,60 @@ export async function saveInputs(writes: InputWrite[]): Promise<number> {
       updated_at = now()
   `;
   return writes.length;
+}
+
+/** Every manual entry for one store and period, overrides included. */
+export async function clearInputs(periodLabel: string, storeId: string): Promise<number> {
+  await ensureBonusSchema();
+  const rows = (await sql`
+    DELETE FROM bonus_inputs
+    WHERE period_label = ${periodLabel} AND store_id = ${storeId}
+    RETURNING criterion_id
+  `) as unknown[];
+  return rows.length;
+}
+
+// ── Store edit locks ─────────────────────────────────────────────────────────
+//
+// Josh's rules (2026-10-28), per store per period:
+//   locked    entries are read-only and kept; computed values refresh on load
+//   unlocked  entries can be typed and criteria switched between computed and
+//             manual; opening the scorecard while unlocked clears every manual
+//             entry for it, so it starts again from computed values
+// Locking is what keeps the entries.
+
+export async function isStoreLocked(periodLabel: string, storeId: string): Promise<boolean> {
+  await ensureBonusSchema();
+  const rows = (await sql`
+    SELECT locked FROM bonus_store_locks
+    WHERE period_label = ${periodLabel} AND store_id = ${storeId}
+  `) as { locked: boolean }[];
+  return rows[0]?.locked ?? true;
+}
+
+export async function setStoreLocked(
+  periodLabel: string,
+  storeId: string,
+  locked: boolean,
+  changedBy: string | null,
+): Promise<void> {
+  await ensureBonusSchema();
+  await sql`
+    INSERT INTO bonus_store_locks (store_id, period_label, locked, changed_by, changed_at)
+    VALUES (${storeId}, ${periodLabel}, ${locked}, ${changedBy}, now())
+    ON CONFLICT (store_id, period_label)
+    DO UPDATE SET locked = EXCLUDED.locked, changed_by = EXCLUDED.changed_by, changed_at = now()
+  `;
+}
+
+/** Stores whose scorecard for a period is currently unlocked for editing. */
+export async function listUnlockedStores(periodLabel: string): Promise<string[]> {
+  await ensureBonusSchema();
+  const rows = (await sql`
+    SELECT store_id FROM bonus_store_locks
+    WHERE period_label = ${periodLabel} AND locked = FALSE
+  `) as { store_id: string }[];
+  return rows.map((r) => r.store_id);
 }
 
 // ── Cached automatic metrics ─────────────────────────────────────────────────

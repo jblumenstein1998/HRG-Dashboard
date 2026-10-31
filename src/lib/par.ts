@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { unstable_cache } from "next/cache";
+import { readMany, readThrough } from "@/lib/sourceCache";
 
 const ACCESS_TOKEN = process.env.PAR_ACCESS_TOKEN ?? "";
 const BASE_URL     = process.env.PAR_BASE_URL ?? "https://api-apiint.brinkpos.net";
@@ -637,6 +638,74 @@ export const getShifts = unstable_cache(
 // to reflect PAR's numbers at the exact moment of each refresh (today's order
 // count and open shifts' worked-minutes keep changing minute to minute), not
 // whatever happened to be sitting in the 1hr shared cache.
+/**
+ * Cash over/short for a business day: the sum of every till's OverShort
+ * (positive = over). Sales2.svc GetTills, one till per drawer session.
+ *
+ * Checked against store-posted Slack figures on 2026-10-29: Brentwood matched
+ * to the cent on four days; Hampton's posts didn't match on either day tried,
+ * so what Hampton reports is something other than the drawer total.
+ *
+ * PaidInOuts and Skims are stripped before reading the till's own fields —
+ * same nested-array hazard stripTag exists for.
+ */
+export type PARCashSummary = {
+  overShort: number;
+  tills: number;
+  openTills: number;
+  /**
+   * Tills closed with nothing declared, left out of overShort. Columbia
+   * 2026-10-27 closed one with $0.00 declared, and PAR booked the whole
+   * expected drawer as short (−$733.20) while every counted till balanced.
+   */
+  uncountedTills: number;
+};
+
+const fetchCashSummary = unstable_cache(
+  async (storeId: string, businessDate: string): Promise<PARCashSummary> => {
+    const xml = await soapPost(
+      "Sales2.svc",
+      "http://www.brinksoftware.com/webservices/sales/v2/ISalesWebService2/GetTills",
+      `<GetTills xmlns="http://www.brinksoftware.com/webservices/sales/v2"><request><BusinessDate>${businessDate}T00:00:00</BusinessDate></request></GetTills>`,
+      getLocationToken(storeId),
+    );
+    const tills = [...xml.matchAll(/<(?:[a-zA-Z]+:)?Till>([\s\S]*?)<\/(?:[a-zA-Z]+:)?Till>/g)].map((m) =>
+      stripTag(stripTag(m[1], "PaidInOuts"), "Skims"),
+    );
+    let overShort = 0;
+    let openTills = 0;
+    let uncountedTills = 0;
+    for (const t of tills) {
+      const os = Number(tagVal(t, "OverShort") ?? 0);
+      if (tagVal(t, "IsClosed") !== "true") openTills++;
+      if (Number(tagVal(t, "DeclaredCash") ?? 0) === 0 && os !== 0) {
+        uncountedTills++;
+        continue;
+      }
+      overShort += os;
+    }
+    return { overShort: Math.round(overShort * 100) / 100, tills: tills.length, openTills, uncountedTills };
+  },
+  ["par-cash-v2", PARSE_VERSION],
+  { revalidate: CACHE_REVALIDATE_SECONDS, tags: ["par-data"] },
+);
+
+/** A store's tills for a day. A past day is read from source_cache, fetched and saved the first time. */
+export function getCashSummary(storeId: string, businessDate: string): Promise<PARCashSummary> {
+  return readThrough("par_cash", `${storeId}:${businessDate}`, businessDate, () => fetchCashSummary(storeId, businessDate));
+}
+
+/** Several days' tills at once, for the Slack checks of a whole range. */
+export async function getCashSummaryMany(storeId: string, days: string[]): Promise<Map<string, PARCashSummary>> {
+  const stored = await readMany("par_cash", days.map((d) => `${storeId}:${d}`));
+  const out = new Map<string, PARCashSummary>();
+  for (const d of days) {
+    const hit = stored.get(`${storeId}:${d}`) as PARCashSummary | undefined;
+    if (hit) out.set(d, hit);
+  }
+  return out;
+}
+
 export async function getOrdersLive(storeId: string, businessDate: string): Promise<PAROrder[]> {
   const token = getLocationToken(storeId);
   const xml = await soapPost(

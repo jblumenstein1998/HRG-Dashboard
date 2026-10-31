@@ -1,6 +1,8 @@
 import { sql } from "@/lib/db";
 import { PAR_LOCATIONS, getOrders, getShifts, getOrdersLive, getShiftsLive, dateRange, type PARShift } from "@/lib/par";
 import { businessDateISO } from "@/lib/businessDay";
+import { avgCheck, laborHours, round2 } from "@/lib/parFigures";
+import { readMany, readThrough } from "@/lib/sourceCache";
 
 // ── Shared day-total computation ─────────────────────────────────────────────
 // Used both to write the rollup (backfillStoreDay, always cached — a settled
@@ -312,15 +314,23 @@ export type RangeTotalsWithCoverage = RangeTotals & {
   missingDates: string[];
 };
 
-// Returns the rollup totals plus which business dates actually had a row. Reads
-// the rows instead of SUM()ing in SQL on purpose: COALESCE(SUM(...), 0) collapses
-// "no data" and "zero sales" into an indistinguishable 0, which is precisely the
-// bug this exists to prevent.
-async function getRollupTotals(
+/**
+ * A store's past days from the rollup, one entry per business date. The one
+ * read every PAR total goes through — PAR tab, Drive-Thru cards, Slack checks —
+ * so none can show a day differently.
+ *
+ * Reads the rows instead of SUM()ing in SQL on purpose: COALESCE(SUM(...), 0)
+ * collapses "no data" and "zero sales" into an indistinguishable 0. A day with
+ * no row is rebuilt from PAR and SAVED, so the next reader gets the same row
+ * rather than its own rebuild (they used to differ: totals rebuilt a missing
+ * day, the daily rows left it out). Past MAX_LIVE_BACKFILL_DAYS gaps, or when
+ * PAR fails, the day is reported missing rather than counted as zero.
+ */
+export async function getPastDays(
   storeId: string,
   start: string,
   end: string,
-): Promise<RangeTotals & { covered: Set<string> }> {
+): Promise<{ days: Map<string, DayTotals>; missingDates: string[] }> {
   const rows = (await sql`
     SELECT business_date, net_sales, order_count, labor_minutes
     FROM par_daily_metrics
@@ -333,19 +343,40 @@ async function getRollupTotals(
     labor_minutes: string;
   }[];
 
-  const covered = new Set<string>();
-  const totals = { ...EMPTY_TOTALS };
+  const days = new Map<string, DayTotals>();
   for (const row of rows) {
-    covered.add(
-      typeof row.business_date === "string"
-        ? row.business_date.slice(0, 10)
-        : row.business_date.toISOString().slice(0, 10),
-    );
-    totals.netSales += Number(row.net_sales);
-    totals.orderCount += Number(row.order_count);
-    totals.laborMinutes += Number(row.labor_minutes);
+    const date = typeof row.business_date === "string"
+      ? row.business_date.slice(0, 10)
+      : row.business_date.toISOString().slice(0, 10);
+    days.set(date, {
+      netSales: Number(row.net_sales),
+      orderCount: Number(row.order_count),
+      laborMinutes: Number(row.labor_minutes),
+    });
   }
-  return { ...totals, covered };
+
+  const gaps = dateRange(start, end).filter(d => !days.has(d));
+  // Too much missing to recover in one request — report the gaps rather than
+  // fanning out into hundreds of PAR calls.
+  if (gaps.length === 0 || gaps.length > MAX_LIVE_BACKFILL_DAYS) {
+    return { days, missingDates: gaps };
+  }
+
+  const missingDates: string[] = [];
+  await Promise.all(
+    gaps.map(async date => {
+      try {
+        const totals = await computeDayTotalsStrict(storeId, date);
+        await writeDayTotals(storeId, date, totals);
+        days.set(date, totals);
+      } catch {
+        // PAR unreachable for this day — leave it reported as missing rather
+        // than folding a zero into the total.
+        missingDates.push(date);
+      }
+    }),
+  );
+  return { days, missingDates: missingDates.sort() };
 }
 
 export async function getTotalsForRange(
@@ -360,56 +391,23 @@ export async function getTotalsForRange(
 
   const [historical, live] = await Promise.all([
     hasHistorical
-      ? getRollupTotals(storeId, start, historicalEnd)
-      : Promise.resolve({ ...EMPTY_TOTALS, covered: new Set<string>() }),
+      ? getPastDays(storeId, start, historicalEnd)
+      : Promise.resolve({ days: new Map<string, DayTotals>(), missingDates: [] }),
     includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve(EMPTY_TOTALS),
   ]);
 
-  const totals = {
-    netSales: historical.netSales + live.netSales,
-    orderCount: historical.orderCount + live.orderCount,
-    laborMinutes: historical.laborMinutes + live.laborMinutes,
-  };
-
-  const gaps = hasHistorical
-    ? dateRange(start, historicalEnd).filter(d => !historical.covered.has(d))
-    : [];
-
-  // Nothing missing, or too much missing to recover in one request — report the
-  // gaps rather than quietly returning a short total.
-  if (gaps.length === 0 || gaps.length > MAX_LIVE_BACKFILL_DAYS) {
-    return { ...totals, missingDates: gaps };
+  const totals = { ...live };
+  for (const day of historical.days.values()) {
+    totals.netSales += day.netSales;
+    totals.orderCount += day.orderCount;
+    totals.laborMinutes += day.laborMinutes;
   }
-
-  const recovered = await Promise.all(
-    gaps.map(async date => {
-      try {
-        return { date, totals: await computeDayTotalsStrict(storeId, date) };
-      } catch {
-        // PAR unreachable for this day — leave it reported as missing rather
-        // than folding a zero into the total.
-        return { date, totals: null };
-      }
-    }),
-  );
-
-  const missingDates: string[] = [];
-  for (const day of recovered) {
-    if (!day.totals) {
-      missingDates.push(day.date);
-      continue;
-    }
-    totals.netSales += day.totals.netSales;
-    totals.orderCount += day.totals.orderCount;
-    totals.laborMinutes += day.totals.laborMinutes;
-  }
-
-  return { ...totals, missingDates };
+  return { ...totals, missingDates: historical.missingDates };
 }
 
 export async function getNetSalesForRange(storeId: string, start: string, end: string): Promise<number> {
   const { netSales } = await getTotalsForRange(storeId, start, end);
-  return Math.round(netSales * 100) / 100;
+  return round2(netSales);
 }
 
 export async function getOrderCountForRange(storeId: string, start: string, end: string): Promise<number> {
@@ -419,7 +417,7 @@ export async function getOrderCountForRange(storeId: string, start: string, end:
 
 export async function getLaborHoursForRange(storeId: string, start: string, end: string): Promise<number> {
   const { laborMinutes } = await getTotalsForRange(storeId, start, end);
-  return Math.round((laborMinutes / 60) * 100) / 100;
+  return laborHours(laborMinutes);
 }
 
 export async function getAvgOrderValueForRange(storeId: string, start: string, end: string): Promise<number> {
@@ -438,10 +436,10 @@ export type PARDailyRow = {
 function toDailyRow(date: string, netSales: number, transactions: number, laborMinutes: number): PARDailyRow {
   return {
     date,
-    netSales: Math.round(netSales * 100) / 100,
+    netSales: round2(netSales),
     transactions,
-    avgTicket: transactions > 0 ? Math.round((netSales / transactions) * 100) / 100 : 0,
-    laborHours: Math.round((laborMinutes / 60) * 100) / 100,
+    avgTicket: round2(avgCheck(netSales, transactions)),
+    laborHours: laborHours(laborMinutes),
   };
 }
 
@@ -451,27 +449,14 @@ export async function getDailyRowsForRange(storeId: string, start: string, end: 
   const includesToday = end >= today && start <= today;
   const historicalEnd = end < today ? end : dayBefore(today);
 
-  const [rows, live] = await Promise.all([
-    start <= historicalEnd
-      ? sql`
-          SELECT business_date, net_sales, order_count, labor_minutes
-          FROM par_daily_metrics
-          WHERE store_id = ${storeId}
-            AND business_date BETWEEN ${start} AND ${historicalEnd}
-          ORDER BY business_date ASC
-        `
-      : Promise.resolve([]),
+  const [historical, live] = await Promise.all([
+    start <= historicalEnd ? getPastDays(storeId, start, historicalEnd) : null,
     includesToday ? computeDayTotals(storeId, today, true) : Promise.resolve(null),
   ]);
 
-  const daily = (rows as { business_date: string | Date; net_sales: string; order_count: string; labor_minutes: string }[]).map(r =>
-    toDailyRow(
-      new Date(r.business_date).toISOString().split("T")[0],
-      Number(r.net_sales),
-      Number(r.order_count),
-      Number(r.labor_minutes),
-    )
-  );
+  const daily = [...(historical?.days ?? new Map<string, DayTotals>())]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, t]) => toDailyRow(date, t.netSales, t.orderCount, t.laborMinutes));
 
   if (live) {
     daily.push(toDailyRow(today, live.netSales, live.orderCount, live.laborMinutes));
@@ -577,13 +562,43 @@ function fmtHourRange(h: number): string {
 // every call, so computing 24 buckets by calling it 24 times would mean 24
 // separate live PAR round-trips for "today". This fetches once and buckets
 // in memory instead.
+/**
+ * A store's day by hour — the PAR tab's hourly table and the Slack checks of
+ * the 2/5/8 PM reports. A past day is read from source_cache (one stored copy
+ * for every screen), built from PAR and saved the first time. A PAR failure is
+ * never saved: it falls back to the uncached build, which reads a failed pull
+ * as an empty one.
+ */
 export async function getHourlyBreakdown(storeId: string, businessDate: string): Promise<HourBucket[]> {
   const isToday = businessDate === todayCentralISO();
+  if (!isToday) {
+    try {
+      return await readThrough("par_hourly", `${storeId}:${businessDate}`, businessDate, async () => {
+        const [orders, shifts] = await Promise.all([getOrders(storeId, businessDate), getShifts(storeId, businessDate)]);
+        return toHourBuckets(orders, shifts);
+      });
+    } catch {
+      // Fall through to the lenient build below.
+    }
+  }
   const [orders, shifts] = await Promise.all([
     (isToday ? getOrdersLive(storeId, businessDate) : getOrders(storeId, businessDate)).catch(() => []),
     (isToday ? getShiftsLive(storeId, businessDate) : getShifts(storeId, businessDate)).catch(() => []),
   ]);
+  return toHourBuckets(orders, shifts);
+}
 
+/** Several past days' hourly breakdowns at once, for the Slack checks of a whole range. */
+export async function getHourlyBreakdownMany(storeId: string, days: string[]): Promise<Map<string, HourBucket[]>> {
+  const stored = await readMany("par_hourly", days.map((d) => `${storeId}:${d}`));
+  const out = new Map<string, HourBucket[]>();
+  await Promise.all(days.map(async (d) => {
+    out.set(d, (stored.get(`${storeId}:${d}`) as HourBucket[] | undefined) ?? await getHourlyBreakdown(storeId, d));
+  }));
+  return out;
+}
+
+function toHourBuckets(orders: PAROrders, shifts: PARShift[]): HourBucket[] {
   return Array.from({ length: 24 }, (_, hour) => {
     const startMinutes = hour * 60;
     const endMinutes = startMinutes + 60;
@@ -599,9 +614,9 @@ export async function getHourlyBreakdown(storeId: string, businessDate: string):
     return {
       hour,
       label: fmtHourRange(hour),
-      netSales: Math.round(netSales * 100) / 100,
+      netSales: round2(netSales),
       orderCount,
-      laborHours: Math.round((laborMinutes / 60) * 100) / 100,
+      laborHours: laborHours(laborMinutes),
     };
   });
 }

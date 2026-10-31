@@ -13,7 +13,8 @@
  * saying whose 6:30 is how you end up an hour out for half the estate.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
@@ -31,6 +32,7 @@ import type {
   MissedPunchReport, PayPeriod, HoursSpan, HoursGrain, StaffingDay,
 } from "@/lib/staffing";
 import { clockLabel, hourlyRateOf, rosterAt } from "@/lib/staffingRoster";
+import { GROUP_TONE, JOB_GROUPS, cleanJobTitle, groupOf, titleOf } from "@/lib/staffGroups";
 
 /**
  * Column sorting for the two tables below.
@@ -110,24 +112,6 @@ function dateHeader(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   const dow = DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   return `${dow} ${iso.slice(5).replace("-", "/")}`;
-}
-
-/**
- * A PAR job name with its payroll prefix taken off.
- *
- * PAR spells its jobs "Hourly - Assistant Manager", "Salary - General Manager",
- * "SAL Mgr Asst Gen" — the pay type welded onto the front of the position,
- * because the same role exists twice in its setup depending on how it is paid.
- * Nobody reading a staffing screen needs that: whether a manager is salaried is
- * already visible in the rate beside their name.
- *
- * Cosmetic only, and temporary. Positions come from Workstream once somebody is
- * linked, and Workstream says "Shift Lead" without the ceremony — at which
- * point this only applies to people the reconciliation queue has not reached.
- */
-function cleanJobTitle(job: string | null | undefined): string | null {
-  if (!job) return null;
-  return job.replace(/^(hourly|salary|sal|hrly)\s*-\s*/i, "").trim() || null;
 }
 
 /** "YYYY-MM-DD" moved by `n` calendar days. */
@@ -1139,6 +1123,8 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
   const visible = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
   const rows = visible.flatMap((s) => s.rows.map((r) => ({ ...r, storeName: s.storeName })));
   const storeErrors = visible.filter((s) => s.error);
+  /** The row whose "team at close" panel is open, by its React key. */
+  const [teamOpen, setTeamOpen] = useState<string | null>(null);
 
   return (
     <section ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1223,11 +1209,16 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
                 <th className="px-3 py-1.5 text-right font-semibold">In</th>
                 <th className="px-3 py-1.5 text-right font-semibold">Out</th>
                 <th className="px-3 py-1.5 text-right font-semibold">PAR credits</th>
+                <th data-copy-image-ignore="true" className="px-3 py-1.5" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.storeName}-${r.businessDate}-${r.employeeId ?? i}`} className="border-b border-gray-50 last:border-0">
+              {rows.map((r, i) => {
+                const key = `${r.storeName}-${r.businessDate}-${r.employeeId ?? i}`;
+                const open = teamOpen === key;
+                return (
+                <Fragment key={key}>
+                <tr className="border-b border-gray-50 last:border-0">
                   <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{dateHeader(r.businessDate)}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap text-gray-900">{r.storeName}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">{r.name}</td>
@@ -1241,8 +1232,33 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
                   <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 whitespace-nowrap">
                     {hrs(r.minutesWorked)}
                   </td>
+                  {/* Who was in charge when the store closed — the leaders who
+                      should have seen everybody off the clock. */}
+                  <td data-copy-image-ignore="true" className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {r.closeMinutes === null ? (
+                      <span className="text-xs text-gray-300" title="No store hours on file for this date">—</span>
+                    ) : (
+                      <TeamButton
+                        open={open}
+                        onClick={() => setTeamOpen(open ? null : key)}
+                        label="Team at close"
+                      />
+                    )}
+                  </td>
                 </tr>
-              ))}
+                {open && r.closeMinutes !== null && (
+                  <tr className="border-b border-gray-50 bg-gray-50/60">
+                    <td colSpan={8} className="px-3 py-2">
+                      <TeamPanel
+                        url={`/api/team-on-duty?store=${encodeURIComponent(r.storeName)}&date=${r.businessDate}&start=${r.closeMinutes}&end=${r.closeMinutes}`}
+                        note="when the store closed"
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1588,54 +1604,6 @@ function StoreHoursRows({
 }
 
 /**
- * The four tiers, keyed on Workstream's job titles.
- *
- * These are positions of record, not what someone clocked in as — Workstream is
- * where a person is hired into a job, and PAR only knows which button they
- * pressed at the terminal. That is why an earlier version of this map listed
- * PAR's titles ("SAL Mgr Asst Gen", "Hourly - Assistant Manager") and described
- * itself as provisional until payroll was integrated. It is integrated; this is
- * the replacement.
- *
- * Cook and Cashier sit in Crew: they are crew-level line positions, and between
- * them they are about a quarter of everyone active.
- *
- * Still an explicit list rather than a pattern match over the words in a title,
- * for the same reason as before — a title that is not named here appears under
- * "Other" with its real name, so a new or renamed job is something to look at
- * rather than something that silently joins the wrong tier. District Manager
- * and Director of Operations land there on purpose: they are above-store roles
- * and are not usually on a store's clock.
- */
-const JOB_GROUPS: { key: string; label: string; titles: string[] }[] = [
-  { key: "crew", label: "Crew", titles: ["Crew", "Cook", "Cashier"] },
-  { key: "managers", label: "Managers", titles: ["Crew Trainer", "Shift Lead"] },
-  { key: "directors", label: "Directors", titles: ["Director"] },
-  { key: "leadership", label: "Leadership", titles: ["AGM", "General Manager"] },
-];
-
-const GROUP_TONE: Record<string, string> = {
-  crew: "bg-blue-50 border-blue-200",
-  managers: "bg-amber-50 border-amber-200",
-  directors: "bg-purple-50 border-purple-200",
-  leadership: "bg-emerald-50 border-emerald-200",
-  other: "bg-gray-50 border-gray-200",
-};
-
-/**
- * The title to group and label by: Workstream's, falling back to PAR's.
- *
- * The fallback only fires for someone not yet linked to a Workstream record,
- * and it will land them in "Other" because PAR's titles are not in the list
- * above. That is the honest outcome — an unlinked person's position is not
- * known, and putting them in Crew because PAR said "Cashier" would be a guess
- * wearing a fact's clothes.
- */
-function titleOf(p: StaffOnClock): string | null {
-  return p.workstream?.position ?? p.job;
-}
-
-/**
  * The rate to show: Workstream's rate of record, or PAR's shift rate.
  *
  * Null means salaried — Workstream states those annually and PAR records them
@@ -1644,12 +1612,6 @@ function titleOf(p: StaffOnClock): string | null {
  */
 /** The card's rate — shared with the store's wage total (lib/staffingRoster). */
 const rateOf = (p: StaffOnClock): number | null => hourlyRateOf(p);
-
-function groupOf(p: StaffOnClock): string {
-  const title = p.workstream?.position;
-  if (!title) return "other";
-  return JOB_GROUPS.find((g) => g.titles.includes(title))?.key ?? "other";
-}
 
 /**
  * Says when the Workstream roster was last read, but only when that matters.
@@ -1701,7 +1663,7 @@ function StoreCard({ store }: { store: StoreRoster }) {
 
   const grouped = new Map<string, typeof store.onClock>();
   for (const p of store.onClock) {
-    const key = groupOf(p);
+    const key = groupOf(p.workstream?.position);
     const list = grouped.get(key) ?? [];
     list.push(p);
     grouped.set(key, list);
@@ -1771,9 +1733,9 @@ function StoreCard({ store }: { store: StoreRoster }) {
                             for two facts that read perfectly well together. */}
                         <span className="text-sm font-medium text-gray-900 truncate">
                           {p.name}
-                          {cleanJobTitle(titleOf(p)) && (
+                          {titleOf(p.workstream?.position, p.job) && (
                             <span className="font-normal text-gray-500">
-                              {" — "}{cleanJobTitle(titleOf(p))}
+                              {" — "}{titleOf(p.workstream?.position, p.job)}
                             </span>
                           )}
                         </span>

@@ -40,7 +40,10 @@ const MARKETS = {
 type MarketKey = keyof typeof MARKETS;
 const isMarketKey = (v: string): v is MarketKey => v in MARKETS;
 
-/** "" = everything; "va"/"tn"/"tx" = a market; "leader:<id>" = one leader's stores. */
+/**
+ * "" = everything; "va"/"tn"/"tx" = a market; "leader:<id>" = one leader's stores;
+ * "store:<label>" = one store (offered only where the picker has `stores` on).
+ */
 export type StoreFilterValue = string;
 
 export type StoreFilter = {
@@ -70,6 +73,10 @@ export function useStoreFilter(leaders: Leader[]): StoreFilter {
       // rather than an empty screen attributed to a name that is no longer there.
       if (!leader) return { allowed: null, label: null };
       return { allowed: new Set(leader.stores), label: leader.name };
+    }
+    if (value.startsWith("store:")) {
+      const store = value.slice("store:".length);
+      return { allowed: new Set([store]), label: store };
     }
     return { allowed: null, label: null };
   }, [value, leaders]);
@@ -111,11 +118,14 @@ export function StoreFilterPicker({
   value,
   onChange,
   className = "",
+  stores = false,
 }: {
   leaders: Leader[];
   value: StoreFilterValue;
   onChange: (v: StoreFilterValue) => void;
   className?: string;
+  /** Also offer each store on its own. Off by default, so other tabs are unchanged. */
+  stores?: boolean;
 }) {
   return (
     <select
@@ -137,6 +147,15 @@ export function StoreFilterPicker({
           {leaders.map((l) => (
             <option key={l.id} value={`leader:${l.id}`}>
               {l.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {stores && (
+        <optgroup label="Store">
+          {ALL_STORES.map((s) => (
+            <option key={s.label} value={`store:${s.label}`}>
+              {s.label}
             </option>
           ))}
         </optgroup>

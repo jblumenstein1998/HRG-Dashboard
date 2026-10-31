@@ -17,6 +17,8 @@
 // endpoint, so `scripts/jolt-explore.mjs` can enumerate the schema rather than
 // guessing at it.
 
+import { readManyPaths, readThrough } from "@/lib/sourceCache";
+
 const APP = "https://app.joltup.com";
 const API = "https://api.joltup.com/graphql";
 const UA =
@@ -719,6 +721,11 @@ export type ListInstanceStatus = "onTime" | "late" | "missed" | "pending";
 export type ListInstanceRow = {
   id: string;
   title: string;
+  /**
+   * Unix seconds when Jolt surfaced the list to the store. With the deadline,
+   * the window the list was owed in — what the team-on-duty button covers.
+   */
+  shownAt: number | null;
   /** Unix seconds, company timezone. Null for unscheduled lists. */
   deadline: number | null;
   completedAt: number | null;
@@ -768,6 +775,7 @@ const STORE_LISTS_QUERY = `
         node {
           id
           instanceTitle
+          displayTimestamp
           deadlineTimestamp
           completionTimestamp
           listTemplate { id title }
@@ -783,6 +791,7 @@ const STORE_LISTS_QUERY = `
 type StoreListNode = {
   id: string;
   instanceTitle: string | null;
+  displayTimestamp: number | null;
   deadlineTimestamp: number | null;
   completionTimestamp: number | null;
   listTemplate: { id: string; title: string } | null;
@@ -813,7 +822,50 @@ function personName(p: { firstName: string; lastName: string } | null): string |
   return name || null;
 }
 
+/**
+ * Every store's lists for a window. A single finished day — the Jolt tab's
+ * Yesterday, and what each morning Slack report is checked against — is read
+ * from source_cache, so both read one copy; it's fetched from Jolt and saved
+ * the first time. Longer and rolling windows come from Jolt as before.
+ */
 export async function fetchStoreLists(
+  startDate: string,
+  endDate: string,
+  opts: { bust?: boolean; hours?: number } = {},
+): Promise<StoreListsReport> {
+  if (startDate !== endDate || opts.hours) return fetchStoreListsFromJolt(startDate, endDate, opts);
+  const read = (bust?: boolean) =>
+    readThrough("jolt_store_lists", storeListsKey(startDate), endDate,
+      () => fetchStoreListsFromJolt(startDate, endDate, { ...opts, bust }), { bust });
+  const report = await read(opts.bust);
+  // Days saved before rows carried shownAt (added 2026-10-30) are re-read once
+  // and re-saved, so the team-on-duty window is there for every day viewed.
+  const stale = report.stores.some((s) => s.rows.some((r) => !("shownAt" in r)));
+  return stale && !opts.bust ? read(true) : report;
+}
+
+const storeListsKey = (day: string) => `${day}__${day}`;
+
+/** Each store's completePct for several past days, by day then store name. */
+export async function completionByDay(days: string[]): Promise<Map<string, Map<string, number | null>>> {
+  const stored = await readManyPaths("jolt_store_lists", days.map(storeListsKey), {
+    store: "$.stores[*].store",
+    pct: "$.stores[*].completePct",
+  });
+  const out = new Map<string, Map<string, number | null>>();
+  await Promise.all(days.map(async (day) => {
+    const hit = stored.get(storeListsKey(day));
+    if (hit) {
+      out.set(day, new Map(hit.store.map((s, i) => [String(s), (hit.pct[i] as number | null) ?? null])));
+      return;
+    }
+    const report = await fetchStoreLists(day, day);
+    out.set(day, new Map(report.stores.map((s) => [s.store, s.completePct])));
+  }));
+  return out;
+}
+
+async function fetchStoreListsFromJolt(
   startDate: string,
   endDate: string,
   opts: { bust?: boolean; hours?: number } = {},
@@ -940,6 +992,7 @@ export async function fetchStoreLists(
     entry.rows.push({
       id: node.id,
       title: node.listTemplate?.title ?? node.instanceTitle ?? "Untitled list",
+      shownAt: node.displayTimestamp,
       deadline,
       completedAt,
       // Jolt occasionally completes an instance with no submitter recorded;
