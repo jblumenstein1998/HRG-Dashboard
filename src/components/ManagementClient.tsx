@@ -96,8 +96,8 @@ const COUNT_COLS: { key: ColKey; label: string; title: string }[] = [
     label: "Window > 30s over goal",
     title: "Dayparts where window time was more than 0:30 over the 100% goal (1:10 at ≤ $45k/week, 0:57 above)",
   },
-  { key: "joltProtein", label: "Jolt Protein", title: "Protein Traceability lists missed or late, while the list was open" },
-  { key: "joltTimeTemp", label: "Jolt Time Temp", title: "Time/Temperature lists missed or late, while the list was open" },
+  { key: "joltProtein", label: "Jolt Protein missed / late", title: "Protein Traceability lists missed or late, while the list was open" },
+  { key: "joltTimeTemp", label: "Jolt Time Temp missed / late", title: "Time/Temperature lists missed or late, while the list was open" },
   { key: "slackMissedLate", label: "Slack missed / late", title: "Slack reports missed or late, on the clock at the deadline" },
   { key: "slackAccuracyPct", label: "Slack % accuracy", title: "Figures accurate ÷ figures posted, on reports due while on the clock" },
 ];
