@@ -120,6 +120,15 @@ export const SLACK_CHANNEL_IDS: Record<string, string> = {
   "57005": "C0AR5H74TCH", // #jefferson-avenue-57005
   "57006": "C0AQSKYMZDG", // #hillcrest-57006
   "57007": "C0AR5GZGQ01", // #virginia-beach-57007
+  // Texas: the channels exist and the bot is in all six, but the stores don't
+  // post the reports yet. A mapped channel is scored, so these stay out (and
+  // the stores read as pending) until Texas starts reporting:
+  //   "53003": "C0CCUDXTDUG", // #killeen-53003
+  //   "53004": "C0CCUDZ2VA4", // #temple-53004
+  //   "53005": "C0CBTRP8C9Z", // #pflugerville-53005
+  //   "62802": "C0CBUPTAE85", // #cibolo-62802
+  //   "62803": "C0CBTRRLFPV", // #alamo-62803
+  //   "62804": "C0CBTRQNL5R", // #windcrest-62804
 };
 
 /** The store's local time zone. Slack reporting deadlines are local times. */
