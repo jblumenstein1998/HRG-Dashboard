@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { ZCASE_GOALS } from "@/lib/bonus/goals";
 import { formatSyncStamp, prettyUnit, STORE_LABELS, TONE_TEXT, type ScoreTone } from "@/lib/surveyMeta";
-import { GROUP_TONE, JOB_GROUPS, groupOf, titleOf } from "@/lib/staffGroups";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 
 type ZCaseRow = {
   caseKey: string;
@@ -735,7 +735,7 @@ function OutstandingRow({
       </div>
       {teamOpen && (
         <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3 pt-0.5">
-          <TeamPanel caseKey={row.caseKey} />
+          <TeamPanel url={`/api/smg/zcase/${row.caseKey}/team`} note={"guest's visit time"} />
         </div>
       )}
       {expanded && (
@@ -895,139 +895,7 @@ function CaseLine({ c }: { c: ZCaseRow }) {
       </div>
       {teamOpen && (
         <div className="pb-2.5">
-          <TeamPanel caseKey={c.caseKey} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-type TeamMember = {
-  employeeId: string | null;
-  name: string;
-  job: string | null;
-  position: string | null;
-  startLabel: string;
-  endLabel: string;
-  onBreakThroughout: boolean;
-};
-
-type TeamResponse = {
-  storeName: string;
-  localDate: string;
-  startMinutes: number;
-  endMinutes: number;
-  wholeHour: boolean;
-  team: TeamMember[];
-  error: string | null;
-};
-
-const clock = (minutes: number) => {
-  const h24 = Math.floor(minutes / 60) % 24;
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${String(minutes % 60).padStart(2, "0")}${h24 < 12 ? "am" : "pm"}`;
-};
-
-function TeamButton({ open, onClick }: { open: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-expanded={open}
-      // Sits inside rows that expand on click; this shouldn't toggle them too.
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      onKeyDown={(e) => e.stopPropagation()}
-      className={`text-[10.5px] font-medium px-2 py-0.5 rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-gray-400 ${
-        open ? "bg-gray-800 border-gray-800 text-white" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-100"
-      }`}
-    >
-      Team on duty
-    </button>
-  );
-}
-
-/**
- * The people on the clock at the guest's visit, in the Staffing tab's tiers —
- * Workstream positions, grouped and coloured as on its "currently clocked in"
- * cards (lib/staffGroups), so a person is the same thing on both tabs.
- */
-function TeamPanel({ caseKey }: { caseKey: string }) {
-  const [data, setData] = useState<TeamResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    fetch(`/api/smg/zcase/${caseKey}/team`)
-      .then(async (r) => {
-        const body = await r.json();
-        if (!live) return;
-        if (!r.ok || body.error) setError(body.error ?? `HTTP ${r.status}`);
-        else setData(body);
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      live = false;
-    };
-  }, [caseKey]);
-
-  if (error) return <div className="py-1.5 text-xs text-amber-700">Couldn&apos;t load the team: {error}</div>;
-  if (!data) return <div className="py-1.5 text-xs text-gray-400 animate-pulse">Loading team on duty…</div>;
-
-  const [, m, d] = data.localDate.split("-");
-  const when = data.wholeHour
-    ? `${clock(data.startMinutes)}–${clock(data.endMinutes)}`
-    : `at ${clock(data.startMinutes)}`;
-  const sections = [
-    ...JOB_GROUPS.map((g) => ({ key: g.key, label: g.label })),
-    { key: "other", label: "Other" },
-  ]
-    .map((s) => ({ ...s, people: data.team.filter((p) => groupOf(p.position) === s.key) }))
-    .filter((s) => s.people.length > 0);
-
-  return (
-    <div className="rounded-md border border-gray-200 bg-white px-3 py-2">
-      <div className="text-[11px] text-gray-500">
-        On the clock {when}, {Number(m)}/{Number(d)} — guest&apos;s visit time
-        {data.wholeHour && " (given to the hour)"}
-      </div>
-      {data.team.length === 0 ? (
-        <div className="py-1.5 text-xs text-gray-500">Nobody was on the clock at that time.</div>
-      ) : (
-        <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-          {sections.map((s) => (
-            <div key={s.key} className={`rounded-lg border ${GROUP_TONE[s.key] ?? GROUP_TONE.other}`}>
-              <div className="px-2.5 py-1 flex items-baseline gap-2 border-b border-black/5">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-700">{s.label}</span>
-                <span className="text-[11px] text-gray-500">{s.people.length}</span>
-              </div>
-              <ul className="divide-y divide-black/5">
-                {s.people.map((p) => (
-                  <li
-                    key={`${p.employeeId ?? p.name}|${p.startLabel}`}
-                    className="px-2.5 py-1 flex items-baseline gap-2 text-[12.5px]"
-                  >
-                    <span className="font-medium text-gray-900 truncate">
-                      {p.name}
-                      {titleOf(p.position, p.job) && (
-                        <span className="font-normal text-gray-500">
-                          {" — "}
-                          {titleOf(p.position, p.job)}
-                        </span>
-                      )}
-                    </span>
-                    {p.onBreakThroughout && (
-                      <span className="text-[10px] uppercase tracking-wide text-amber-700">break</span>
-                    )}
-                    <span className="ml-auto text-[11px] text-gray-500 tabular-nums whitespace-nowrap">
-                      {p.startLabel}–{p.endLabel}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          <TeamPanel url={`/api/smg/zcase/${c.caseKey}/team`} note={"guest's visit time"} />
         </div>
       )}
     </div>

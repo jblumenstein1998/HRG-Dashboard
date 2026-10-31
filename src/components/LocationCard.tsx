@@ -1,8 +1,11 @@
 "use client";
 
+import { Fragment, useState } from "react";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
+import { DAYPARTS } from "@/lib/dayparts";
 import { salesTierColor } from "@/lib/salesTierGoals";
 import { getStoreLabel } from "@/lib/stores";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 
 type Props = {
   branch: BranchStore;
@@ -11,13 +14,15 @@ type Props = {
   rangeLabel: string;
   viewMode: "summary" | "daypart";
   salesForTier: number | null;
+  /** The single date on screen (Today/Yesterday), else null — no team buttons. */
+  teamDate: string | null;
 };
 
 function Skeleton({ w = "w-10", h = "h-4" }: { w?: string; h?: string }) {
   return <div className={`${h} ${w} bg-gray-100 rounded animate-pulse`} />;
 }
 
-export default function LocationCard({ branch, metrics, loading, rangeLabel, viewMode, salesForTier }: Props) {
+export default function LocationCard({ branch, metrics, loading, rangeLabel, viewMode, salesForTier, teamDate }: Props) {
   const label = getStoreLabel(branch);
 
   return (
@@ -33,7 +38,13 @@ export default function LocationCard({ branch, metrics, loading, rangeLabel, vie
       {viewMode === "summary" ? (
         <SummaryView metrics={metrics} loading={loading} salesForTier={salesForTier} />
       ) : (
-        <DaypartView metrics={metrics} loading={loading} salesForTier={salesForTier} />
+        <DaypartView
+          metrics={metrics}
+          loading={loading}
+          salesForTier={salesForTier}
+          store={label}
+          teamDate={teamDate}
+        />
       )}
     </div>
   );
@@ -138,61 +149,98 @@ function SummaryView({
   );
 }
 
+/*
+ * The Team column only exists when one date is on screen: a daypart's team on
+ * duty is meaningless across a week. A fixed sixth track, so the five figures
+ * keep their alignment whether or not it is there.
+ */
+const COLS_WITH_TEAM = "grid-cols-[repeat(5,minmax(0,1fr))_3rem]";
+
 function DaypartView({
   metrics,
   loading,
   salesForTier,
+  store,
+  teamDate,
 }: {
   metrics: StoreMetrics | null;
   loading: boolean;
   salesForTier: number | null;
+  /** The store's label, which is its PAR location name. */
+  store: string;
+  teamDate: string | null;
 }) {
+  const [teamDp, setTeamDp] = useState<number | null>(null);
   // Use whatever dayparts Superset returned, sorted ascending
   const dayparts = [...(metrics?.dayparts ?? [])].sort((a, b) => a.index - b.index);
   const dpIndices = dayparts.length > 0 ? dayparts.map((d) => d.index) : [1, 2, 3, 4, 5];
+  const cols = teamDate ? COLS_WITH_TEAM : "grid-cols-5";
 
   return (
     <div className="pt-1">
-      <div className="grid grid-cols-5 gap-1 mb-1">
+      <div className={`grid ${cols} gap-1 mb-1`}>
         <p className="text-xs text-gray-400">DP</p>
         <p className="text-xs text-gray-400 text-right">Lane</p>
         <p className="text-xs text-gray-400 text-right">Cars</p>
         <p className="text-xs text-gray-400 text-right">Window</p>
         <p className="text-xs text-gray-400 text-right">Flagged</p>
+        {teamDate && <p className="text-xs text-gray-400 text-right">Team</p>}
       </div>
       <div className="flex flex-col gap-1.5 border-t border-gray-100 pt-2">
         {dpIndices.map((dp) => {
           const isPeak = dp === 2 || dp === 4;
           const row = metrics?.dayparts.find((d) => d.index === dp);
+          const slot = DAYPARTS.find((d) => d.index === dp);
+          const canShowTeam = !!teamDate && !!row && !!slot && !loading;
           return (
-            <div
-              key={dp}
-              className={`grid grid-cols-5 gap-1 rounded px-1 py-0.5 ${isPeak ? "bg-gray-50" : ""}`}
-            >
-              <p className={`text-xs font-medium ${isPeak ? "text-gray-700" : "text-gray-400"}`}>
-                DP {dp}{isPeak ? " ★" : ""}
-              </p>
-              {loading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex justify-end"><Skeleton w="w-8" /></div>
-                ))
-              ) : (
-                <>
-                  <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.lane_total), "lane_total")}`}>
-                    {row?.lane_total ?? "—"}
-                  </p>
-                  <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
-                    {row?.total_cars != null ? Math.round(row.total_cars).toLocaleString() : "—"}
-                  </p>
-                  <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.window_service), "window_service")}`}>
-                    {row?.window_service ?? "—"}
-                  </p>
-                  <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
-                    {row?.flagged_pull_forward != null ? Math.round(row.flagged_pull_forward).toLocaleString() : "—"}
-                  </p>
-                </>
+            <Fragment key={dp}>
+              <div
+                className={`grid ${cols} gap-1 rounded px-1 py-0.5 items-center ${isPeak ? "bg-gray-50" : ""}`}
+              >
+                <p className={`text-xs font-medium ${isPeak ? "text-gray-700" : "text-gray-400"}`}>
+                  DP {dp}{isPeak ? " ★" : ""}
+                </p>
+                {loading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex justify-end"><Skeleton w="w-8" /></div>
+                  ))
+                ) : (
+                  <>
+                    <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.lane_total), "lane_total")}`}>
+                      {row?.lane_total ?? "—"}
+                    </p>
+                    <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
+                      {row?.total_cars != null ? Math.round(row.total_cars).toLocaleString() : "—"}
+                    </p>
+                    <p className={`text-xs font-semibold tabular-nums text-right ${salesTierColor(salesForTier, parseMMSS(row?.window_service), "window_service")}`}>
+                      {row?.window_service ?? "—"}
+                    </p>
+                    <p className="text-xs font-semibold tabular-nums text-right text-gray-700">
+                      {row?.flagged_pull_forward != null ? Math.round(row.flagged_pull_forward).toLocaleString() : "—"}
+                    </p>
+                  </>
+                )}
+                {teamDate && (
+                  <div className="flex justify-end">
+                    {canShowTeam && (
+                      <TeamButton
+                        label="Team"
+                        open={teamDp === dp}
+                        onClick={() => setTeamDp((cur) => (cur === dp ? null : dp))}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+              {canShowTeam && teamDp === dp && (
+                <TeamPanel
+                  // Daypart ends are exclusive; the route's are inclusive.
+                  url={`/api/team-on-duty?store=${encodeURIComponent(store)}&date=${teamDate}&start=${slot!.startMinutes}&end=${slot!.endMinutes - 1}`}
+                  note={`daypart ${dp}${slot!.nickname ? ` (${slot!.nickname})` : ""}`}
+                  narrow
+                />
               )}
-            </div>
+            </Fragment>
           );
         })}
       </div>
