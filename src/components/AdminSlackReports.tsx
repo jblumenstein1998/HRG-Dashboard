@@ -521,13 +521,26 @@ function StoreDetail({
   // The report whose team on duty is open, by message ts.
   const [teamTs, setTeamTs] = useState<string | null>(null);
 
-  /** Scroll the message list — not the page — to the report that filled a cell. */
+  // Room under the last message once a report has been jumped to, so even the
+  // newest one can be scrolled to the top of the list.
+  const [jumped, setJumped] = useState(false);
+
+  /**
+   * Scroll the message list — not the page — so the report that filled a cell
+   * is the first entry showing. Measured from where both boxes sit on screen,
+   * which doesn't depend on which ancestor offsetTop happens to count from.
+   */
   function showReport(ts: string) {
     const list = listRef.current;
     const el = list?.querySelector<HTMLElement>(`[data-ts="${ts}"]`);
     if (!list || !el) return;
-    list.scrollTo({ top: el.offsetTop, behavior: "smooth" });
+    setJumped(true);
     setFocusTs(ts);
+    // After the spacer renders, or the end of the list can't reach the top.
+    requestAnimationFrame(() => {
+      const top = list.scrollTop + el.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      list.scrollTo({ top, behavior: "smooth" });
+    });
   }
   useEffect(() => {
     if (!focusTs) return;
@@ -679,6 +692,9 @@ function StoreDetail({
                 )}
               </div>
             ))}
+            {/* Nearly the list's own height (max-h-[32rem]), so the last
+                message can sit at the top after a jump. */}
+            {jumped && <div aria-hidden className="h-[30rem]" />}
           </div>
         )}
       </div>
