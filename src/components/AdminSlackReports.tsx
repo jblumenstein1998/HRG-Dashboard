@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { PERIODS } from "@/lib/fiscal";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
+import { TeamPanel } from "@/components/TeamOnDuty";
 
 /**
  * Slack reporting, store by store — what the GM's Slack completion criterion
@@ -515,6 +516,29 @@ function StoreDetail({
   setReportsOnly: (v: boolean) => void;
 }) {
   const messages = row.messages?.filter((m) => !reportsOnly || m.placed) ?? null;
+  const listRef = useRef<HTMLDivElement>(null);
+  const [focusTs, setFocusTs] = useState<string | null>(null);
+  // The slot whose team on duty is open, as "date|slot".
+  const [team, setTeam] = useState<string | null>(null);
+
+  /** Scroll the message list — not the page — to the report that filled a cell. */
+  function showReport(ts: string) {
+    const list = listRef.current;
+    const el = list?.querySelector<HTMLElement>(`[data-ts="${ts}"]`);
+    if (!list || !el) return;
+    list.scrollTo({ top: el.offsetTop, behavior: "smooth" });
+    setFocusTs(ts);
+  }
+  useEffect(() => {
+    if (!focusTs) return;
+    const t = setTimeout(() => setFocusTs(null), 2000);
+    return () => clearTimeout(t);
+  }, [focusTs]);
+
+  const [teamDate, teamSlot] = team?.split("|") ?? [];
+  const teamDeadline = slots.find((s) => s.id === teamSlot)?.deadline;
+  const teamMinutes = teamDeadline ? Number(teamDeadline.slice(0, 2)) * 60 + Number(teamDeadline.slice(3, 5)) : null;
+
   return (
     <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
       <div>
@@ -538,21 +562,46 @@ function StoreDetail({
                   const cell = d.slots[sl.id];
                   const post = cell.post;
                   const late = post && post.date !== d.date ? `${shortDate(post.date)} ` : "";
+                  const label =
+                    cell.status === null
+                      ? "closed"
+                      : cell.status === "upcoming"
+                        ? "not due"
+                        : post
+                          ? `${late}${post.time}`
+                          : "missed";
+                  const cls = `rounded px-1.5 py-0.5 text-center whitespace-nowrap min-w-16 ${
+                    cell.status ? STATUS_CELL[cell.status] : "text-gray-300"
+                  }`;
+                  // Every slot that came due — missed ones most of all — can show
+                  // who was on the clock at its deadline.
+                  const due = cell.status !== null && cell.status !== "upcoming";
+                  const key = `${d.date}|${sl.id}`;
                   return (
-                    <td key={sl.id} className="px-0.5 py-0.5">
-                      <div
-                        className={`rounded px-1.5 py-0.5 text-center whitespace-nowrap min-w-16 ${
-                          cell.status ? STATUS_CELL[cell.status] : "text-gray-300"
-                        }`}
-                      >
-                        {cell.status === null
-                          ? "closed"
-                          : cell.status === "upcoming"
-                            ? "not due"
-                            : post
-                            ? `${late}${post.time}`
-                            : "missed"}
-                      </div>
+                    <td key={sl.id} className="px-0.5 py-0.5 align-top">
+                      {post ? (
+                        <button
+                          type="button"
+                          onClick={() => showReport(post.ts)}
+                          title="Show this report"
+                          className={`${cls} w-full hover:ring-1 hover:ring-gray-300 cursor-pointer`}
+                        >
+                          {label}
+                        </button>
+                      ) : (
+                        <div className={cls}>{label}</div>
+                      )}
+                      {due && (
+                        <button
+                          type="button"
+                          onClick={() => setTeam((cur) => (cur === key ? null : key))}
+                          className={`block mx-auto mt-0.5 text-[10px] leading-none rounded px-1 py-0.5 ${
+                            team === key ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-700"
+                          }`}
+                        >
+                          team
+                        </button>
+                      )}
                     </td>
                   );
                 })}
@@ -560,6 +609,16 @@ function StoreDetail({
             ))}
           </tbody>
         </table>
+        {team && teamMinutes !== null && (
+          <div className="mt-2 max-w-md">
+            <TeamPanel
+              key={team}
+              url={`/api/team-on-duty?store=${row.storeId}&date=${teamDate}&start=${teamMinutes}&end=${teamMinutes}`}
+              note={`${SLOT_SHORT[teamSlot as SlotId]} report due`}
+              narrow
+            />
+          </div>
+        )}
       </div>
 
       <div className="min-w-0">
@@ -582,10 +641,21 @@ function StoreDetail({
         </div>
         {loading && <div className="text-xs text-gray-400">Reading the channel…</div>}
         {messages && (
-          <div className="max-h-[32rem] overflow-y-auto border border-gray-100 rounded-lg bg-white divide-y divide-gray-50">
+          // relative: the scroll in showReport reads each message's offsetTop
+          // against this box.
+          <div
+            ref={listRef}
+            className="relative max-h-[32rem] overflow-y-auto border border-gray-100 rounded-lg bg-white divide-y divide-gray-50"
+          >
             {messages.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">Nothing.</div>}
             {messages.map((m) => (
-              <div key={m.ts} className="px-3 py-2 text-xs grid grid-cols-[7rem_1fr] gap-3">
+              <div
+                key={m.ts}
+                data-ts={m.ts}
+                className={`px-3 py-2 text-xs grid grid-cols-[7rem_1fr] gap-3 transition-colors ${
+                  focusTs === m.ts ? "bg-yellow-50" : ""
+                }`}
+              >
                 <div className="text-gray-500">
                   <div>{shortDate(m.date)} {m.time}</div>
                   <div className="truncate text-gray-400">{m.user}</div>

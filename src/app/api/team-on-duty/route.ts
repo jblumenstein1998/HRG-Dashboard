@@ -28,7 +28,7 @@ export const maxDuration = 60;
  * this is open to the tabs that use it rather than only to Staffing.
  */
 
-const TABS: Tab[] = ["/dashboard", "/jolt", "/staffing"];
+const TABS: Tab[] = ["/dashboard", "/jolt", "/staffing", "/admin-links"];
 
 /** Longest window answered — a full day; anything wider isn't one shift's work. */
 const MAX_WINDOW_MINUTES = 1440;
