@@ -6,6 +6,7 @@ import TabOptions from "@/components/TabOptions";
 import { useCopyImage } from "@/components/CopyImageButton";
 import { PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
 import type { Tab } from "@/lib/users/tabs";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 
 // Store order matches lib/stores.ts, so this tab reads in the same sequence as
@@ -43,6 +44,7 @@ type ListInstanceStatus = "onTime" | "late" | "missed" | "pending";
 type ListInstanceRow = {
   id: string;
   title: string;
+  shownAt: number | null;
   deadline: number | null;
   completedAt: number | null;
   completedBy: string | null;
@@ -756,40 +758,7 @@ function StorePanel({
               </thead>
               <tbody>
                 {sortedRows.map(row => (
-                  <tr key={row.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
-                    <td className="px-4 sm:px-5 py-1.5 text-gray-900">
-                      <a
-                        href={JOLT_BROWSE_LISTS}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Open Browse Lists in Jolt"
-                        className="hover:text-red-700 hover:underline"
-                      >
-                        {row.title.trim()}
-                      </a>
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
-                      {fmtStamp(row.deadline, tz)}
-                      {/* Only unfinished lists get a countdown — once a list is
-                          done, how long was left is no longer the useful fact. */}
-                      {row.completedAt === null && row.deadline !== null && (
-                        <span
-                          className={`ml-2 text-xs ${
-                            row.status === "missed" ? "text-red-500" : "text-gray-400"
-                          }`}
-                        >
-                          {untilDue(row.deadline, asOf)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
-                      {fmtStamp(row.completedAt, tz)}
-                    </td>
-                    <td className="px-3 py-1.5 text-gray-600">{row.completedBy ?? "—"}</td>
-                    <td className="px-3 py-1.5">
-                      <StatusBadge status={row.status} />
-                    </td>
-                  </tr>
+                  <ListRow key={row.id} row={row} store={store} tz={tz} asOf={asOf} />
                 ))}
               </tbody>
             </table>
@@ -797,6 +766,73 @@ function StorePanel({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * One list, and for a missed or late one, who was on the clock while it was
+ * owed — from when Jolt showed it to its deadline. On-time and not-yet-due
+ * lists get no button: nothing to answer for.
+ */
+function ListRow({ row, store, tz, asOf }: { row: ListInstanceRow; store: string; tz: string; asOf: number }) {
+  const [teamOpen, setTeamOpen] = useState(false);
+  // Every missed or late list. The window runs from when Jolt showed the list
+  // to its deadline; a list without a shown time gets the hour before.
+  const canShowTeam = row.status === "missed" || row.status === "late";
+  const to = row.deadline ?? row.completedAt ?? asOf;
+  const from = row.shownAt ?? to - 3600;
+  return (
+    <>
+      <tr className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
+        <td className="px-4 sm:px-5 py-1.5 text-gray-900">
+          <a
+            href={JOLT_BROWSE_LISTS}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open Browse Lists in Jolt"
+            className="hover:text-red-700 hover:underline"
+          >
+            {row.title.trim()}
+          </a>
+        </td>
+        <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
+          {fmtStamp(row.deadline, tz)}
+          {/* Only unfinished lists get a countdown — once a list is
+              done, how long was left is no longer the useful fact. */}
+          {row.completedAt === null && row.deadline !== null && (
+            <span
+              className={`ml-2 text-xs ${
+                row.status === "missed" ? "text-red-500" : "text-gray-400"
+              }`}
+            >
+              {untilDue(row.deadline, asOf)}
+            </span>
+          )}
+        </td>
+        <td className="px-3 py-1.5 text-gray-600 tabular-nums whitespace-nowrap">
+          {fmtStamp(row.completedAt, tz)}
+        </td>
+        <td className="px-3 py-1.5 text-gray-600">{row.completedBy ?? "—"}</td>
+        <td className="px-3 py-1.5">
+          <div className="flex items-center gap-2">
+            <StatusBadge status={row.status} />
+            {canShowTeam && (
+              <TeamButton label="Team" open={teamOpen} onClick={() => setTeamOpen((v) => !v)} />
+            )}
+          </div>
+        </td>
+      </tr>
+      {canShowTeam && teamOpen && (
+        <tr className="border-b border-gray-50">
+          <td colSpan={5} className="px-4 sm:px-5 pb-2.5 pt-0.5 bg-gray-50/60">
+            <TeamPanel
+              url={`/api/team-on-duty?store=${encodeURIComponent(store)}&from=${from}&to=${to}`}
+              note="while the list was open"
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -853,8 +889,8 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
       fetch(`/api/jolt/store-lists?${qs}`)
         .then(res => {
           if (res.status === 401) {
-            router.push("/login");
-            throw new Error("unauth");
+router.push("/login");
+throw new Error("unauth");
           }
           return res.json();
         })
@@ -949,133 +985,133 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
       <div className="sticky top-0 z-20">
         <header className="bg-white border-b border-gray-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-            <div className="flex items-center gap-3 shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
-              <div className="flex flex-col">
-                <div className="relative w-fit">
-                  <select
-                    value="/jolt"
-                    onChange={e => router.push(e.target.value)}
-                    className="text-base font-semibold text-gray-900 leading-tight bg-transparent border-0 p-0 m-0 pr-5 w-full appearance-none cursor-pointer focus:outline-none focus:ring-0 [text-align-last:center]"
-                  >
-                    <TabOptions tabs={tabs} isAdmin={isAdmin} />
-                  </select>
-                  <svg
-                    className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={2.5}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <p className="text-xs text-gray-400 leading-tight">
-                  {fmtDate(range.start)} – {fmtDate(range.end)}
-                </p>
-              </div>
-            </div>
+<div className="flex items-center gap-3 shrink-0">
+  {/* eslint-disable-next-line @next/next/no-img-element */}
+  <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
+  <div className="flex flex-col">
+    <div className="relative w-fit">
+      <select
+        value="/jolt"
+        onChange={e => router.push(e.target.value)}
+        className="text-base font-semibold text-gray-900 leading-tight bg-transparent border-0 p-0 m-0 pr-5 w-full appearance-none cursor-pointer focus:outline-none focus:ring-0 [text-align-last:center]"
+      >
+        <TabOptions tabs={tabs} isAdmin={isAdmin} />
+      </select>
+      <svg
+        className="absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-900 pointer-events-none"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2.5}
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+      </svg>
+    </div>
+    <p className="text-xs text-gray-400 leading-tight">
+      {fmtDate(range.start)} – {fmtDate(range.end)}
+    </p>
+  </div>
+</div>
 
-            <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                {quickButtons.map(b => (
-                  <button
-                    key={b.key}
-                    onClick={b.fn}
-                    disabled={loading}
-                    className={`text-xs px-3 py-1.5 transition disabled:opacity-50 ${
-                      quick === b.key
-                        ? "bg-red-700 text-white font-medium"
-                        : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    {b.label}
-                  </button>
-                ))}
-              </div>
+<div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
+  <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+    {quickButtons.map(b => (
+      <button
+        key={b.key}
+        onClick={b.fn}
+        disabled={loading}
+        className={`text-xs px-3 py-1.5 transition disabled:opacity-50 ${
+          quick === b.key
+            ? "bg-red-700 text-white font-medium"
+            : "bg-white text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        {b.label}
+      </button>
+    ))}
+  </div>
 
-              {/* Historical periods — same options as the drive-thru tab. */}
-              <select
-                value={quick && PERIOD_OPTIONS.some(o => o.key === quick) ? quick : ""}
-                onChange={e => {
-                  if (e.target.value) applyRange(rangeKeyToDates(e.target.value as RangeKey), e.target.value);
-                }}
-                disabled={loading}
-                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300"
-              >
-                <option value="">Period…</option>
-                {PERIOD_OPTIONS.map(o => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+  {/* Historical periods — same options as the drive-thru tab. */}
+  <select
+    value={quick && PERIOD_OPTIONS.some(o => o.key === quick) ? quick : ""}
+    onChange={e => {
+      if (e.target.value) applyRange(rangeKeyToDates(e.target.value as RangeKey), e.target.value);
+    }}
+    disabled={loading}
+    className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300"
+  >
+    <option value="">Period…</option>
+    {PERIOD_OPTIONS.map(o => (
+      <option key={o.key} value={o.key}>
+        {o.label}
+      </option>
+    ))}
+  </select>
 
-              <div className="flex items-center gap-1">
-                <input
-                  type="date"
-                  value={start}
-                  max={end}
-                  onChange={e => {
-                    setStart(e.target.value);
-                    setQuick(null);
-                  }}
-                  className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
-                />
-                <span className="text-xs text-gray-400">to</span>
-                <input
-                  type="date"
-                  value={end}
-                  min={start}
-                  onChange={e => {
-                    setEnd(e.target.value);
-                    setQuick(null);
-                  }}
-                  className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
-                />
-              </div>
+  <div className="flex items-center gap-1">
+    <input
+      type="date"
+      value={start}
+      max={end}
+      onChange={e => {
+        setStart(e.target.value);
+        setQuick(null);
+      }}
+      className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+    />
+    <span className="text-xs text-gray-400">to</span>
+    <input
+      type="date"
+      value={end}
+      min={start}
+      onChange={e => {
+        setEnd(e.target.value);
+        setQuick(null);
+      }}
+      className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+    />
+  </div>
 
-              <button
-                onClick={() => applyRange({ start, end }, null)}
-                disabled={loading}
-                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
-              >
-                {loading ? "Fetching…" : "Fetch"}
-              </button>
-              <button
-                onClick={() => load(range, { bust: true })}
-                disabled={loading}
-                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
-              >
-                Refresh
-              </button>
-              <button
-                onClick={async () => {
-                  await fetch("/api/auth/logout", { method: "POST" });
-                  router.push("/login");
-                }}
-                className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
-              >
-                Sign out
-              </button>
-            </div>
+  <button
+    onClick={() => applyRange({ start, end }, null)}
+    disabled={loading}
+    className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+  >
+    {loading ? "Fetching…" : "Fetch"}
+  </button>
+  <button
+    onClick={() => load(range, { bust: true })}
+    disabled={loading}
+    className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+  >
+    Refresh
+  </button>
+  <button
+    onClick={async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      router.push("/login");
+    }}
+    className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
+  >
+    Sign out
+  </button>
+</div>
           </div>
         </header>
 
         <div className="bg-gray-50 border-b border-gray-200 shadow-sm">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-            <span className="text-gray-500">
-              Complete&nbsp;
-              <span className="text-green-600 font-medium">≥{COMPLETE_TARGET}%</span>
-              {" / "}
-              <span className="text-yellow-600 font-medium">≥{COMPLETE_THRESHOLD}%</span>
-              {" / "}
-              <span className="text-red-600 font-medium">&lt;{COMPLETE_THRESHOLD}%</span>
-            </span>
-            <div className="ml-auto flex items-center gap-3">
-              <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
-            </div>
+<span className="text-gray-500">
+  Complete&nbsp;
+  <span className="text-green-600 font-medium">≥{COMPLETE_TARGET}%</span>
+  {" / "}
+  <span className="text-yellow-600 font-medium">≥{COMPLETE_THRESHOLD}%</span>
+  {" / "}
+  <span className="text-red-600 font-medium">&lt;{COMPLETE_THRESHOLD}%</span>
+</span>
+<div className="ml-auto flex items-center gap-3">
+  <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
+</div>
           </div>
         </div>
       </div>
@@ -1083,14 +1119,14 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-4">
         {status === "error" && (
           <div className="bg-white rounded-xl border border-red-200 px-5 py-4 text-sm text-red-700">
-            Could not load Jolt: {error ?? "unknown error"}
+Could not load Jolt: {error ?? "unknown error"}
           </div>
         )}
 
         {report?.truncated && (
           <div className="bg-white rounded-xl border border-yellow-200 px-5 py-3 text-sm text-yellow-800">
-            This range returned more lists than the page fetches in one go. Narrow the dates for a
-            complete picture.
+This range returned more lists than the page fetches in one go. Narrow the dates for a
+complete picture.
           </div>
         )}
 
@@ -1100,39 +1136,39 @@ export default function JoltClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; is
           Jolt" — a claim about the data, not a loading state.
         */}
         {/* Sits above everything and does not wait on the report — it answers a
-            different question, and it is the one someone opens the tab for. */}
+different question, and it is the one someone opens the tab for. */}
         {todo && <ToDoCard report={todo} visibleStores={visibleStores} />}
 
         {tooLong ? (
           <div className="bg-white rounded-xl border border-yellow-200 px-5 py-6 text-sm text-yellow-900">
-            Selected range is too long — {tooLong} days. The maximum is {MAX_RANGE_DAYS} days.
+Selected range is too long — {tooLong} days. The maximum is {MAX_RANGE_DAYS} days.
           </div>
         ) : !report ? (
           status !== "error" && (
-            <div className="bg-white rounded-xl border border-gray-200 px-5 py-8 text-sm text-gray-400">
-              Loading lists…
-            </div>
+<div className="bg-white rounded-xl border border-gray-200 px-5 py-8 text-sm text-gray-400">
+  Loading lists…
+</div>
           )
         ) : (
           <>
-            <SummaryCard
-              rows={visible}
-              highlighted={highlighted}
-              onPick={toggleHighlight}
-              totalLabel={`Total - ${storeFilter.label ?? "HRG"}`}
-            />
-            {selected && (
-              <StorePanel
-                store={selected}
-                data={selectedData}
-                options={visible}
-                asOf={report.asOf}
-                onChange={store => {
-                  setPicked(store);
-                  setHighlighted(store);
-                }}
-              />
-            )}
+<SummaryCard
+  rows={visible}
+  highlighted={highlighted}
+  onPick={toggleHighlight}
+  totalLabel={`Total - ${storeFilter.label ?? "HRG"}`}
+/>
+{selected && (
+  <StorePanel
+    store={selected}
+    data={selectedData}
+    options={visible}
+    asOf={report.asOf}
+    onChange={store => {
+      setPicked(store);
+      setHighlighted(store);
+    }}
+  />
+)}
           </>
         )}
       </main>

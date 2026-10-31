@@ -721,6 +721,11 @@ export type ListInstanceStatus = "onTime" | "late" | "missed" | "pending";
 export type ListInstanceRow = {
   id: string;
   title: string;
+  /**
+   * Unix seconds when Jolt surfaced the list to the store. With the deadline,
+   * the window the list was owed in — what the team-on-duty button covers.
+   */
+  shownAt: number | null;
   /** Unix seconds, company timezone. Null for unscheduled lists. */
   deadline: number | null;
   completedAt: number | null;
@@ -770,6 +775,7 @@ const STORE_LISTS_QUERY = `
         node {
           id
           instanceTitle
+          displayTimestamp
           deadlineTimestamp
           completionTimestamp
           listTemplate { id title }
@@ -785,6 +791,7 @@ const STORE_LISTS_QUERY = `
 type StoreListNode = {
   id: string;
   instanceTitle: string | null;
+  displayTimestamp: number | null;
   deadlineTimestamp: number | null;
   completionTimestamp: number | null;
   listTemplate: { id: string; title: string } | null;
@@ -827,8 +834,14 @@ export async function fetchStoreLists(
   opts: { bust?: boolean; hours?: number } = {},
 ): Promise<StoreListsReport> {
   if (startDate !== endDate || opts.hours) return fetchStoreListsFromJolt(startDate, endDate, opts);
-  return readThrough("jolt_store_lists", storeListsKey(startDate), endDate,
-    () => fetchStoreListsFromJolt(startDate, endDate, opts), { bust: opts.bust });
+  const read = (bust?: boolean) =>
+    readThrough("jolt_store_lists", storeListsKey(startDate), endDate,
+      () => fetchStoreListsFromJolt(startDate, endDate, { ...opts, bust }), { bust });
+  const report = await read(opts.bust);
+  // Days saved before rows carried shownAt (added 2026-10-30) are re-read once
+  // and re-saved, so the team-on-duty window is there for every day viewed.
+  const stale = report.stores.some((s) => s.rows.some((r) => !("shownAt" in r)));
+  return stale && !opts.bust ? read(true) : report;
 }
 
 const storeListsKey = (day: string) => `${day}__${day}`;
@@ -979,6 +992,7 @@ async function fetchStoreListsFromJolt(
     entry.rows.push({
       id: node.id,
       title: node.listTemplate?.title ?? node.instanceTitle ?? "Untitled list",
+      shownAt: node.displayTimestamp,
       deadline,
       completedAt,
       // Jolt occasionally completes an instance with no submitter recorded;

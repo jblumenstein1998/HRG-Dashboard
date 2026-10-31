@@ -491,6 +491,11 @@ export type TeamDuring = {
  * `endMinutes` (inclusive) of a local date, for tying something that happened
  * at the store — a guest's visit, a missed list — to the people working it.
  *
+ * `endMinutes` may pass 1439: minutes after midnight on the same business
+ * date, which is how a closing list due at 12:00 AM stays one window. The
+ * date's own shifts are measured in that frame already (an overnight close
+ * ends at 1575), so rosterAt answers them without change.
+ *
  * The same store-day load and the same rosterAt the Staffing tab uses, asked
  * once per minute of the window, so this can never disagree with that screen
  * about who was on. Pay is left out: this is shown on tabs that aren't the
