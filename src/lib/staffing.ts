@@ -510,31 +510,43 @@ export async function getTeamDuring(
   const [day] = await withParPriority(PAR_PRIORITY.onClock, () => storeDaysFor(loc, [localDate], false));
   if (day.error) return { ...base, team: [], error: day.error };
 
-  const byShift = new Map<string, { member: StaffOnClock; breakMinutes: number; minutes: number }>();
+  /*
+   * One entry per person, not per shift. Somebody who clocks out for a break
+   * and back in is two PAR shifts, and a window spanning the break found them
+   * both — the same name listed twice. Their shifts are merged into one span,
+   * first clock-in to last clock-out; the gap is a break, not a second person.
+   */
+  const byPerson = new Map<string, { shifts: Map<number, StaffOnClock>; breakMinutes: number; minutes: number }>();
   for (let m = startMinutes; m <= endMinutes; m++) {
     for (const p of rosterAt(day, m).onClock) {
-      const key = `${p.employeeId ?? p.name}|${p.startMinutes}`;
-      const seen = byShift.get(key) ?? { member: p, breakMinutes: 0, minutes: 0 };
+      const key = p.employeeId ?? p.name;
+      const seen = byPerson.get(key) ?? { shifts: new Map(), breakMinutes: 0, minutes: 0 };
+      seen.shifts.set(p.startMinutes, p);
       seen.minutes++;
       if (p.onBreak) seen.breakMinutes++;
-      byShift.set(key, seen);
+      byPerson.set(key, seen);
     }
   }
 
-  const team = [...byShift.values()].map(({ member, breakMinutes, minutes }): TeamMember => ({
-    employeeId: member.employeeId,
-    name: member.name,
-    job: member.job,
-    jobId: member.jobId,
-    startMinutes: member.startMinutes,
-    endMinutes: member.endMinutes,
-    startLabel: member.startLabel,
-    endLabel: member.endLabel,
-    isOpen: member.isOpen,
-    minutesWorked: member.minutesWorked,
-    position: member.workstream?.position ?? null,
-    onBreakThroughout: breakMinutes === minutes,
-  }));
+  const team = [...byPerson.values()].map(({ shifts, breakMinutes, minutes }): TeamMember => {
+    const list = [...shifts.values()].sort((a, b) => a.startMinutes - b.startMinutes);
+    const first = list[0];
+    const last = list.reduce((a, b) => (b.isOpen || (!a.isOpen && b.endMinutes > a.endMinutes) ? b : a));
+    return {
+      employeeId: first.employeeId,
+      name: first.name,
+      job: first.job,
+      jobId: first.jobId,
+      startMinutes: first.startMinutes,
+      endMinutes: last.endMinutes,
+      startLabel: first.startLabel,
+      endLabel: last.endLabel,
+      isOpen: last.isOpen,
+      minutesWorked: list.reduce((sum, s) => sum + s.minutesWorked, 0),
+      position: first.workstream?.position ?? null,
+      onBreakThroughout: breakMinutes === minutes,
+    };
+  });
   team.sort((a, b) => a.startMinutes - b.startMinutes || a.name.localeCompare(b.name));
   return { ...base, team, error: null };
 }
