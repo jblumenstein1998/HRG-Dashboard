@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { PERIODS } from "@/lib/fiscal";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
-import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
+import { TeamPanel } from "@/components/TeamOnDuty";
 
 /**
  * Slack reporting, store by store — what the GM's Slack completion criterion
@@ -518,8 +518,8 @@ function StoreDetail({
   const messages = row.messages?.filter((m) => !reportsOnly || m.placed) ?? null;
   const listRef = useRef<HTMLDivElement>(null);
   const [focusTs, setFocusTs] = useState<string | null>(null);
-  // The report whose team on duty is open, by message ts.
-  const [teamTs, setTeamTs] = useState<string | null>(null);
+  // The slot whose team on duty is open, as "date|slot".
+  const [team, setTeam] = useState<string | null>(null);
 
   // Room under the last message once a report has been jumped to, so even the
   // newest one can be scrolled to the top of the list.
@@ -553,6 +553,8 @@ function StoreDetail({
     const hhmm = slots.find((s) => s.id === slot)?.deadline;
     return hhmm ? Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) : null;
   };
+  const [teamDate, teamSlot] = (team?.split("|") ?? []) as [string?, SlotId?];
+  const teamMinutes = teamSlot ? deadlineMinutes(teamSlot) : null;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
@@ -588,6 +590,11 @@ function StoreDetail({
                   const cls = `rounded px-1.5 py-0.5 text-center whitespace-nowrap min-w-16 ${
                     cell.status ? STATUS_CELL[cell.status] : "text-gray-300"
                   }`;
+                  // Every slot that came due — missed ones most of all, which
+                  // have no message to hang this on — can show who was on the
+                  // clock at its deadline.
+                  const due = cell.status !== null && cell.status !== "upcoming";
+                  const key = `${d.date}|${sl.id}`;
                   return (
                     <td key={sl.id} className="px-0.5 py-0.5 align-top">
                       {post ? (
@@ -602,6 +609,17 @@ function StoreDetail({
                       ) : (
                         <div className={cls}>{label}</div>
                       )}
+                      {due && (
+                        <button
+                          type="button"
+                          onClick={() => setTeam((cur) => (cur === key ? null : key))}
+                          className={`block mx-auto mt-0.5 text-[10px] leading-none rounded px-1 py-0.5 ${
+                            team === key ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-700"
+                          }`}
+                        >
+                          team
+                        </button>
+                      )}
                     </td>
                   );
                 })}
@@ -609,6 +627,16 @@ function StoreDetail({
             ))}
           </tbody>
         </table>
+        {team && teamMinutes !== null && (
+          <div className="mt-2 max-w-md">
+            <TeamPanel
+              key={team}
+              url={`/api/team-on-duty?store=${row.storeId}&date=${teamDate}&start=${teamMinutes}&end=${teamMinutes}`}
+              note={`${SLOT_SHORT[teamSlot!]} report due`}
+              narrow
+            />
+          </div>
+        )}
       </div>
 
       <div className="min-w-0">
@@ -664,15 +692,6 @@ function StoreDetail({
                       <span className="text-gray-300">not a report{m.files ? " (image)" : ""}</span>
                     )}
                   </div>
-                  {m.placed && deadlineMinutes(m.placed.slot) !== null && (
-                    <div className="mt-1">
-                      <TeamButton
-                        label="Team"
-                        open={teamTs === m.ts}
-                        onClick={() => setTeamTs((cur) => (cur === m.ts ? null : m.ts))}
-                      />
-                    </div>
-                  )}
                 </div>
                 <div className="min-w-0">
                   <div className="whitespace-pre-wrap break-words text-gray-700">
@@ -680,16 +699,6 @@ function StoreDetail({
                   </div>
                   {m.check && m.check.checks.length > 0 && <Checks check={m.check} />}
                 </div>
-                {/* Who was on the clock when this report was due — the slot's
-                    deadline on the day it was filed under, not when it was posted. */}
-                {m.placed && teamTs === m.ts && (
-                  <div className="col-span-2">
-                    <TeamPanel
-                      url={`/api/team-on-duty?store=${row.storeId}&date=${m.placed.date}&start=${deadlineMinutes(m.placed.slot)}&end=${deadlineMinutes(m.placed.slot)}`}
-                      note={`${SLOT_SHORT[m.placed.slot]} report due`}
-                    />
-                  </div>
-                )}
               </div>
             ))}
             {/* Nearly the list's own height (max-h-[32rem]), so the last
