@@ -159,8 +159,8 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
     load(r);
   }
 
-  // Finished periods that start inside Slack's 90 days; PTD covers the current one.
-  const periodOptions = PERIODS.filter((p) => p.start >= oldest() && p.end <= yesterday()).slice().reverse();
+  // Periods starting inside Slack's 90 days, the one in progress as "to date".
+  const periodOptions = PERIODS.filter((p) => p.start >= oldest() && p.start <= today()).slice().reverse();
 
   const rows = useMemo(() => {
     const visible = (data?.rows ?? []).filter((r) =>
@@ -263,7 +263,7 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
               value={quick?.startsWith("p:") ? quick : ""}
               onChange={(e) => {
                 const p = PERIODS.find((q) => `p:${q.period}` === e.target.value);
-                if (p) apply({ start: p.start, end: p.end }, e.target.value);
+                if (p) apply({ start: p.start, end: p.end < today() ? p.end : today() }, e.target.value);
               }}
               disabled={loading}
               className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300"
@@ -272,6 +272,7 @@ export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab
               {periodOptions.map((p) => (
                 <option key={p.period} value={`p:${p.period}`}>
                   P{p.period}
+                  {p.end > yesterday() && " (to date)"}
                 </option>
               ))}
             </select>

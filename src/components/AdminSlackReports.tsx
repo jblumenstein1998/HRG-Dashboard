@@ -301,9 +301,10 @@ export default function AdminSlackReports({ leaders }: { leaders: Leader[] }) {
 
   const failing = data?.stores.filter((s) => s.error && inFilter(storeFilter.allowed, s.name)) ?? [];
 
-  // Only periods that can be shown whole: finished, and starting inside
-  // Slack's 90 days. The period in progress is what PTD is for.
-  const periodOptions = PERIODS.filter((p) => p.start >= oldest() && p.end <= yesterday())
+  // Periods starting inside Slack's 90 days, the one in progress included as
+  // "to date" — it was only reachable through PTD, which is easy to miss when
+  // looking for a period in this list.
+  const periodOptions = PERIODS.filter((p) => p.start >= oldest() && p.start <= today())
     .slice()
     .reverse();
 
@@ -338,7 +339,7 @@ export default function AdminSlackReports({ leaders }: { leaders: Leader[] }) {
             value={quick?.startsWith("p:") ? quick : ""}
             onChange={(e) => {
               const p = PERIODS.find((q) => `p:${q.period}` === e.target.value);
-              if (p) apply({ start: p.start, end: p.end }, e.target.value);
+              if (p) apply({ start: p.start, end: p.end < today() ? p.end : today() }, e.target.value);
             }}
             disabled={loading}
             className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-300"
@@ -347,6 +348,7 @@ export default function AdminSlackReports({ leaders }: { leaders: Leader[] }) {
             {periodOptions.map((p) => (
               <option key={p.period} value={`p:${p.period}`}>
                 P{p.period}
+                {p.end > yesterday() && " (to date)"}
               </option>
             ))}
           </select>
