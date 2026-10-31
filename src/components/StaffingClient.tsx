@@ -13,7 +13,8 @@
  * saying whose 6:30 is how you end up an hour out for half the estate.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
@@ -1119,6 +1120,8 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
   const visible = (data?.stores ?? []).filter((s) => inFilter(filter.allowed, s.storeName));
   const rows = visible.flatMap((s) => s.rows.map((r) => ({ ...r, storeName: s.storeName })));
   const storeErrors = visible.filter((s) => s.error);
+  /** The row whose "team at close" panel is open, by its React key. */
+  const [teamOpen, setTeamOpen] = useState<string | null>(null);
 
   return (
     <section ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -1203,11 +1206,16 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
                 <th className="px-3 py-1.5 text-right font-semibold">In</th>
                 <th className="px-3 py-1.5 text-right font-semibold">Out</th>
                 <th className="px-3 py-1.5 text-right font-semibold">PAR credits</th>
+                <th data-copy-image-ignore="true" className="px-3 py-1.5" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.storeName}-${r.businessDate}-${r.employeeId ?? i}`} className="border-b border-gray-50 last:border-0">
+              {rows.map((r, i) => {
+                const key = `${r.storeName}-${r.businessDate}-${r.employeeId ?? i}`;
+                const open = teamOpen === key;
+                return (
+                <Fragment key={key}>
+                <tr className="border-b border-gray-50 last:border-0">
                   <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{dateHeader(r.businessDate)}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap text-gray-900">{r.storeName}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-900">{r.name}</td>
@@ -1221,8 +1229,33 @@ function MissedClockOutSection({ filter, reloadKey }: { filter: StoreFilter; rel
                   <td className="px-3 py-1.5 text-right tabular-nums text-gray-400 whitespace-nowrap">
                     {hrs(r.minutesWorked)}
                   </td>
+                  {/* Who was in charge when the store closed — the leaders who
+                      should have seen everybody off the clock. */}
+                  <td data-copy-image-ignore="true" className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {r.closeMinutes === null ? (
+                      <span className="text-xs text-gray-300" title="No store hours on file for this date">—</span>
+                    ) : (
+                      <TeamButton
+                        open={open}
+                        onClick={() => setTeamOpen(open ? null : key)}
+                        label="Team at close"
+                      />
+                    )}
+                  </td>
                 </tr>
-              ))}
+                {open && r.closeMinutes !== null && (
+                  <tr className="border-b border-gray-50 bg-gray-50/60">
+                    <td colSpan={8} className="px-3 py-2">
+                      <TeamPanel
+                        url={`/api/team-on-duty?store=${encodeURIComponent(r.storeName)}&date=${r.businessDate}&start=${r.closeMinutes}&end=${r.closeMinutes}`}
+                        note="when the store closed"
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
