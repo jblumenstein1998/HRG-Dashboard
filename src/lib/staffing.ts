@@ -45,7 +45,7 @@ import { sql } from "./db";
 import { linkedRosterOrEmpty } from "./workstreamRoster";
 import { getShiftsHistory, getShiftsHistoryRange } from "./parShiftStore";
 import { clockLabel, rosterAt, type StoreDay } from "./staffingRoster";
-import { storeHoursFor } from "./storeHours";
+import { storeHoursFor, type DayHours } from "./storeHours";
 import { workstreamSyncStatus } from "./workstreamStore";
 
 export type StaffOnClock = {
@@ -1050,6 +1050,13 @@ export type MissedPunch = {
    * shown so the size of the correction is visible, not as a fact.
    */
   minutesWorked: number;
+  /**
+   * When the store closed that business date (lib/storeHours), in minutes past
+   * its midnight — past 1440 for a close after twelve. The moment the closing
+   * leaders should have seen everybody off the clock. Null if the store has no
+   * hours on file for the date.
+   */
+  closeMinutes: number | null;
 };
 
 export type StoreMissedPunches = {
@@ -1077,9 +1084,12 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
   const stores = await Promise.all(
     PAR_LOCATIONS.map(async (loc): Promise<StoreMissedPunches> => {
       try {
-        const [employees, jobs, ...days] = await Promise.all([
+        const [employees, jobs, hours, ...days] = await Promise.all([
           getEmployees(loc.storeId),
           getJobs(loc.storeId),
+          // Only feeds the "team at close" button, so missing hours cost the
+          // button, not the report.
+          storeHoursFor(loc.storeId, dates).catch(() => new Map<string, DayHours | null>()),
           ...dates.map((d) => getShiftsHistory(loc.storeId, d)),
         ]);
         const empById = new Map(employees.map((e) => [e.id, e]));
@@ -1101,6 +1111,7 @@ export async function getMissedPunches(dates: string[]): Promise<MissedPunchRepo
               endLabel: sh.isOpen ? "still open" : clockLabel(sh.endMinutes),
               stillOpen: sh.isOpen,
               minutesWorked: sh.minutesWorked,
+              closeMinutes: hours.get(businessDate)?.closeMinutes ?? null,
             });
           }
         });

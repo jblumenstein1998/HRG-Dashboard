@@ -15,7 +15,8 @@ export const maxDuration = 60;
  *
  * The first form is store-local on purpose, like the Staffing slider: a
  * daypart is 11am–2pm on each store's own clock, and `start`/`end` are minutes
- * past that date's midnight, both inclusive.
+ * past that date's midnight, both inclusive (past 1440 for after twelve, as
+ * with a store's close on the Timecards to fix table).
  *
  * The second is for windows that are instants — a Jolt list, from when it was
  * shown to its deadline. They are read on the store's clock and filed under
@@ -75,9 +76,12 @@ export async function GET(req: NextRequest) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: `Could not read "${date}" as a date (expected YYYY-MM-DD)` }, { status: 400 });
     }
-    const minute = (n: number) => Number.isInteger(n) && n >= 0 && n <= 1439;
+    // Past 1439 is after midnight but still this business date, up to PAR's
+    // 2:15 AM end of day — a store that closes at 1am closes at minute 1500.
+    const last = 1440 + BUSINESS_DAY_START_MINUTES - 1;
+    const minute = (n: number) => Number.isInteger(n) && n >= 0 && n <= last;
     if (!minute(start) || !minute(end) || end < start) {
-      return NextResponse.json({ error: "start and end must be minutes 0–1439, start ≤ end" }, { status: 400 });
+      return NextResponse.json({ error: `start and end must be minutes 0–${last}, start ≤ end` }, { status: 400 });
     }
   }
   if (end - start > MAX_WINDOW_MINUTES) {
