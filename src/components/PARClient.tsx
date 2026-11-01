@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, Fragment } from "react";
+import { useState, useCallback, useEffect, useRef, Fragment, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { PARLocation } from "@/lib/par";
 import TabOptions from "@/components/TabOptions";
@@ -226,6 +226,21 @@ function PosTierTable({
   const fmtMetric = metric === "dollars" ? fmtProductivity : fmtTplh;
   const metricArr = (d: StoreData) => (metric === "dollars" ? d.productivity : d.tplh);
 
+  // Sorts within each tier; with no column picked, tiers keep their
+  // highest-sales-first order. Column keys follow the cells left to right:
+  // m0 is the newest week/period (metric index 2), m2 the oldest (index 0).
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (loc: PARLocation, key: string): number | string | null => {
+    if (key === "name") return loc.name;
+    const d = dataMap[loc.storeId];
+    if (!d) return null;
+    if (key === "sales") return d.primarySales;
+    const m = metricArr(d);
+    return m[{ m0: 2, m1: 1, m2: 0 }[key as "m0" | "m1" | "m2"]] ?? null;
+  };
+  const thClass = "text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide";
+  const subLabel = (label: string) => <><br /><span className="normal-case font-normal tracking-normal text-gray-400">{label}</span></>;
+
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -244,19 +259,11 @@ function PosTierTable({
         </colgroup>
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {salesColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[0]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[0]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[1]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[2]}</span>
-            </th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
+            <SortableTh sortKey="sales" sort={sort} onSort={toggle} className={thClass}>{salesColTitle}{subLabel(colLabels[0])}</SortableTh>
+            <SortableTh sortKey="m0" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[0])}</SortableTh>
+            <SortableTh sortKey="m1" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[1])}</SortableTh>
+            <SortableTh sortKey="m2" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[2])}</SortableTh>
           </tr>
         </thead>
         <tbody>
@@ -269,7 +276,7 @@ function PosTierTable({
                   {tier.label}
                 </td>
               </tr>
-              {tier.stores.map(loc => {
+              {sortRows(tier.stores, sort, sortValue).map(loc => {
                 const d = dataMap[loc.storeId];
                 const isOpen = expandedIds.has(loc.storeId);
                 const m = metricArr(d);
@@ -468,6 +475,72 @@ function useMetricComp(endpoint: string) {
   return { stores, loading, refetch };
 }
 
+// ── Column sorting for the grouped tables ─────────────────────────────────────
+// A header click reorders the stores *inside* each group — market (TN / VA /
+// TX, or the leader's selection) on the comp tables, sales tier on the
+// Productivity/TPLH card; the subtotal rows and Total - HRG stay put.
+// Clicks cycle first direction → reverse → back to the default order. Numbers
+// start high-to-low (the question is usually "who's on top"), Location A–Z.
+// Comp columns sort on the comp % (same-store change vs last year), not the
+// dollar figure — a store with no prior year has no comp % and sinks.
+
+type SortDir = "asc" | "desc";
+type SortState = { key: string; dir: SortDir } | null;
+
+function useColumnSort() {
+  const [sort, setSort] = useState<SortState>(null);
+  const toggle = useCallback((key: string, firstDir: SortDir) => {
+    setSort(prev => {
+      if (prev?.key !== key) return { key, dir: firstDir };
+      if (prev.dir === firstDir) return { key, dir: firstDir === "asc" ? "desc" : "asc" };
+      return null;
+    });
+  }, []);
+  return { sort, toggle };
+}
+
+// Missing values (no labor hours, nobody clocked in) sink to the bottom in
+// either direction rather than leading an ascending sort.
+function sortRows<T>(rows: T[], sort: SortState, value: (row: T, key: string) => number | string | null): T[] {
+  if (!sort) return rows;
+  const mult = sort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = value(a, sort.key);
+    const vb = value(b, sort.key);
+    if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
+    const diff = typeof va === "string" || typeof vb === "string"
+      ? String(va).localeCompare(String(vb))
+      : va - vb;
+    return diff * mult;
+  });
+}
+
+function SortableTh({
+  sortKey, sort, onSort, firstDir = "desc", align = "right", className, children,
+}: {
+  sortKey: string;
+  sort: SortState;
+  onSort: (key: string, firstDir: SortDir) => void;
+  firstDir?: SortDir;
+  align?: "left" | "right";
+  className: string;
+  children: ReactNode;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th className={className} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey, firstDir)}
+        className={`inline-flex items-baseline gap-1 uppercase tracking-wide cursor-pointer select-none hover:text-gray-700 ${align === "right" ? "flex-row-reverse text-right" : "text-left"} ${active ? "text-gray-700" : ""}`}
+      >
+        <span className={`text-[9px] ${active ? "" : "invisible"}`}>{active && sort.dir === "asc" ? "▲" : "▼"}</span>
+        <span>{children}</span>
+      </button>
+    </th>
+  );
+}
+
 function MetricFigureCell({ figure, fmt }: { figure: MetricFigure; fmt: (v: number) => string }) {
   return (
     <td className="px-2 py-1 text-right tabular-nums text-xs whitespace-nowrap">
@@ -515,6 +588,9 @@ function MetricCompTable({
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
 
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (s: StoreMetricComp, key: string) => (key === "name" ? s.name : s[key as RangeField].compPct);
+
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
@@ -524,11 +600,11 @@ function MetricCompTable({
       <table className="w-full">
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {COMP_RANGE_COLS.map(c => (
-              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.field} sortKey={c.field} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
           </tr>
         </thead>
@@ -539,7 +615,7 @@ function MetricCompTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, sortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
@@ -656,6 +732,9 @@ function AvgCheckCompTable({
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
 
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (s: StoreAvgCheckRaw, key: string) => (key === "name" ? s.name : deriveAvgCheckFigure(s[key as RangeField]).compPct);
+
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
@@ -665,11 +744,11 @@ function AvgCheckCompTable({
       <table className="w-full">
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {COMP_RANGE_COLS.map(c => (
-              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.field} sortKey={c.field} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
           </tr>
         </thead>
@@ -680,7 +759,7 @@ function AvgCheckCompTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, sortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
@@ -973,6 +1052,17 @@ function SnapshotVsLastYearTable({
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
 
+  // Kept across range changes, so flipping from PTD to YTD re-ranks by the
+  // same column.
+  const { sort, toggle } = useColumnSort();
+  const snapshotSortValue = (s: SnapshotRaw, key: string): number | string | null => {
+    if (key === "name") return s.name;
+    if (key === "splh") return deriveSplh(s);
+    if (key === "tplh") return deriveSnapshotTplh(s);
+    if (key === "clockedIn") return s.clockedInTY;
+    return SNAPSHOT_METRIC_COLS.find(c => c.key === key)?.derive(s).compPct ?? null;
+  };
+
   const periods = completedPeriods();
   const quarters = completedQuarters();
 
@@ -1065,21 +1155,21 @@ function SnapshotVsLastYearTable({
         </colgroup>
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {SNAPSHOT_METRIC_COLS.map(c => (
-              <th key={c.key} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.key} sortKey={c.key} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            <SortableTh sortKey="splh" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               Productivity
-            </th>
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            </SortableTh>
+            <SortableTh sortKey="tplh" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               TPLH
-            </th>
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            </SortableTh>
+            <SortableTh sortKey="clockedIn" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               Clocked In
-            </th>
+            </SortableTh>
           </tr>
         </thead>
         <tbody>
@@ -1089,7 +1179,7 @@ function SnapshotVsLastYearTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, snapshotSortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
