@@ -96,9 +96,16 @@ export function buildOperatingTargets(): OperatingTargets {
     });
   };
 
-  const dq = (id: string, text: (pass: string) => string) => {
-    const x = c(id);
-    return text(gate(x.target, x.unit));
+  /**
+   * A guardrail as the sheet words it: the failing side of its gate ("<65%"
+   * where the rule passes at ≥65), with the number read from the rule.
+   */
+  const FAIL = { gte: "<", gt: "≤", lte: ">", lt: "≥" } as const;
+  const dq = (id: string, text: (fail: string) => string) => {
+    const g = c(id).target;
+    if (g.cmp === "between") throw new Error(`Guardrail ${id} has a range gate`);
+    const unit = c(id).unit === "percent" ? "%" : "";
+    return text(`${FAIL[g.cmp]}${g.value}${unit}`);
   };
 
   return {
@@ -166,16 +173,16 @@ export function buildOperatingTargets(): OperatingTargets {
         ],
       },
     ],
+    // In the sheet's order and words.
     guardrails: [
-      dq("dt_days_missing_target", (p) => `Speed of service: missed-target days must be ${p} a period`),
-      dq("dt_accuracy_weekly_floor", (p) => `Order accuracy ${p} in every week`),
-      dq("hosp_osat_weekly_floor", (p) => `SMG OSAT, Friendliness and Cleanliness ${p} in every week`),
-      dq("q_jolt_on_time", (p) => `Jolt on-time completion ${p}`),
-      dq("q_health_inspection_score", (p) => `County health score ${p}, no failure`),
-      "No high-risk RER or Food Safety finding; no guest-area cleanliness violation",
-      "Weekly mocks completed thoroughly and honestly",
-      dq("t_bin_management", (p) => `Bin management ${p}`),
-      "Never complete another person's ZU",
+      dq("dt_days_missing_target", (f) => `SOS ${f} missed target days per pay period`),
+      dq("dt_accuracy_weekly_floor", (f) => `Accuracy ${f} in any week`),
+      dq("hosp_osat_weekly_floor", (f) => `SMG ${f} per plan`),
+      "Dishonest weekly mocks",
+      dq("q_health_inspection_score", (f) => `County health score ${f} / failure, high-risk RER or Food Safety, or guest-area cleanliness violation`),
+      dq("q_jolt_on_time", (f) => `Jolt on-time ${f}`),
+      dq("t_bin_management", (f) => `Bin management ${f}`),
+      "Completing another person's ZU",
     ],
     notOnSheet: [
       {
@@ -184,7 +191,6 @@ export function buildOperatingTargets(): OperatingTargets {
         target: gate(c("dt_pull_forwards").target, "count"),
         note: "Drive-Thru Director: 1.25× on Speed of Service when met every week",
       },
-      { metric: "SMG Experienced a Problem", threshold: "≤ 10%", target: "≤ 5%", note: "Colouring only — SMG tab and store presentation" },
     ],
   };
 }
