@@ -31,6 +31,13 @@ export const C = {
 
 export const FONT = "Geist";
 
+/** A native line chart; lib/wbr/pptxChart.ts writes it. Kept structural here so draw.ts stays dependency-free. */
+export type ChartShapeSpec = {
+  categories: string[];
+  series: { name: string; values: (number | null)[]; color: string; width?: number; dash?: boolean; markers?: boolean; labelLast?: boolean }[];
+  format: string;
+};
+
 export type TextStyle = {
   size: number;
   color: string;
@@ -40,15 +47,17 @@ export type TextStyle = {
 };
 
 export type Shape =
-  | { kind: "box"; x: number; y: number; w: number; h: number; fill: string; line?: string; round?: boolean }
-  | { kind: "text"; x: number; y: number; w: number; h: number; content: string; style: TextStyle };
+  | { kind: "box"; x: number; y: number; w: number; h: number; fill: string; line?: string; round?: boolean; radius?: number }
+  | { kind: "text"; x: number; y: number; w: number; h: number; content: string; style: TextStyle }
+  | { kind: "chart"; x: number; y: number; w: number; h: number; spec: ChartShapeSpec };
 
 /** One slide's shapes, in drawing order (later ones on top). */
 export class Canvas {
   readonly shapes: Shape[] = [];
 
   /** A filled shape; `line` adds a 0.75pt outline, otherwise none. */
-  box(x: number, y: number, w: number, h: number, fill: string, opts: { line?: string; round?: boolean } = {}) {
+  /** `radius` (points) fixes the corner size; without it a rounded box uses PowerPoint's default, which grows with the box. */
+  box(x: number, y: number, w: number, h: number, fill: string, opts: { line?: string; round?: boolean; radius?: number } = {}) {
     this.shapes.push({ kind: "box", x, y, w, h, fill, ...opts });
   }
 
@@ -62,6 +71,11 @@ export class Canvas {
       w += 20;
     }
     if (content) this.shapes.push({ kind: "text", x, y, w, h, content, style });
+  }
+
+  /** A native PowerPoint line chart filling the box. */
+  chart(x: number, y: number, w: number, h: number, spec: ChartShapeSpec) {
+    this.shapes.push({ kind: "chart", x, y, w, h, spec });
   }
 
   /** A rounded chip with centred text — the WoW/YoY and status pills. */

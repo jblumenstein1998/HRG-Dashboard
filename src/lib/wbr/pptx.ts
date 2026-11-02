@@ -13,10 +13,13 @@
 
 import JSZip from "jszip";
 import { C, FONT, type Canvas, type Shape } from "@/lib/wbr/draw";
+import { chartXml } from "@/lib/wbr/pptxChart";
 
 const EMU = 12700; // per point
 const REL_SLIDE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
 const CT_SLIDE = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
+const REL_CHART = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+const CT_CHART = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 
 const emu = (pt: number) => Math.round(pt * EMU);
 const hex = (c: string) => c.replace("#", "").toUpperCase();
@@ -36,12 +39,27 @@ const xfrm = (s: { x: number; y: number; w: number; h: number }) =>
   `<a:xfrm><a:off x="${emu(s.x)}" y="${emu(s.y)}"/><a:ext cx="${emu(s.w)}" cy="${emu(s.h)}"/></a:xfrm>`;
 const fill = (c: string) => `<a:solidFill><a:srgbClr val="${hex(c)}"/></a:solidFill>`;
 
-function shapeXml(s: Shape, id: number): string {
+/** A roundRect's corner as a fixed radius: the adjust value is a share (of 100000) of the shorter side. */
+const avLst = (s: { w: number; h: number; round?: boolean; radius?: number }) =>
+  s.round && s.radius != null
+    ? `<a:avLst><a:gd name="adj" fmla="val ${Math.round(Math.min(50000, (s.radius / Math.min(s.w, s.h)) * 100000))}"/></a:avLst>`
+    : `<a:avLst/>`;
+
+/** `chartRel` is the slide relationship id of this shape's chart part, for chart shapes. */
+function shapeXml(s: Shape, id: number, chartRel?: string): string {
+  if (s.kind === "chart") {
+    return (
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="${emu(s.x)}" y="${emu(s.y)}"/><a:ext cx="${emu(s.w)}" cy="${emu(s.h)}"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">` +
+      `<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="${chartRel}"/></a:graphicData></a:graphic></p:graphicFrame>`
+    );
+  }
   if (s.kind === "box") {
     const ln = s.line ? `<a:ln w="${emu(0.75)}">${fill(s.line)}</a:ln>` : `<a:ln><a:noFill/></a:ln>`;
     return (
       `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Shape ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
-      `<p:spPr>${xfrm(s)}<a:prstGeom prst="${s.round ? "roundRect" : "rect"}"><a:avLst/></a:prstGeom>${fill(s.fill)}${ln}</p:spPr></p:sp>`
+      `<p:spPr>${xfrm(s)}<a:prstGeom prst="${s.round ? "roundRect" : "rect"}">${avLst(s)}</a:prstGeom>${fill(s.fill)}${ln}</p:spPr></p:sp>`
     );
   }
   const st = s.style;
@@ -73,8 +91,8 @@ function shapeXml(s: Shape, id: number): string {
 }
 
 /** A whole slide: gray-50 background, the layout's own graphics hidden, then the shapes. */
-function slideXml(canvas: Canvas): string {
-  const shapes = canvas.shapes.map((s, i) => shapeXml(s, i + 2)).join("");
+function slideXml(canvas: Canvas, chartRels: Map<Shape, string>): string {
+  const shapes = canvas.shapes.map((s, i) => shapeXml(s, i + 2, chartRels.get(s))).join("");
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" showMasterSp="0">` +
@@ -192,14 +210,27 @@ export async function spliceDeck(
   let nextId = Math.max(...order.map((s) => s.id)) + 1;
   const layoutRel = `../slideLayouts/${layoutPath.split("/").pop()}`;
   const tags: string[] = [];
+  let nextChart = 1;
   for (const [k, canvas] of slides.entries()) {
     const path = `ppt/slides/slide${nextFile++}.xml`;
     const rId = `rIdWbr${k + 1}`;
-    zip.file(path, slideXml(canvas));
+    // Each chart shape becomes its own chart part, related from this slide.
+    const chartRels = new Map<Shape, string>();
+    let extraRels = "";
+    for (const s of canvas.shapes) {
+      if (s.kind !== "chart") continue;
+      const name = `chartWbr${nextChart++}.xml`;
+      const cr = `rIdChart${chartRels.size + 1}`;
+      chartRels.set(s, cr);
+      zip.file(`ppt/charts/${name}`, chartXml(s.spec));
+      types = types.replace("</Types>", `<Override ContentType="${CT_CHART}" PartName="/ppt/charts/${name}"/></Types>`);
+      extraRels += `<Relationship Id="${cr}" Type="${REL_CHART}" Target="../charts/${name}"/>`;
+    }
+    zip.file(path, slideXml(canvas, chartRels));
     zip.file(
       relsPath(path),
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="${layoutRel}"/></Relationships>`,
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="${layoutRel}"/>${extraRels}</Relationships>`,
     );
     presRels = presRels.replace("</Relationships>", `<Relationship Id="${rId}" Type="${REL_SLIDE}" Target="${path.replace("ppt/", "")}"/></Relationships>`);
     types = types.replace("</Types>", `<Override ContentType="${CT_SLIDE}" PartName="/${path}"/></Types>`);
