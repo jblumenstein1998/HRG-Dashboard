@@ -93,7 +93,7 @@ function delta(v: number | null, invert = false): { text: string; color: string 
 
 const titleCase = (s: string) => s.toLowerCase().replace(/^\w|\b[a-z]{3}\b/g, (m) => m[0].toUpperCase() + m.slice(1));
 
-function frame(c: Canvas, d: StoreDeckData, tab: TabName, footer: string) {
+function frame(c: Canvas, d: StoreDeckData, tab: TabName) {
   c.box(0, 0, W, 62, C.white);
   c.box(0, 0, 4, 62, C.red700);
   c.rule(0, 62, W, 0.75, C.gray200);
@@ -114,7 +114,6 @@ function frame(c: Canvas, d: StoreDeckData, tab: TabName, footer: string) {
     x += TAB_W[t] + 3;
   }
 
-  c.text(L, 390, 600, 9, footer, { size: 6, color: C.gray400 });
   c.text(R - 60, 390, 60, 9, `${TABS.indexOf(tab) + 1} of ${TABS.length}`, { size: 6, color: C.gray400, align: "END" });
 }
 
@@ -289,7 +288,7 @@ export function storeHighlights(d: StoreDeckData): string[] {
 
 export function storeOverviewSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "Overview", "Coloured figures are against their goals: green at goal, yellow at 50%, red below · WoW: prior week · YoY: same fiscal week last year");
+  frame(c, d, "Overview");
   const now = cur(d);
   const before = prev(d);
   const f = d.ops?.food;
@@ -323,7 +322,7 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
   ]);
 
   const y3 = 212;
-  const h3 = 380 - y3;
+  const h3 = 388 - y3; // down to the bottom margin now there's no footnote
   const half = (R - L - 8) / 2;
   chartCard(c, L, y3, half, h3, {
     title: "Net Sales",
@@ -341,10 +340,16 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
   const hx = L + half + 8;
   card(c, hx, y3, half, h3);
   heading(c, hx + 12, y3 + 8, half - 24, "The week in brief");
-  storeHighlights(d).forEach((line, i) => {
-    const ly = y3 + 26 + i * 22;
-    c.box(hx + 13, ly + 4, 3, 3, C.gray400, { round: true });
-    c.text(hx + 20, ly - 1, half - 34, 21, line, { size: 7.5, color: C.gray700, valign: "TOP" });
+  // 9pt to read across a room. Lines share the card's height evenly; each
+  // slot fits two rows of 9pt, so a line that wraps doesn't crowd the next.
+  const size = 9;
+  const lines = storeHighlights(d);
+  const top3 = y3 + 28;
+  const pitch = Math.min(26, (y3 + h3 - 8 - top3) / lines.length);
+  lines.forEach((line, i) => {
+    const ly = top3 + i * pitch;
+    c.box(hx + 13, ly + 4.5, 3.5, 3.5, C.gray400, { round: true });
+    c.text(hx + 20, ly - 1, half - 34, pitch, line, { size, color: C.gray700, valign: "TOP" });
   });
 
   return c;
@@ -354,7 +359,7 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
 
 export function storeSalesSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "Sales", "PAR POS · LW: same weekday last week · LY: the fiscal same day last year, as on the POS tab");
+  frame(c, d, "Sales");
 
   const cw = (R - L - 2 * 8) / 3;
   const charts: { title: string; format: string; ty: (number | null)[]; ly: (number | null)[] }[] = [
@@ -406,7 +411,7 @@ export function storeSalesSlide(d: StoreDeckData): Canvas {
 
 export function storeLaborSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "Labor", "PAR POS · targets per store, as on the WBR: goal at the target, 50% within 5% under it · LW: same weekday last week");
+  frame(c, d, "Labor");
   const t = d.targets;
   const now = cur(d);
 
@@ -491,12 +496,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
   const sales = dt?.tierSales ?? cur(d).netSales;
   const lane = driveGoal(sales, "lane");
   const win = driveGoal(sales, "window");
-  frame(
-    c,
-    d,
-    "Drive-thru",
-    `BerryAI · goals for the ${lane?.tier ?? ""} weekly-sales tier, as on the Drive-Thru tab: lane ${lane ? `goal ${mmss(lane.green)}, 50% ${mmss(lane.yellow)}` : "—"} · window ${win ? `goal ${mmss(win.green)}, 50% ${mmss(win.yellow)}` : "—"} · pull-forwards goal ≤${PULL_FORWARD_GOAL} a week`,
-  );
+  frame(c, d, "Drive-thru");
   if (!dt && !dp && d.extras.driveWeeks.every((w) => !w)) {
     emptyCard(c, L, 72, R - L, 60, "No BerryAI drive-thru data for this store.");
     return c;
@@ -566,8 +566,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
 
 export function storeFoodSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  const sp = d.opsSpans;
-  frame(c, d, "Food cost", `Net-Chef, as on the Food Cost tab · COGS goal ≤28.5%, 50% at 30.0% · variance goal within ±1.0%, 50% at ±1.5% · ${sp.week.label} · ${sp.ptd.label}`);
+  frame(c, d, "Food cost");
   const f = d.ops?.food;
   if (!f || f.week.salesBase == null) {
     emptyCard(c, L, 72, R - L, 60, "No Net-Chef food cost for this store and week.");
@@ -620,7 +619,7 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
 
 export function storeSmgSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "SMG", "SMG by visit week, as on the SMG tab: goal 80%, 50% at 75% (Experienced a Problem: goal ≤5%, 50% at ≤10%) · ZCases: unsolicited and location-survey, by visit date; goal ≤4 a period, 50% at ≤8; goal 100% resolved within 24 hrs, 50% at 95%");
+  frame(c, d, "SMG");
   const latest = smgLatest(d);
   const sw = d.extras.smgWeeks;
 
@@ -788,7 +787,7 @@ function nameList(c: Canvas, x: number, y: number, w: number, h: number, title: 
 export function storeComplianceSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
   const x = d.extras;
-  frame(c, d, "Compliance", "ZU as of today (Schoox reports only the present) · Jolt done ÷ due · Slack on time ÷ due; striped = figures don't match the dashboard · goals: ZU, Jolt 100%, 50% at 95%; Slack 95%, 50% at 90%");
+  frame(c, d, "Compliance");
   const cw = (R - L - 2 * 8) / 3;
   const top = 72;
   const h = 380 - top;
