@@ -84,7 +84,18 @@ const QUICK: { key: string; label: string; range: () => Range }[] = [
 
 type ColKey =
   | "name" | "position" | "store" | "pay"
-  | "zcases" | "slowLane" | "slowWindow" | "joltProtein" | "joltTimeTemp" | "slackMissedLate" | "slackAccuracyPct";
+  | "zcases" | "slowLane" | "slowWindow" | "joltProtein" | "joltTimeTemp" | "slackMissedLate" | "slackAccuracyPct" | "total";
+
+/** The count columns the Total adds up — every count, not Slack % accuracy (a rate, not a count). */
+const TOTAL_OF = ["zcases", "slowLane", "slowWindow", "joltProtein", "joltTimeTemp", "slackMissedLate"] as const;
+
+/**
+ * Everything that went wrong on the clock, in one number to rank leaders by.
+ * Lower is better. Null for someone nothing could be counted for (not matched
+ * to PAR, or no shifts in the range): their zeros aren't a clean record, and a
+ * 0 would rank them first.
+ */
+const total = (r: Row): number | null => (r.caveat ? null : TOTAL_OF.reduce((s, k) => s + r[k], 0));
 
 const COUNT_COLS: { key: ColKey; label: string; title: string }[] = [
   { key: "zcases", label: "zCases", title: "zCases whose guest visit fell during their shift" },
@@ -102,6 +113,7 @@ const COUNT_COLS: { key: ColKey; label: string; title: string }[] = [
   { key: "joltTimeTemp", label: "Jolt Time Temp missed / late", title: "Time/Temperature lists missed or late, while the list was open" },
   { key: "slackMissedLate", label: "Slack missed / late", title: "Slack reports missed or late, on the clock at the deadline" },
   { key: "slackAccuracyPct", label: "Slack % accuracy", title: "Figures accurate ÷ figures posted, on reports due while on the clock" },
+  { key: "total", label: "Total", title: "All the counts added together (everything but Slack % accuracy) — lower is better" },
 ];
 
 const POSITION_RANK: Record<string, number> = { "General Manager": 0, AGM: 1, Director: 2 };
@@ -182,6 +194,7 @@ export default function ManagementClient({
         case "position": return POSITION_RANK[r.position] ?? 9;
         case "store": return r.storeName?.toLowerCase() ?? null;
         case "pay": return r.annualSalary ?? (r.hourlyRate !== null ? r.hourlyRate * 2080 : null);
+        case "total": return total(r);
         default: return r[sort.key];
       }
     };
@@ -361,14 +374,14 @@ export default function ManagementClient({
             <tbody className={loading ? "opacity-50" : ""}>
               {loading && !data && (
                 <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-sm text-gray-400 animate-pulse">
+                  <td colSpan={12} className="px-4 py-8 text-center text-sm text-gray-400 animate-pulse">
                     Reading zCases, drive-thru, Jolt and Slack for every store — the first look at a range can take a minute…
                   </td>
                 </tr>
               )}
               {data && rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={12} className="px-4 py-8 text-center text-sm text-gray-500">
                     No leaders for this selection.
                   </td>
                 </tr>
@@ -402,7 +415,15 @@ export default function ManagementClient({
                         </td>
                       );
                     }
-                    const v = r[c.key as Exclude<ColKey, "name" | "position" | "store" | "pay" | "slackAccuracyPct">];
+                    if (c.key === "total") {
+                      const t = total(r);
+                      return (
+                        <td key={c.key} className={`px-3 py-1.5 text-right tabular-nums font-semibold border-l border-gray-100 ${t ? "text-gray-900" : "text-gray-300"}`}>
+                          {t ?? "—"}
+                        </td>
+                      );
+                    }
+                    const v = r[c.key as (typeof TOTAL_OF)[number]];
                     return (
                       <td key={c.key} className={`px-3 py-1.5 text-right tabular-nums ${v > 0 ? "text-gray-900 font-medium" : "text-gray-300"}`}>
                         {v}
