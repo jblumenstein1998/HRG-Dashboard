@@ -73,7 +73,9 @@ const FMT_COUNT = `#,##0`;
 const FMT_USD2 = `"$"#,##0.00`;
 const FMT_RATIO = `0.00`;
 const FMT_PCT1 = `0.0"%"`;
-const FMT_SCORE = `0.0`;
+/** SMG scores are top-box shares — percentages, as the SMG tab prints them. */
+const FMT_SCORE = `0"%"`;
+const smgPct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v)}%`);
 const FMT_TIME = `m:ss`;
 const TIME = { format: FMT_TIME, scale: 1 / 86400, steps: [5, 10, 15, 20, 30, 60, 120] };
 
@@ -276,7 +278,7 @@ export function storeHighlights(d: StoreDeckData): string[] {
   if (f?.cogsPct != null) out.push(`Food cost ${pct1(f.cogsPct)} of sales; variance ${varPct(f.variancePct)}, ${varUsd(f.varianceDollars)}.`);
   const smg = smgLatest(d);
   const z = d.extras.zcases;
-  if (smg?.scores[OSAT] != null) out.push(`Overall satisfaction ${smg.scores[OSAT]!.toFixed(1)} on ${smg.responses ?? 0} surveys` + (z ? `; ${z.week.cases} ZCase${z.week.cases === 1 ? "" : "s"} this week.` : "."));
+  if (smg?.scores[OSAT] != null) out.push(`Overall satisfaction ${smgPct(smg.scores[OSAT])} on ${smg.responses ?? 0} surveys` + (z ? `; ${z.week.cases} ZCase${z.week.cases === 1 ? "" : "s"} this week.` : "."));
   const parts: string[] = [];
   if (d.extras.zu?.rate != null) parts.push(`ZU ${d.extras.zu.rate}%`);
   if (d.extras.jolt.week?.completePct != null) parts.push(`Jolt ${d.extras.jolt.week.completePct.toFixed(0)}%`);
@@ -287,7 +289,7 @@ export function storeHighlights(d: StoreDeckData): string[] {
 
 export function storeOverviewSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "Overview", "Coloured figures are against their goals (green / yellow / red) · WoW: prior week · YoY: same fiscal week last year");
+  frame(c, d, "Overview", "Coloured figures are against their goals: green at goal, yellow at 50%, red below · WoW: prior week · YoY: same fiscal week last year");
   const now = cur(d);
   const before = prev(d);
   const f = d.ops?.food;
@@ -299,13 +301,13 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
     { label: "Net Sales", value: usd0(now.netSales), lines: [[changeRun("WoW", change(now.netSales, before.netSales))], [changeRun("YoY", now.py ? change(now.netSales, now.py.netSales) : null)]] },
     { label: "Transactions", value: count(now.transactions), lines: [[changeRun("WoW", change(now.transactions, before.transactions))], [changeRun("YoY", now.py ? change(now.transactions, now.py.transactions) : null)]] },
     { label: "Average Check", value: now.avgCheck == null ? "—" : usd2(now.avgCheck), lines: [[changeRun("WoW", change(now.avgCheck, before.avgCheck))], [changeRun("YoY", now.py ? change(now.avgCheck, now.py.avgCheck) : null)]] },
-    { label: "SPLH", value: now.splh == null ? "—" : usd2(now.splh), tone: productivityTone(now.splh, d.targets?.splh.floor), lines: [[{ text: `Target ${splhBand(d) || "—"}` }], [{ text: `Prior week ${before.splh == null ? "—" : usd2(before.splh)}` }]] },
+    { label: "Productivity", value: now.splh == null ? "—" : usd2(now.splh), tone: productivityTone(now.splh, d.targets?.splh.floor), lines: [[{ text: `Target ${splhBand(d) || "—"}` }], [{ text: `Prior week ${before.splh == null ? "—" : usd2(before.splh)}` }]] },
     { label: "TPLH", value: now.tplh == null ? "—" : now.tplh.toFixed(2), tone: productivityTone(now.tplh, d.targets?.tplh.floor), lines: [[{ text: `Target ${tplhBand(d) || "—"}` }], [{ text: `Prior week ${before.tplh == null ? "—" : before.tplh.toFixed(2)}` }]] },
   ]);
   tileRow(c, 142, 62, [
     { label: "COGS %", value: pct1(f?.week.cogsPct), tone: cogsTone(f?.week.cogsPct), lines: [[{ text: `Variance ` }, { text: varPct(f?.week.variancePct), color: ink(varianceTone(f?.week.variancePct)) }], [{ text: `${ptdName(d)} to date ${pct1(f?.ptd.cogsPct)}` }]] },
     { label: "Drive-thru Lane", value: mmss(dt?.laneSecs), tone: driveTone(dt?.laneSecs, dt?.tierSales, "lane"), lines: [[{ text: `Window ` }, { text: mmss(dt?.windowSecs), color: ink(driveTone(dt?.windowSecs, dt?.tierSales, "window")) }], [{ text: dt ? `${count(dt.cars ?? 0)} cars` : "No BerryAI data" }]] },
-    { label: "Overall Satisfaction", value: smg?.scores[OSAT] == null ? "—" : smg.scores[OSAT]!.toFixed(1), tone: smgTone(smg?.scores[OSAT], OSAT), lines: [[{ text: smg ? `${smg.responses ?? 0} surveys` : "No SMG week" }], [{ text: x.zcases ? `${x.zcases.week.cases} ZCase${x.zcases.week.cases === 1 ? "" : "s"} this week` : "" }]] },
+    { label: "Overall Satisfaction", value: smgPct(smg?.scores[OSAT]), tone: smgTone(smg?.scores[OSAT], OSAT), lines: [[{ text: smg ? `${smg.responses ?? 0} surveys` : "No SMG week" }], [{ text: x.zcases ? `${x.zcases.week.cases} ZCase${x.zcases.week.cases === 1 ? "" : "s"} this week` : "" }]] },
     {
       label: "Jolt Completion",
       value: x.jolt.none ? "No Jolt" : x.jolt.week?.completePct == null ? "—" : `${x.jolt.week.completePct.toFixed(1)}%`,
@@ -404,14 +406,14 @@ export function storeSalesSlide(d: StoreDeckData): Canvas {
 
 export function storeLaborSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "Labor", "PAR POS · targets per store, as on the WBR: green at target, yellow within 5% under it, red below · LW: same weekday last week");
+  frame(c, d, "Labor", "PAR POS · targets per store, as on the WBR: goal at the target, 50% within 5% under it · LW: same weekday last week");
   const t = d.targets;
   const now = cur(d);
 
   const half = (R - L - 8) / 2;
   const charts = [
-    { title: "SPLH", note: `Sales per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_USD2, key: "splh" as const, floor: t?.splh.floor ?? null, band: splhBand(d) },
-    { title: "TPLH", note: `Transactions per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_RATIO, key: "tplh" as const, floor: t?.tplh.floor ?? null, band: tplhBand(d) },
+    { title: "Productivity", note: `Sales per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_USD2, key: "splh" as const, floor: t?.splh.floor ?? null, ceiling: t?.splh.ceiling ?? null, band: splhBand(d) },
+    { title: "TPLH", note: `Transactions per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_RATIO, key: "tplh" as const, floor: t?.tplh.floor ?? null, ceiling: null, band: tplhBand(d) },
   ];
   charts.forEach((ch, i) => {
     chartCard(c, L + i * (half + 8), 72, half, 134, {
@@ -422,7 +424,9 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
         format: ch.format,
         series: [
           { name: "This year", values: d.weeks.map((w) => w[ch.key]), ...THIS_YEAR, labelColor: ink(productivityTone(now[ch.key], ch.floor)) },
-          ...(ch.floor != null ? [{ name: `Target ${ch.band}`, values: flat(d, ch.floor), ...GOAL }] : []),
+          // Both ends of a ranged target (productivity's $82–87), one legend entry.
+          ...(ch.floor != null ? [{ name: `Goal ${ch.band}`, values: flat(d, ch.floor), ...GOAL }] : []),
+          ...(ch.ceiling != null ? [{ name: `Goal ${ch.band}`, values: flat(d, ch.ceiling), ...GOAL }] : []),
         ],
       },
     });
@@ -434,7 +438,7 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
     { head: "TRANSACTIONS", w: 82 },
     { head: "LABOR HRS", w: 72 },
     { head: "VS LW", w: 64 },
-    { head: "SPLH", w: 72 },
+    { head: "PRODUCTIVITY", w: 72 },
     { head: "VS LW", w: 64 },
     { head: "TPLH", w: 64 },
     { head: "VS LW", w: R - L - (92 + 82 + 82 + 72 + 64 + 72 + 64 + 64) },
@@ -491,7 +495,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
     c,
     d,
     "Drive-thru",
-    `BerryAI · goals for the ${lane?.tier ?? ""} weekly-sales tier, as on the Drive-Thru tab: lane ${lane ? `${mmss(lane.green)} / ${mmss(lane.yellow)}` : "—"}, window ${win ? `${mmss(win.green)} / ${mmss(win.yellow)}` : "—"} (green / yellow) · pull-forwards ≤${PULL_FORWARD_GOAL} a week`,
+    `BerryAI · goals for the ${lane?.tier ?? ""} weekly-sales tier, as on the Drive-Thru tab: lane ${lane ? `goal ${mmss(lane.green)}, 50% ${mmss(lane.yellow)}` : "—"} · window ${win ? `goal ${mmss(win.green)}, 50% ${mmss(win.yellow)}` : "—"} · pull-forwards goal ≤${PULL_FORWARD_GOAL} a week`,
   );
   if (!dt && !dp && d.extras.driveWeeks.every((w) => !w)) {
     emptyCard(c, L, 72, R - L, 60, "No BerryAI drive-thru data for this store.");
@@ -520,7 +524,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
         ...TIME,
         series: [
           { name: "This store", values, ...THIS_YEAR, labelColor: ink(driveTone(last, sales, field)) },
-          ...(goal ? [{ name: `Goal ${mmss(goal.green)}`, values: flat(d, goal.green), ...GOAL }, { name: `Yellow to ${mmss(goal.yellow)}`, values: flat(d, goal.yellow), ...EDGE }] : []),
+          ...(goal ? [{ name: `Goal ${mmss(goal.green)}`, values: flat(d, goal.green), ...GOAL }, { name: `50% ${mmss(goal.yellow)}`, values: flat(d, goal.yellow), ...EDGE }] : []),
         ],
       },
     });
@@ -563,7 +567,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
 export function storeFoodSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
   const sp = d.opsSpans;
-  frame(c, d, "Food cost", `Net-Chef, as on the Food Cost tab · COGS goal ≤28.5% (yellow to 30.0%) · variance goal within ±1.0% (yellow to ±1.5%) · ${sp.week.label} · ${sp.ptd.label}`);
+  frame(c, d, "Food cost", `Net-Chef, as on the Food Cost tab · COGS goal ≤28.5%, 50% at 30.0% · variance goal within ±1.0%, 50% at ±1.5% · ${sp.week.label} · ${sp.ptd.label}`);
   const f = d.ops?.food;
   if (!f || f.week.salesBase == null) {
     emptyCard(c, L, 72, R - L, 60, "No Net-Chef food cost for this store and week.");
@@ -589,7 +593,7 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
       series: [
         { name: "This store", values: cogs, ...THIS_YEAR, labelColor: ink(cogsTone(cogs[cogs.length - 1])) },
         { name: "Goal 28.5%", values: flat(d, 28.5), ...GOAL },
-        { name: "Yellow to 30.0%", values: flat(d, 30), ...EDGE },
+        { name: "50% 30.0%", values: flat(d, 30), ...EDGE },
       ],
     },
   });
@@ -603,8 +607,8 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
         { name: "This store", values: vari, ...THIS_YEAR, labelColor: ink(varianceTone(vari[vari.length - 1])) },
         { name: "Goal ±1.0%", values: flat(d, 1), ...GOAL },
         { name: "Goal ±1.0%", values: flat(d, -1), ...GOAL },
-        { name: "Yellow to ±1.5%", values: flat(d, 1.5), ...EDGE },
-        { name: "Yellow to ±1.5%", values: flat(d, -1.5), ...EDGE },
+        { name: "50% ±1.5%", values: flat(d, 1.5), ...EDGE },
+        { name: "50% ±1.5%", values: flat(d, -1.5), ...EDGE },
       ],
     },
   });
@@ -616,7 +620,7 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
 
 export function storeSmgSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
-  frame(c, d, "SMG", "SMG by visit week, as on the SMG tab: ≥80 green, ≥75 yellow (Experienced a Problem: ≤5 / ≤10) · ZCases: unsolicited and location-survey, by visit date; goals ≤4 a period (yellow to 8), 100% resolved within 24 hrs (yellow to 95%)");
+  frame(c, d, "SMG", "SMG by visit week, as on the SMG tab: goal 80%, 50% at 75% (Experienced a Problem: goal ≤5%, 50% at ≤10%) · ZCases: unsolicited and location-survey, by visit date; goal ≤4 a period, 50% at ≤8; goal 100% resolved within 24 hrs, 50% at 95%");
   const latest = smgLatest(d);
   const sw = d.extras.smgWeeks;
 
@@ -627,7 +631,7 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
     52,
     SMG_METRICS.map((m) => {
       const v = latest?.scores[m.name] ?? null;
-      return { label: m.label, value: v == null ? "—" : v.toFixed(1), tone: smgTone(v, m.name), size: 15, lines: m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : [] };
+      return { label: m.label, value: smgPct(v), tone: smgTone(v, m.name), size: 15, lines: m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : [] };
     }),
   );
 
@@ -643,8 +647,8 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
       ceiling: 100,
       series: [
         { name: "This store", values: osat, ...THIS_YEAR, labelColor: ink(smgTone(osat[osat.length - 1], OSAT)) },
-        { name: "Goal 80", values: flat(d, 80), ...GOAL },
-        { name: "Yellow to 75", values: flat(d, 75), ...EDGE },
+        { name: "Goal 80%", values: flat(d, 80), ...GOAL },
+        { name: "50% 75%", values: flat(d, 75), ...EDGE },
       ],
     },
   });
@@ -654,7 +658,7 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
   const colW = (half - nameW) / shown.length;
   const cols: Col[] = [{ head: "", w: nameW, align: "START" }, ...shown.map(({ w }) => ({ head: mdShort(w.week.start), w: colW }))];
   const rows = SMG_METRICS.map((m) => ({
-    cells: [{ text: m.label, bold: false, color: C.gray900 }, ...shown.map(({ s }) => { const v = s?.scores[m.name] ?? null; return goalCell(v == null ? "—" : v.toFixed(1), smgTone(v, m.name)); })] as Cell[],
+    cells: [{ text: m.label, bold: false, color: C.gray900 }, ...shown.map(({ s }) => { const v = s?.scores[m.name] ?? null; return goalCell(smgPct(v), smgTone(v, m.name)); })] as Cell[],
   }));
   rows.push({ cells: [{ text: "Surveys", bold: false, color: C.gray500 }, ...shown.map(({ s }) => ({ text: s?.responses != null ? String(s.responses) : "—", color: C.gray500, bold: false }))] });
   table(c, L + half + 8, 132, cols, rows, 18.5);
@@ -748,7 +752,7 @@ function nameList(c: Canvas, x: number, y: number, w: number, h: number, title: 
 export function storeComplianceSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
   const x = d.extras;
-  frame(c, d, "Compliance", "ZU: Schoox, as of today — it reports only the present · Jolt: done ÷ due, as on the Jolt tab · Slack: the four daily reports, on time ÷ due · goals: ZU and Jolt 100% (yellow to 95%), Slack 95% (yellow to 90%)");
+  frame(c, d, "Compliance", "ZU: Schoox, as of today — it reports only the present · Jolt: done ÷ due, as on the Jolt tab · Slack: the four daily reports, on time ÷ due · ZU and Jolt: goal 100%, 50% at 95% · Slack: goal 95%, 50% at 90%");
   const cw = (R - L - 2 * 8) / 3;
   const top = 72;
   const h = 380 - top;
