@@ -736,21 +736,31 @@ function slackGrid(c: Canvas, x: number, y: number, w: number, days: SlackDay[],
   });
   // Key
   const ky = y + 12 + days.length * 18 + 6;
-  const keys: { status: keyof typeof SLOT_TONE; inaccurate: boolean; label: string }[] = [
-    { status: "on_time", inaccurate: false, label: "On time" },
-    { status: "late", inaccurate: false, label: "Late" },
-    { status: "missed", inaccurate: false, label: "Missed" },
-    { status: "on_time", inaccurate: true, label: "Posted, inaccurate" },
+  // Two rows: the three statuses, then the two that can also be inaccurate.
+  type Key = { status: keyof typeof SLOT_TONE; inaccurate: boolean; label: string };
+  const rowsOfKeys: Key[][] = [
+    [
+      { status: "on_time", inaccurate: false, label: "On time" },
+      { status: "late", inaccurate: false, label: "Late" },
+      { status: "missed", inaccurate: false, label: "Missed" },
+    ],
+    [
+      { status: "on_time", inaccurate: true, label: "On time / inaccurate" },
+      { status: "late", inaccurate: true, label: "Late / inaccurate" },
+    ],
   ];
-  let kx = x;
-  for (const k of keys) {
-    const t = SLOT_TONE[k.status];
-    c.box(kx, ky + 1, 12, 8, t.bg, { line: t.stripe, round: true, radius: 1.5 });
-    if (k.inaccurate) c.stripes(kx + 0.6, ky + 1.6, 10.8, 6.8, t.stripe, { width: 1.5, gap: 2 });
-    c.text(kx + 13, ky - 1, 80, 11, k.label, { size: 6, color: C.gray500 });
-    kx += 13 + k.label.length * 3.1 + 12;
-  }
-  if (inaccurate == null) c.text(x, ky + 12, w, 9, "Accuracy couldn't be checked for this week.", { size: 6, color: C.gray400 });
+  rowsOfKeys.forEach((row, ri) => {
+    const ry = ky + ri * 13;
+    let kx = x;
+    for (const k of row) {
+      const t = SLOT_TONE[k.status];
+      c.box(kx, ry + 1, 12, 8, t.bg, { line: t.stripe, round: true, radius: 1.5 });
+      if (k.inaccurate) c.stripes(kx + 0.6, ry + 1.6, 10.8, 6.8, t.stripe, { width: 1.5, gap: 2 });
+      c.text(kx + 13, ry - 1, 90, 11, k.label, { size: 6, color: C.gray500 });
+      kx += 13 + k.label.length * 3.1 + 14;
+    }
+  });
+  if (inaccurate == null) c.text(x, ky + 28, w, 9, "Accuracy couldn't be checked for this week.", { size: 6, color: C.gray400 });
 }
 
 /** A titled list of name → figure rows that stops with "+N more" when it runs out of room. */
