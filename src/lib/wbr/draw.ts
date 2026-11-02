@@ -69,6 +69,23 @@ export class Canvas {
       x -= 10;
       w += 20;
     }
+    // A one-line label gets room to spare on the side away from its anchor.
+    // Google Slides draws the deck in real Geist, wider than PowerPoint's
+    // stand-in, and ignores wrap="none" — "$100.00" in a box sized for it
+    // came out as "$100.0" over "0". The box is transparent, so the extra
+    // width costs nothing; the text stays where its alignment puts it.
+    if (style.noWrap) {
+      const extra = 40;
+      if (style.align === "END") {
+        x -= extra;
+        w += extra;
+      } else if (style.align === "CENTER") {
+        x -= extra / 2;
+        w += extra;
+      } else {
+        w += extra;
+      }
+    }
     if (content) this.shapes.push({ kind: "text", x, y, w, h, content, style });
   }
 
