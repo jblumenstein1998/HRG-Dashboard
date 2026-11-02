@@ -59,10 +59,22 @@ export function buildOperatingTargets(): OperatingTargets {
   };
 
   /** One row, or one per sales tier ("… | sales ≤$45k/wk"). */
-  const row = (id: string, metric: string, opts: { note?: string; target?: (t: string) => string; both?: (s: string) => string } = {}): TargetRow[] => {
+  /**
+   * `allOrNothing`: the sheet gives no threshold — the rules set threshold =
+   * target so the category pays all or nothing — and prints "—" for it.
+   * `words`: print these instead of the gates (Living Our Values' Meets /
+   * Exceeds, which the rules hold as display gates on a ten-point review).
+   */
+  const row = (
+    id: string,
+    metric: string,
+    opts: { note?: string; target?: (t: string) => string; both?: (s: string) => string; allOrNothing?: boolean; words?: [string, string] } = {},
+  ): TargetRow[] => {
     const x = c(id);
+    if (opts.words) return [{ metric, threshold: opts.words[0], target: opts.words[1], note: opts.note }];
     const b = opts.both ?? ((s: string) => s);
     const t = (s: string) => (opts.target ?? ((v: string) => v))(b(s));
+    if (opts.allOrNothing) return [{ metric, threshold: "—", target: t(gate(x.target, x.unit)), note: opts.note }];
     if (!x.tiers?.length) return [{ metric, threshold: b(gate(x.threshold, x.unit)), target: t(gate(x.target, x.unit)), note: opts.note }];
     let prev: number | null = null;
     return x.tiers.map((tier) => {
@@ -129,12 +141,16 @@ export function buildOperatingTargets(): OperatingTargets {
       {
         title: "StandardZ, culture & execution",
         rows: [
-          ...row("gm_zu_completion", "ZU course completion"),
-          ...row("gm_servesafe", "ServSafe certifications current", { note: "at least one person at 100% on ServSafe Manager in ZU" }),
-          ...row("gm_missed_lto_deadlines", "Missed POP / LTO deadlines"),
-          ...row("gm_slack_completion", "Slack completion rate"),
+          ...row("gm_zu_completion", "ZU course completion", { allOrNothing: true }),
+          ...row("gm_servesafe", "ServSafe certifications current", {
+            allOrNothing: true,
+            target: () => "100%",
+            note: "at least one person at 100% on ServSafe Manager in ZU",
+          }),
+          ...row("gm_missed_lto_deadlines", "Missed POP / LTO deadlines", { allOrNothing: true }),
+          ...row("gm_slack_completion", "Slack completion rate", { allOrNothing: true }),
           ...row("hosp_recognition", "Team recognition activities", { target: (t) => `${t} + positive pulse check` }),
-          ...row("lov_hospitality", "Living Our Values review", { note: "review score out of 10" }),
+          ...row("lov_hospitality", "Living Our Values review", { words: ["Meets", "Exceeds"] }),
         ],
       },
     ],
