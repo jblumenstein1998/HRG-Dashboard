@@ -1,6 +1,6 @@
 "use client";
 
-import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
+import { ALL_TABS, TAB_LABELS, type Tab } from "@/lib/users/tabs";
 
 /**
  * The options inside the header's tab picker.
@@ -15,9 +15,11 @@ import { TAB_LABELS, type Tab } from "@/lib/users/tabs";
  * picker never offers a tab the guard would then bounce them out of.
  */
 export default function TabOptions({ tabs, isAdmin }: { tabs: Tab[]; isAdmin: boolean }) {
+  // One order for everyone — ALL_TABS's — whatever order a position stored its ticks in.
+  const ordered = ALL_TABS.filter((t) => tabs.includes(t));
   return (
     <>
-      {tabs.map((t) => (
+      {ordered.map((t) => (
         <option key={t} value={t}>
           {TAB_LABELS[t]}
         </option>

@@ -11,18 +11,19 @@
  * must not transitively reach lib/db.
  */
 
+/** In the order the tab menu lists them (Josh, 2026-11-02). Users & Access follows, for admins. */
 export const ALL_TABS = [
-  "/dashboard",
-  "/food-cost",
   "/par",
+  "/dashboard",
   "/survey-data",
-  "/bonus",
-  "/zu",
-  "/jolt",
-  "/staffing",
-  "/management",
   "/slack",
+  "/staffing",
+  "/jolt",
+  "/food-cost",
+  "/zu",
   "/admin-links",
+  "/management",
+  "/bonus",
 ] as const;
 export type Tab = (typeof ALL_TABS)[number];
 
@@ -30,7 +31,7 @@ export const TAB_LABELS: Record<Tab, string> = {
   "/dashboard": "Drive-Thru",
   "/food-cost": "Food Cost",
   "/par": "POS Sales",
-  "/survey-data": "SMG",
+  "/survey-data": "Guest Experience",
   "/bonus": "Bonus",
   // Zaxby's University — training compliance, out of Schoox.
   "/zu": "ZU",
