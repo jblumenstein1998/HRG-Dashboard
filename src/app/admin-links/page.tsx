@@ -3,6 +3,7 @@ import { requireTab } from "@/lib/users/access";
 import { listLeaders } from "@/lib/users/leaders";
 import { todayCentralISO } from "@/lib/parRollup";
 import { recentWbrWeeks } from "@/lib/wbr/weeks";
+import { buildOperatingTargets } from "@/lib/operatingTargets";
 
 /**
  * The Admin tab.
@@ -15,5 +16,13 @@ import { recentWbrWeeks } from "@/lib/wbr/weeks";
 export default async function AdminTabPage() {
   const viewer = await requireTab("/admin-links");
   const leaders = await listLeaders();
-  return <AdminTabClient tabs={viewer.position.tabs} isAdmin={viewer.position.isAdmin} leaders={leaders} wbrWeeks={recentWbrWeeks(todayCentralISO(), 26)} />;
+  return (
+    <AdminTabClient
+      tabs={viewer.position.tabs}
+      isAdmin={viewer.position.isAdmin}
+      leaders={leaders}
+      wbrWeeks={recentWbrWeeks(todayCentralISO(), 26)}
+      targets={buildOperatingTargets()}
+    />
+  );
 }

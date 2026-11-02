@@ -68,7 +68,12 @@ export function passesGate(value: number, gate: Gate): boolean {
   // Tested positively so the union narrows: excluding "gte" then "lte" leaves
   // TS unable to discard the first member, whose cmp is itself a union.
   if (gate.cmp === "between") return value >= gate.value && value <= gate.value2;
-  return gate.cmp === "gte" ? value >= gate.value : value <= gate.value;
+  switch (gate.cmp) {
+    case "gte": return value >= gate.value;
+    case "lte": return value <= gate.value;
+    case "gt": return value > gate.value;
+    case "lt": return value < gate.value;
+  }
 }
 
 export function formatGate(gate: Gate, unit: Condition["unit"]): string {
@@ -84,8 +89,10 @@ export function formatGate(gate: Gate, unit: Condition["unit"]): string {
   if (unit === "boolean") return gate.cmp === "lte" && gate.value === 0 ? "No" : "Yes";
   if (unit === "rating") return gate.value >= 2 ? "Exceeds" : gate.value >= 1 ? "Meets" : "—";
   if (gate.cmp === "between") return `${n(gate.value)}–${n(gate.value2)}`;
-  return `${gate.cmp === "gte" ? "≥" : "≤"} ${n(gate.value)}`;
+  return `${CMP_SIGN[gate.cmp]} ${n(gate.value)}`;
 }
+
+export const CMP_SIGN = { gte: "≥", lte: "≤", gt: ">", lt: "<" } as const;
 
 /**
  * Pick the gates for a condition, resolving sales tiers.

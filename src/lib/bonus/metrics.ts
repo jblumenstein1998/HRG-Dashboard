@@ -380,6 +380,8 @@ export async function resolvePeriodMetrics(
       const row = byName.get(store.name);
       if (!row || row.completePct === null) continue;
       put(v, "joltCompletePct", row.completePct);
+      // The on-time share feeds the Jolt on-time guardrail (q_jolt_on_time).
+      if (row.onTimePct !== null) put(v, "joltOnTimePct", row.onTimePct);
       joltStores++;
     }
     if (completion.storesWithoutJolt.length > 0) {

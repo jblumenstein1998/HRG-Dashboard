@@ -14,7 +14,6 @@ import { getPriorYearDate, getPriorYearRange } from "@/lib/fiscal";
 import { bucketDaily, lastNWeeks, productivityOf, tplhOf, type Week } from "@/lib/parWeekly";
 import { listLeaders } from "@/lib/users/leaders";
 import { ALL_STORES } from "@/lib/stores";
-import { WBR_TARGETS, type StoreTargets } from "@/lib/wbr/targets";
 import { districtLeaders } from "@/lib/wbr/data";
 import { buildOpsData, type OpsData, type StoreOps } from "@/lib/wbr/opsData";
 import { buildExtras, type Extras } from "@/lib/wbr/storeExtras";
@@ -54,7 +53,6 @@ export type StoreDeckData = {
   /** Oldest → newest; the last entry is the deck's week. */
   weeks: WeekFigures[];
   days: DayFigures[];
-  targets: StoreTargets | null;
   ops: StoreOps | null;
   opsSpans: Pick<OpsData, "week" | "ptd">;
   /** Trends, SMG, ZCases and compliance — lib/wbr/storeExtras. */
@@ -128,8 +126,6 @@ export async function buildStoreDeck(label: string, weekEnd?: string): Promise<S
   const warnings = [...ops.gaps, ...extras.warnings];
   const missing = days.filter((d) => !d.now).map((d) => d.date);
   if (missing.length) warnings.push(`${label}: no PAR data for ${missing.join(", ")} — the week's numbers are short.`);
-  const targets = WBR_TARGETS[label] ?? null;
-  if (!targets) warnings.push(`${label}: no productivity target set (lib/wbr/targets.ts).`);
 
   return {
     label,
@@ -139,7 +135,6 @@ export async function buildStoreDeck(label: string, weekEnd?: string): Promise<S
     week,
     weeks: weekFigures,
     days,
-    targets,
     ops: ops.stores.get(label) ?? null,
     opsSpans: { week: ops.week, ptd: ops.ptd },
     extras,

@@ -33,10 +33,11 @@ const tzFor = (store: string) => STORE_TZ[store] ?? "America/Chicago";
 
 // Completion — not on-time — is what the bonus pays on, so the colouring follows
 // the Quality Director sheet: condition `q_jolt_completion` in lib/bonus/rules.ts
-// has target >= 100 and threshold >= 95, which engine.ts scores as
-// target / threshold / missed. On-time % is shown but left uncoloured.
-const COMPLETE_TARGET = 100;
-const COMPLETE_THRESHOLD = 95;
+// has target >= 95 and threshold >= 90 (Store Operating Targets, 2026-11-02),
+// which engine.ts scores as target / threshold / missed. On-time % is shown but
+// left uncoloured.
+const COMPLETE_TARGET = 95;
+const COMPLETE_THRESHOLD = 90;
 
 // ── Types (mirror lib/jolt.ts) ────────────────────────────────────────────────
 

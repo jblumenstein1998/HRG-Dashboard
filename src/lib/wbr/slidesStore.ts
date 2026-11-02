@@ -16,10 +16,11 @@
  */
 
 import { C, Canvas, type ChartShapeSpec, type Tone } from "@/lib/wbr/draw";
+import type { Gate } from "@/lib/bonus/types";
 import type { DayFigures, StoreDeckData } from "@/lib/wbr/storeData";
 import type { DriveThru } from "@/lib/wbr/opsData";
 import { SMG_METRICS } from "@/lib/wbr/storeExtras";
-import { LOWER_IS_BETTER } from "@/lib/surveyMeta";
+import { ACCURACY_METRIC, LOWER_IS_BETTER } from "@/lib/surveyMeta";
 import type { SlackDay } from "@/lib/slackReports";
 import { SLACK_SLOTS } from "@/lib/slackReports";
 import { change, count, usd0, usd2, weekSpan } from "@/lib/wbr/slides";
@@ -30,6 +31,9 @@ import {
   driveTone,
   joltTone,
   productivityTone,
+  ruleGates,
+  gateLabel,
+  tplhTone,
   pullForwardTone,
   PULL_FORWARD_GOAL,
   slackTone,
@@ -251,8 +255,24 @@ const sumDays = (rows: DayFigures["now"][]): DayTotals | null => {
 };
 const one = (r: DayFigures["now"]) => (r ? sumDays([r]) : null);
 
-const splhBand = (d: StoreDeckData) => (d.targets ? (d.targets.splh.ceiling ? `$${d.targets.splh.floor}–${d.targets.splh.ceiling}` : `$${d.targets.splh.floor}+`) : "");
-const tplhBand = (d: StoreDeckData) => (d.targets ? `${d.targets.tplh.floor.toFixed(2)}+` : "");
+/**
+ * Productivity and TPLH goals from the GM scorecard (Store Operating Targets):
+ * productivity's band moves with the week's sales ($82–87, or $87–92 above
+ * $85k), TPLH is 5.25 with 5.00 at 50%.
+ */
+const splhGates = (d: StoreDeckData) => ruleGates("gm_splh", cur(d).netSales);
+const tplhGates = () => ruleGates("gm_tplh");
+const dollars = (v: number) => `$${v}`;
+const ratio2 = (v: number) => v.toFixed(2);
+/** "Goal $87–92 · 50% $82–87", or just "Goal $82–87" when the two are the same. */
+function goalText(g: { threshold: Gate; target: Gate }, fmt: (v: number) => string): string {
+  const t = gateLabel(g.target, fmt);
+  const h = gateLabel(g.threshold, fmt);
+  return t === h ? `Goal ${t}` : `Goal ${t} · 50% ${h}`;
+}
+/** The low end of a gate — where its chart line goes. */
+const lowOf = (g: Gate) => g.value;
+const highOf = (g: Gate) => (g.cmp === "between" ? g.value2 : null);
 const smgLatest = (d: StoreDeckData) => d.extras.smgWeeks[d.extras.smgWeeks.length - 1];
 const OSAT = "Overall Satisfaction";
 
@@ -266,9 +286,11 @@ export function storeHighlights(d: StoreDeckData): string[] {
   const signed = (v: number | null) => (v == null ? "n/a" : `${v >= 0 ? "up" : "down"} ${Math.abs(v).toFixed(1)}%`);
   const yoy = now.py ? change(now.netSales, now.py.netSales) : null;
   out.push(`Net sales of ${usd0(now.netSales)}, ${signed(change(now.netSales, before.netSales))} on last week` + (yoy != null ? ` and ${signed(yoy)} on last year.` : "."));
-  const t = d.targets;
   if (now.splh != null) {
-    const s = t ? (now.splh >= t.splh.floor ? "on target" : `${usd2(t.splh.floor - now.splh)} short of the ${usd2(t.splh.floor)} target`) : "no target set";
+    const g = splhGates(d);
+    const tone = productivityTone(now.splh, now.netSales);
+    const floor = lowOf(g.target);
+    const s = tone === "good" ? "on target" : `${usd2(floor - now.splh)} short of the ${usd2(floor)} target`;
     out.push(`Productivity ${usd2(now.splh)} per labor hour, ${s}; TPLH ${now.tplh?.toFixed(2) ?? "—"}.`);
   }
   const dt = d.ops?.drive.week;
@@ -300,8 +322,8 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
     { label: "Net Sales", value: usd0(now.netSales), lines: [[changeRun("WoW", change(now.netSales, before.netSales))], [changeRun("YoY", now.py ? change(now.netSales, now.py.netSales) : null)]] },
     { label: "Transactions", value: count(now.transactions), lines: [[changeRun("WoW", change(now.transactions, before.transactions))], [changeRun("YoY", now.py ? change(now.transactions, now.py.transactions) : null)]] },
     { label: "Average Check", value: now.avgCheck == null ? "—" : usd2(now.avgCheck), lines: [[changeRun("WoW", change(now.avgCheck, before.avgCheck))], [changeRun("YoY", now.py ? change(now.avgCheck, now.py.avgCheck) : null)]] },
-    { label: "Productivity", value: now.splh == null ? "—" : usd2(now.splh), tone: productivityTone(now.splh, d.targets?.splh.floor), lines: [[{ text: `Target ${splhBand(d) || "—"}` }], [{ text: `Prior week ${before.splh == null ? "—" : usd2(before.splh)}` }]] },
-    { label: "TPLH", value: now.tplh == null ? "—" : now.tplh.toFixed(2), tone: productivityTone(now.tplh, d.targets?.tplh.floor), lines: [[{ text: `Target ${tplhBand(d) || "—"}` }], [{ text: `Prior week ${before.tplh == null ? "—" : before.tplh.toFixed(2)}` }]] },
+    { label: "Productivity", value: now.splh == null ? "—" : usd2(now.splh), tone: productivityTone(now.splh, now.netSales), lines: [[{ text: goalText(splhGates(d), dollars) }], [{ text: `Prior week ${before.splh == null ? "—" : usd2(before.splh)}` }]] },
+    { label: "TPLH", value: now.tplh == null ? "—" : now.tplh.toFixed(2), tone: tplhTone(now.tplh), lines: [[{ text: goalText(tplhGates(), ratio2) }], [{ text: `Prior week ${before.tplh == null ? "—" : before.tplh.toFixed(2)}` }]] },
   ]);
   tileRow(c, 142, 62, [
     { label: "COGS %", value: pct1(f?.week.cogsPct), tone: cogsTone(f?.week.cogsPct), lines: [[{ text: `Variance ` }, { text: varPct(f?.week.variancePct), color: ink(varianceTone(f?.week.variancePct)) }], [{ text: `${ptdName(d)} to date ${pct1(f?.ptd.cogsPct)}` }]] },
@@ -412,13 +434,15 @@ export function storeSalesSlide(d: StoreDeckData): Canvas {
 export function storeLaborSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
   frame(c, d, "Labor");
-  const t = d.targets;
   const now = cur(d);
+  const sg = splhGates(d);
+  const tg = tplhGates();
+  const tone = { splh: (v: number | null) => productivityTone(v, now.netSales), tplh: (v: number | null) => tplhTone(v) };
 
   const half = (R - L - 8) / 2;
   const charts = [
-    { title: "Productivity", note: `Sales per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_USD2, key: "splh" as const, floor: t?.splh.floor ?? null, ceiling: t?.splh.ceiling ?? null, band: splhBand(d) },
-    { title: "TPLH", note: `Transactions per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_RATIO, key: "tplh" as const, floor: t?.tplh.floor ?? null, ceiling: null, band: tplhBand(d) },
+    { title: "Productivity", note: `Sales per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_USD2, key: "splh" as const, g: sg, fmt: dollars },
+    { title: "TPLH", note: `Transactions per labor hour · ${trendNote(d).toLowerCase()}`, format: FMT_RATIO, key: "tplh" as const, g: tg, fmt: ratio2 },
   ];
   charts.forEach((ch, i) => {
     chartCard(c, L + i * (half + 8), 72, half, 134, {
@@ -428,10 +452,17 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
         categories: weekCats(d),
         format: ch.format,
         series: [
-          { name: "This year", values: d.weeks.map((w) => w[ch.key]), ...THIS_YEAR, labelColor: ink(productivityTone(now[ch.key], ch.floor)) },
-          // Both ends of a ranged target (productivity's $82–87), one legend entry.
-          ...(ch.floor != null ? [{ name: `Goal ${ch.band}`, values: flat(d, ch.floor), ...GOAL }] : []),
-          ...(ch.ceiling != null ? [{ name: `Goal ${ch.band}`, values: flat(d, ch.ceiling), ...GOAL }] : []),
+          { name: "This year", values: d.weeks.map((w) => w[ch.key]), ...THIS_YEAR, labelColor: ink(tone[ch.key](now[ch.key])) },
+          // Both ends of a ranged goal (productivity's $82–87), one legend entry;
+          // the 50% level gets its own yellow line only where it sits lower.
+          ...((): ChartShapeSpec["series"] => {
+            const goal = `Goal ${gateLabel(ch.g.target, ch.fmt)}`;
+            const hi = highOf(ch.g.target);
+            const lines: ChartShapeSpec["series"] = [{ name: goal, values: flat(d, lowOf(ch.g.target)), ...GOAL }];
+            if (hi != null) lines.push({ name: goal, values: flat(d, hi), ...GOAL });
+            if (lowOf(ch.g.threshold) < lowOf(ch.g.target)) lines.push({ name: `50% ${gateLabel(ch.g.threshold, ch.fmt)}`, values: flat(d, lowOf(ch.g.threshold)), ...EDGE });
+            return lines;
+          })(),
         ],
       },
     });
@@ -461,9 +492,9 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
         { text: n ? n.laborHours.toFixed(1) : "—" },
         // More hours for the same work is the costly direction.
         pctCell(n?.laborHours, p?.laborHours, true),
-        goalCell(splh == null ? "—" : usd2(splh), productivityTone(splh, t?.splh.floor)),
+        goalCell(splh == null ? "—" : usd2(splh), productivityTone(splh, now.netSales)),
         pctCell(splh, p ? ratio(p.netSales, p.laborHours) : null),
-        goalCell(tplh == null ? "—" : tplh.toFixed(2), productivityTone(tplh, t?.tplh.floor)),
+        goalCell(tplh == null ? "—" : tplh.toFixed(2), tplhTone(tplh)),
         pctCell(tplh, p ? ratio(p.transactions, p.laborHours) : null),
       ] as Cell[],
     };
@@ -623,7 +654,7 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
     SMG_METRICS.map((m) => {
       const v = latest?.scores[m.name] ?? null;
       // The SMG tab's bands (surveyMeta.scoreTone): 80 / 75, or ≤5 / ≤10 where lower is better.
-      const goals = LOWER_IS_BETTER.test(m.name) ? "Goal ≤5% · 50% ≤10%" : "Goal 80% · 50% 75%";
+      const goals = LOWER_IS_BETTER.test(m.name) ? "Goal ≤5% · 50% ≤10%" : ACCURACY_METRIC.test(m.name) ? "Goal 90% · 50% 85%" : "Goal 80% · 50% 75%";
       return {
         label: m.label,
         value: smgPct(v),

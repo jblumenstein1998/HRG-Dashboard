@@ -79,7 +79,7 @@ export function fmtGateValue(gate: Gate, unit: ConditionUnit): string {
   if (unit === "rating") return gate.value >= 2 ? "Exceeds" : gate.value >= 1 ? "Meets" : "—";
   const n = (v: number) => fmtValue(v, unit);
   if (gate.cmp === "between") return `${n(gate.value)}–${n(gate.value2)}`;
-  return `${gate.cmp === "gte" ? "≥" : "≤"} ${n(gate.value)}`;
+  return `${({ gte: "≥", lte: "≤", gt: ">", lt: "<" } as const)[gate.cmp]} ${n(gate.value)}`;
 }
 
 /**

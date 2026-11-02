@@ -276,7 +276,12 @@ const HOSPITALITY: PositionRules = {
           grain: "period",
           threshold: { cmp: "gte", value: 40 },
           target: { cmp: "gte", value: 60 },
-          note: 'The doc calls this "response rate ≥40 / ≥60"; SMG reports a response count (n), which is what is measured here.',
+          // Store Operating Targets sheet (2026-11-02): by sales volume.
+          tiers: [
+            { maxWeeklySales: 45000, threshold: { cmp: "gte", value: 30 }, target: { cmp: "gte", value: 50 } },
+            { maxWeeklySales: null, threshold: { cmp: "gte", value: 40 }, target: { cmp: "gte", value: 60 } },
+          ],
+          note: 'The doc calls this "response rate"; SMG reports a response count (n), which is what is measured here. ≤$45k/week: ≥30 / ≥50; above: ≥40 / ≥60.',
         },
       ],
       disqualifiers: [
@@ -489,8 +494,9 @@ const QUALITY: PositionRules = {
           source: "auto",
           unit: "percent",
           grain: "period",
-          threshold: { cmp: "gte", value: 95 },
-          target: { cmp: "gte", value: 100 },
+          // Store Operating Targets sheet (2026-11-02): ≥90% / ≥95%.
+          threshold: { cmp: "gte", value: 90 },
+          target: { cmp: "gte", value: 95 },
         },
         {
           id: "q_mock_steritech_weekly",
@@ -505,6 +511,20 @@ const QUALITY: PositionRules = {
         },
       ],
       disqualifiers: [
+        {
+          id: "q_jolt_on_time",
+          label: "Jolt on-time completion",
+          // Store Operating Targets sheet guardrail: "Jolt on-time ≤80%"
+          // disqualifies. The Jolt tab's On time (%) — on time ÷ due — over the
+          // period, from the same fetchStoreLists read as completion above.
+          metric: "joltOnTimePct",
+          source: "auto",
+          unit: "percent",
+          grain: "period",
+          threshold: { cmp: "gt", value: 80 },
+          target: { cmp: "gt", value: 80 },
+          note: "Zeroes this category when 80% or fewer of the period's Jolt lists were completed on time.",
+        },
         {
           id: "q_health_inspection_score",
           label: "Lowest county health inspection score",
@@ -1030,9 +1050,10 @@ const GM: PositionRules = {
           threshold: { cmp: "between", value: 82, value2: 87 },
           target: { cmp: "between", value: 82, value2: 87 },
           tiers: [
-            // ≤ $75,000/week: 82–87 at both levels.
-            { maxWeeklySales: 75000, threshold: { cmp: "between", value: 82, value2: 87 }, target: { cmp: "between", value: 82, value2: 87 } },
-            // > $75,000/week: threshold stays 82–87, target rises to 87–92.
+            // Store Operating Targets sheet (2026-11-02): the split is at $85k.
+            // ≤ $85,000/week: 82–87 at both levels.
+            { maxWeeklySales: 85000, threshold: { cmp: "between", value: 82, value2: 87 }, target: { cmp: "between", value: 82, value2: 87 } },
+            // > $85,000/week: threshold stays 82–87, target rises to 87–92.
             { maxWeeklySales: null, threshold: { cmp: "between", value: 82, value2: 87 }, target: { cmp: "between", value: 87, value2: 92 } },
           ],
         },

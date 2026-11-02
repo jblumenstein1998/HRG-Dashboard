@@ -67,7 +67,7 @@ export const POSITION_ORDER: PositionId[] = [
  * as well as too high. Both bounds are inclusive.
  */
 export type Gate =
-  | { cmp: "gte" | "lte"; value: number }
+  | { cmp: "gte" | "lte" | "gt" | "lt"; value: number }
   | { cmp: "between"; value: number; value2: number };
 
 /**

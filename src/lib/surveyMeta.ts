@@ -203,12 +203,18 @@ export function publishedMarketCells(
 
 export type ScoreTone = "good" | "ok" | "bad" | "none";
 
+/** Order accuracy has its own goal on the Store Operating Targets sheet. */
+export const ACCURACY_METRIC = /accuracy/i;
+
 /**
  * Satisfaction metrics: >=80 good, >=75 ok, below that bad.
+ * Order accuracy: >=90 good, >=85 ok (Store Operating Targets, 2026-11-02 —
+ * the same 85 / 90 the bonus scores it on).
  * Experienced Problem is inverted: <=5 good, <=10 ok, above that bad.
  */
 export function scoreTone(value: number | null | undefined, metric: string): ScoreTone {
   if (value === null || value === undefined) return "none";
+  if (ACCURACY_METRIC.test(metric)) return value >= 90 ? "good" : value >= 85 ? "ok" : "bad";
   const inverted = LOWER_IS_BETTER.test(metric);
   if (inverted ? value <= 5 : value >= 80) return "good";
   if (inverted ? value <= 10 : value >= 75) return "ok";

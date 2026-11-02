@@ -90,12 +90,10 @@ function num(v: number): string {
  */
 /** Stated in the header legend, so the two can't drift apart. */
 const COMPLIANCE_TARGET = 100;
-const COMPLIANCE_THRESHOLD = 95;
 
 function rateColor(v: number | null): string {
   if (v === null) return "text-gray-400";
   if (v >= COMPLIANCE_TARGET) return "text-green-600";
-  if (v >= COMPLIANCE_THRESHOLD) return "text-yellow-600";
   return "text-red-600";
 }
 
@@ -614,11 +612,9 @@ export default function ZUClient({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
           <span className="text-gray-500">
             Compliance&nbsp;
-            <span className="text-green-600 font-medium">≥{COMPLIANCE_TARGET}%</span>
+            <span className="text-green-600 font-medium">{COMPLIANCE_TARGET}%</span>
             {" / "}
-            <span className="text-yellow-600 font-medium">≥{COMPLIANCE_THRESHOLD}%</span>
-            {" / "}
-            <span className="text-red-600 font-medium">&lt;{COMPLIANCE_THRESHOLD}%</span>
+            <span className="text-red-600 font-medium">&lt;{COMPLIANCE_TARGET}%</span>
           </span>
           <StoreFilterPicker
             leaders={leaders}

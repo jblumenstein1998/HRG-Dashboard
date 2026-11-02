@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import AdminSlackReports from "@/components/AdminSlackReports";
 import WbrPanel from "@/components/WbrPanel";
+import OperatingTargetsPanel from "@/components/OperatingTargetsPanel";
+import type { OperatingTargets } from "@/lib/operatingTargets";
 import type { WbrWeekOption } from "@/lib/wbr/weeks";
 import type { Tab } from "@/lib/users/tabs";
 import type { Leader } from "@/components/StoreFilter";
@@ -15,14 +17,15 @@ import type { Leader } from "@/components/StoreFilter";
  * it, and it was removed on 2026-10-29 (Josh). Its rows are left in the
  * admin_links table, unread.
  *
- * Today it holds the Weekly Business Review download and the Slack reporting table. Anyone whose position has the tab
- * ticked sees it (Josh, 2026-10-30 — it had been admin-only, which left
- * Directors of Operations looking at an empty tab); its route checks the same
- * tick.
+ * Today it holds the Store Operating Targets (read from the bonus rules), the
+ * Weekly Business Review download and the Slack reporting table. Anyone whose
+ * position has the tab ticked sees it (Josh, 2026-10-30 — it had been
+ * admin-only, which left Directors of Operations looking at an empty tab); its
+ * route checks the same tick.
  */
 export default function AdminTabClient({
-  tabs, isAdmin, leaders, wbrWeeks,
-}: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[]; wbrWeeks: WbrWeekOption[] }) {
+  tabs, isAdmin, leaders, wbrWeeks, targets,
+}: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[]; wbrWeeks: WbrWeekOption[]; targets: OperatingTargets }) {
   const router = useRouter();
 
   return (
@@ -69,6 +72,7 @@ export default function AdminTabClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
+        <OperatingTargetsPanel targets={targets} />
         <WbrPanel weeks={wbrWeeks} />
         <AdminSlackReports leaders={leaders} />
       </main>

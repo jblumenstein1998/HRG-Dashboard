@@ -137,7 +137,7 @@ try {
     lov_driveThru: 0, lov_quality: 0, lov_training: 0, lov_hospitality: 0, lov_agm: 0,
     hosp_zcase_resolution: 100, hosp_zcase_count: 3, hosp_facility_inspection: 100,
     hosp_health_cleanliness_violation: 0, hosp_recognition: 100, hosp_pulse_check: 1,
-    joltCompletePct: 100, q_mock_steritech_weekly: 1, q_health_inspection_score: 98,
+    joltCompletePct: 100, joltOnTimePct: 95, q_mock_steritech_weekly: 1, q_health_inspection_score: 98,
     q_mock_steritech_dishonest: 0, q_high_risk: 0, q_health_inspection_100: 0, q_steritech_105: 0,
     q_full_counts_weekly: 1, q_critical_counts_pct: 100, q_truck_order_resolution: 24, q_reports_24h: 100,
     t_onboarding_completion: 100, t_lto_compliance: 100, t_onboarding_slack: 1,
@@ -162,12 +162,19 @@ try {
 
   // The worked example the AGM doc states in prose.
   const mixed = new Map(Object.entries(base));
-  mixed.set("joltCompletePct", 96);
+  mixed.set("joltCompletePct", 92); // threshold band: ≥90, <95
   mixed.set("q_critical_counts_pct", 96);
   mixed.set("q_truck_order_resolution", 60);
   mixed.set("q_reports_24h", 80);
   const half = scoreStore("36001", "P7 FY2026", mixed);
   check("Quality ex-LOV = 50%", half.quality.scoreExLov, 50);
+
+  // Jolt on-time guardrail: 80% or fewer on time zeroes Food Safety.
+  const late = new Map(Object.entries(base));
+  late.set("joltOnTimePct", 80);
+  check("Jolt on-time 80% disqualifies Food Safety", cat(scoreStore("36001", "P7 FY2026", late).quality, "food_safety").payout, 0);
+  late.set("joltOnTimePct", 80.5);
+  check("Jolt on-time 80.5% does not", cat(scoreStore("36001", "P7 FY2026", late).quality, "food_safety").payout > 0 ? 1 : 0, 1);
   check("AGM Director Perf = mean(100,50,100,100) = 87.5%",
     cat(half.agm, "director_performance").score * 100, 87.5);
   check("AGM Director Perf payout = 90 x 0.875", cat(half.agm, "director_performance").payout, 78.75);
