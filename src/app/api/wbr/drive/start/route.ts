@@ -8,7 +8,7 @@ import { storeDeckOptions } from "@/lib/wbr/storeData";
  * GET /api/wbr/drive/start?store=<label>&weekEnd=YYYY-MM-DD
  *
  * Begins "Save to Google Drive" for the store presentation: checks the person
- * may make decks (the Admin tab) and signs in with Google (a shared store login
+ * may make decks (the Management tab) and signs in with Google (a shared store login
  * has no Drive), remembers what to build, and sends them to Google to allow
  * drive.file. Google returns to the sign-in callback, which hands a "d_" state
  * to lib/wbr/driveSave.
@@ -16,14 +16,14 @@ import { storeDeckOptions } from "@/lib/wbr/storeData";
 export async function GET(request: NextRequest) {
   const back = (msg: string) => {
     const url = request.nextUrl.clone();
-    url.pathname = "/admin-links";
+    url.pathname = "/management";
     url.search = `?drive=error&msg=${encodeURIComponent(msg)}`;
     return NextResponse.redirect(url);
   };
 
   const viewer = await getViewer();
   if (!viewer) return NextResponse.redirect(new URL("/login", request.url));
-  if (!viewer.position.tabs.includes("/admin-links")) return back("Your position can't make presentations.");
+  if (!viewer.position.tabs.includes("/management")) return back("Your position can't make presentations.");
   if (!viewer.user.email) return back("Store logins can't save to Google Drive — use Download.");
   if (!googleConfigured()) return back("Google isn't configured on this deployment.");
 

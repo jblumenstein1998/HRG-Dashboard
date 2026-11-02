@@ -6,13 +6,13 @@ import type { WbrWeekOption } from "@/lib/wbr/weeks";
 /**
  * The store presentation: pick a store and a week, get that store's overview,
  * sales, labor, drive-thru, food cost, SMG and compliance slides. Sits on the
- * Admin tab.
+ * Management tab, shown only to people signed in with Google.
  *
  * Someone signed in with their HRG Google account saves it straight into their
  * own Google Drive as Google Slides (a "Store Reviews" folder): the button goes
  * to /api/wbr/drive/start, Google asks once for permission, and the page comes
- * back here with the link (`driveResult`). A shared store login has no Drive,
- * so it gets the PowerPoint download — which everyone else keeps as a fallback.
+ * back here with the link (`driveResult`). The PowerPoint download stays as a
+ * second button.
  *
  * `weeks` and `stores` come from the server so the render and the browser
  * agree on which Sunday was last and which stores are on PAR.

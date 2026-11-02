@@ -2,7 +2,7 @@
  * The return leg of "Save to Google Drive": Google has sent the browser back to
  * the sign-in callback with a "d_" state. Verify it, build the store
  * presentation, upload it to the person's Drive as Google Slides, and land them
- * back on the Admin tab with the link.
+ * back on the Management tab with the link.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -23,7 +23,7 @@ export async function finishDriveSave(request: NextRequest): Promise<NextRespons
 
   const done = (q: Record<string, string>) => {
     const url = request.nextUrl.clone();
-    url.pathname = "/admin-links";
+    url.pathname = "/management";
     url.search = `?${new URLSearchParams({ ...q, store: wanted.store ?? "", weekEnd: wanted.weekEnd ?? "" })}`;
     const res = NextResponse.redirect(url);
     res.cookies.delete(DRIVE_COOKIE);
@@ -38,7 +38,7 @@ export async function finishDriveSave(request: NextRequest): Promise<NextRespons
   }
 
   const viewer = await getViewer();
-  if (!viewer?.user.email || !viewer.position.tabs.includes("/admin-links")) return fail("Please sign in again.");
+  if (!viewer?.user.email || !viewer.position.tabs.includes("/management")) return fail("Please sign in again.");
 
   try {
     const { accessToken, email } = await exchangeDriveCode({ code, verifier, origin: request.nextUrl.origin });

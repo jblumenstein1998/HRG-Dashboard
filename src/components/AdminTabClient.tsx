@@ -2,8 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
-import StoreDeckPanel, { type DriveResult } from "@/components/StoreDeckPanel";
-import type { WbrWeekOption } from "@/lib/wbr/weeks";
 import OperatingTargetsPanel from "@/components/OperatingTargetsPanel";
 import type { OperatingTargets } from "@/lib/operatingTargets";
 import type { Tab } from "@/lib/users/tabs";
@@ -15,25 +13,15 @@ import type { Tab } from "@/lib/users/tabs";
  * it, and it was removed on 2026-10-29 (Josh). Its rows are left in the
  * admin_links table, unread.
  *
- * Today it holds the store presentation download and the Store Operating
- * Targets (read from the bonus rules); the Slack reporting table moved to its
- * own tab (2026-11-02). Anyone whose position has the tab ticked sees it (Josh,
+ * Today it holds the Store Operating Targets (read from the bonus rules); the
+ * Slack reporting table has its own tab and the store presentation lives on
+ * Management (2026-11-02). Anyone whose position has the tab ticked sees it (Josh,
  * 2026-10-30 — it had been admin-only, which left Directors of Operations
  * looking at an empty tab); its route checks the same tick.
  */
 export default function AdminTabClient({
-  tabs, isAdmin, targets, deckWeeks, deckStores, canDrive, driveResult, initialStore, initialWeekEnd,
-}: {
-  tabs: Tab[];
-  isAdmin: boolean;
-  targets: OperatingTargets;
-  deckWeeks: WbrWeekOption[];
-  deckStores: { label: string; section: string }[];
-  canDrive: boolean;
-  driveResult: DriveResult | null;
-  initialStore: string;
-  initialWeekEnd: string;
-}) {
+  tabs, isAdmin, targets,
+}: { tabs: Tab[]; isAdmin: boolean; targets: OperatingTargets }) {
   const router = useRouter();
 
   return (
@@ -80,14 +68,6 @@ export default function AdminTabClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
-        <StoreDeckPanel
-          weeks={deckWeeks}
-          stores={deckStores}
-          canDrive={canDrive}
-          driveResult={driveResult}
-          initialStore={initialStore}
-          initialWeekEnd={initialWeekEnd}
-        />
         <OperatingTargetsPanel targets={targets} />
       </main>
     </div>
