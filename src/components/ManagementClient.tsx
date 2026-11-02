@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
 import { PERIODS } from "@/lib/fiscal";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
-import StoreDeckPanel from "@/components/StoreDeckPanel";
-import type { WbrWeekOption } from "@/lib/wbr/weeks";
 import type { Tab } from "@/lib/users/tabs";
 
 /**
@@ -129,15 +127,7 @@ function pay(r: Row): string {
   return "—";
 }
 
-export default function ManagementClient({
-  tabs, isAdmin, leaders, deckWeeks, deckStores,
-}: {
-  tabs: Tab[];
-  isAdmin: boolean;
-  leaders: Leader[];
-  deckWeeks: WbrWeekOption[];
-  deckStores: { label: string; section: string }[];
-}) {
+export default function ManagementClient({ tabs, isAdmin, leaders }: { tabs: Tab[]; isAdmin: boolean; leaders: Leader[] }) {
   const router = useRouter();
   const storeFilter = useStoreFilter(leaders);
   const [quick, setQuick] = useState<string | null>("last_week");
@@ -338,8 +328,6 @@ export default function ManagementClient({
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col gap-3">
-        <StoreDeckPanel weeks={deckWeeks} stores={deckStores} />
-
         <p className="text-xs text-gray-500">
           Leadership and Directors from Workstream. Each count is the events at any store while that person was on the
           PAR clock — the same people the team-on-duty buttons show. Today counts against PAR&apos;s live clock.

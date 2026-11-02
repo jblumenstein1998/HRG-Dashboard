@@ -5,8 +5,7 @@ import type { WbrWeekOption } from "@/lib/wbr/weeks";
 
 /**
  * The single-store deck download: pick a store and a week, get a PowerPoint of
- * that store's sales, labor, food cost and drive-thru. Sits on the Management
- * tab while it's being worked on.
+ * that store's sales, labor, food cost and drive-thru. Sits on the Admin tab.
  *
  * `weeks` and `stores` come from the server so the render and the browser
  * agree on which Sunday was last and which stores are on PAR.

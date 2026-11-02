@@ -10,12 +10,12 @@ export const maxDuration = 120;
  * POST { store: "<store label>", weekEnd?: "YYYY-MM-DD" (a Sunday) }
  *
  * Builds the single-store deck for the week ending `weekEnd` (default: the last
- * completed week) and returns it as a .pptx download. Lives on the Management
- * tab while it's being worked on, so it checks that tab. Warnings ride along in
+ * completed week) and returns it as a .pptx download. Lives on the Admin tab,
+ * so it checks that tab. Warnings ride along in
  * a header, URI-encoded JSON, so the body can stay the file itself.
  */
 export async function POST(request: NextRequest) {
-  const denied = await requireTabApi("/management");
+  const denied = await requireTabApi("/admin-links");
   if (denied) return denied;
 
   const body = (await request.json().catch(() => ({}))) as { store?: string; weekEnd?: string };

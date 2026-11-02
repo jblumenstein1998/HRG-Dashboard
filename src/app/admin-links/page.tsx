@@ -1,7 +1,9 @@
 import AdminTabClient from "@/components/AdminTabClient";
 import { requireTab } from "@/lib/users/access";
-import { listLeaders } from "@/lib/users/leaders";
 import { buildOperatingTargets } from "@/lib/operatingTargets";
+import { todayCentralISO } from "@/lib/parRollup";
+import { recentWbrWeeks } from "@/lib/wbr/weeks";
+import { storeDeckOptions } from "@/lib/wbr/storeData";
 
 /**
  * The Admin tab.
@@ -13,13 +15,13 @@ import { buildOperatingTargets } from "@/lib/operatingTargets";
  */
 export default async function AdminTabPage() {
   const viewer = await requireTab("/admin-links");
-  const leaders = await listLeaders();
   return (
     <AdminTabClient
       tabs={viewer.position.tabs}
       isAdmin={viewer.position.isAdmin}
-      leaders={leaders}
       targets={buildOperatingTargets()}
+      deckWeeks={recentWbrWeeks(todayCentralISO(), 26)}
+      deckStores={storeDeckOptions()}
     />
   );
 }

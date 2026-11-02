@@ -41,7 +41,7 @@ function hhmm(minutes: number): string {
 
 export async function GET(req: NextRequest) {
   // Anyone with the Admin tab ticked (Josh, 2026-10-30), like every tab's own routes.
-  const denied = await requireTabApi("/admin-links");
+  const denied = await requireTabApi("/slack");
   if (denied) return denied;
 
   const today = businessDateISO();
