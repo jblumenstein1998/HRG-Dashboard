@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   // see; without this the deployed route has no template to fill.
   outputFileTracingIncludes: {
     "/api/wbr/generate": ["./src/lib/wbr/template/**/*"],
+    "/api/wbr/store": ["./src/lib/wbr/template/**/*"],
   },
   // The old /smg and /guest-satisfaction tabs were replaced by the survey-data
   // tab, which now carries the "SMG" name. Anyone holding a bookmark to either

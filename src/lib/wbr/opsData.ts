@@ -16,7 +16,6 @@ import { parseMMSS, type StoreMetrics } from "@/lib/berry";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { getPeriodForDate } from "@/lib/fiscal";
 import { getNetSalesForRange } from "@/lib/parRollup";
-import type { WbrWeek } from "@/lib/wbr/data";
 
 export type Span = { start: string; end: string; label: string };
 
@@ -93,8 +92,11 @@ const NO_FOOD: LocationReport = { actualCostPct: null, actualCostDollars: null, 
 
 const supersetRange = (s: Span) => `${s.start}T00:00:00 : ${s.end}T23:59:59`;
 
-export async function buildOpsData(wk: WbrWeek, labels: string[]): Promise<OpsData> {
-  const period = getPeriodForDate(new Date(wk.week.end + "T12:00:00"));
+/** `wk.week` is the Mon–Sun data week; the period to date runs from its fiscal period's start to the week's end. */
+export async function buildOpsData(wk: { week: { start: string; end: string } }, labels: string[]): Promise<OpsData> {
+  // Local midnight: getPeriodForDate compares against each period's last day at
+  // midnight, so noon on a period's final Sunday fell outside every period.
+  const period = getPeriodForDate(new Date(wk.week.end + "T00:00:00"));
   const week: Span = { start: wk.week.start, end: wk.week.end, label: `Week ${md(wk.week.start)}–${md(wk.week.end)}` };
   const ptd: Span = period
     ? { start: period.start, end: wk.week.end, label: `P${period.period} to date ${md(period.start)}–${md(wk.week.end)}` }

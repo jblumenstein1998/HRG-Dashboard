@@ -44,25 +44,25 @@ const R = W - L;
 
 // ── Small formatters and goal tones ──────────────────────────────────────────
 
-const mmss = (s: number | null | undefined) =>
+export const mmss = (s: number | null | undefined) =>
   s == null ? "—" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-const pct1 = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)}%`);
+export const pct1 = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(1)}%`);
 /** Food-cost tab convention: negative variance in parentheses. */
-const varPct = (v: number | null | undefined) => (v == null ? "—" : v < 0 ? `(${Math.abs(v).toFixed(2)}%)` : `${v.toFixed(2)}%`);
-const varUsd = (v: number | null | undefined) =>
+export const varPct = (v: number | null | undefined) => (v == null ? "—" : v < 0 ? `(${Math.abs(v).toFixed(2)}%)` : `${v.toFixed(2)}%`);
+export const varUsd = (v: number | null | undefined) =>
   v == null ? "—" : v < 0 ? `(${usd0(Math.abs(v))})` : usd0(v);
 
-const levelTone = (l: GoalLevel | null): Tone => (l === null ? "neutral" : l);
+export const levelTone = (l: GoalLevel | null): Tone => (l === null ? "neutral" : l);
 
 /** Lane/window against the Drive-Thru tab's sales-tier goals. */
-function driveTone(secs: number | null | undefined, weeklySales: number | null | undefined, field: "lane" | "window"): Tone {
+export function driveTone(secs: number | null | undefined, weeklySales: number | null | undefined, field: "lane" | "window"): Tone {
   if (secs == null || weeklySales == null) return "neutral";
   const tier = (field === "lane" ? TOTAL_TIME_TIERS : WINDOW_TIME_TIERS).find(t => t.test(weeklySales));
   if (!tier) return "neutral";
   return secs <= tier.greenMax ? "good" : secs <= tier.yellowMax ? "warn" : "bad";
 }
 
-const toneText = (t: Tone) => (t === "good" ? C.green600 : t === "warn" ? C.yellow600 : t === "bad" ? C.red600 : C.gray500);
+export const toneText = (t: Tone) => (t === "good" ? C.green600 : t === "warn" ? C.yellow600 : t === "bad" ? C.red600 : C.gray500);
 
 /** District SPLH/TPLH from store sales and implied labor hours (sales ÷ SPLH). */
 function districtLabor(d: DistrictWeek, week: "current" | "prior") {
