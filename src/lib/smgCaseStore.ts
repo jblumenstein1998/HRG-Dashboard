@@ -425,6 +425,31 @@ export async function filterOutstandingKeys(caseKeys: string[]): Promise<string[
   return rows.map((r) => String(r.case_key));
 }
 
+/**
+ * A case's store and the guest's visit as the store's own clock read it.
+ *
+ * `event_at` is NOT an instant. SMG sends EVENT_DATE as a bare local
+ * wall-clock time and Postgres stored it as UTC, so its UTC fields are the
+ * store's local date and time — checked 2026-10-30 against 1,593 cases: read
+ * as UTC, visits peak at 12 and 18 in both Tennessee and Virginia, which is
+ * lunch and dinner on each store's own clock; read as an instant converted to
+ * local time, they peaked at 7am and 1pm. `received_at` is a real instant.
+ */
+export async function caseVisit(
+  caseKey: string,
+): Promise<{ store: string | null; type: string | null; localDate: string; minutes: number } | null> {
+  const rows = (await sql`
+    SELECT store, case_type,
+           to_char(event_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS local_date,
+           (extract(hour FROM event_at AT TIME ZONE 'UTC') * 60
+             + extract(minute FROM event_at AT TIME ZONE 'UTC'))::int AS minutes
+    FROM smg_zcases
+    WHERE case_key = ${caseKey} AND event_at IS NOT NULL
+  `) as { store: string | null; case_type: string | null; local_date: string; minutes: number }[];
+  const r = rows[0];
+  return r ? { store: r.store, type: r.case_type, localDate: r.local_date, minutes: Number(r.minutes) } : null;
+}
+
 /** When the data was last refreshed — feeds the "updated N min ago" label. */
 export async function lastSyncedAt(): Promise<string | null> {
   const rows = (await sql`SELECT MAX(synced_at) AS at FROM smg_zcases`) as { at: string | null }[];

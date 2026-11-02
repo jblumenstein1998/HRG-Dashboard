@@ -8,10 +8,9 @@
  *
  * Pure, no env reads, safe to import from a client component.
  *
- * **History horizon**: fiscal.ts defines FY2026 only, so bonus periods run P1
- * FY2026 (starting 2025-12-29) through the period in progress. That happens to
- * match the underlying data anyway — drive_thru_trend also starts at the fiscal
- * year boundary. Extending further back means adding FY2025 to fiscal.ts first.
+ * **History horizon**: bonus periods run from P10 FY2026 (FIRST_BONUS_PERIOD,
+ * starting 2026-09-28) through the period in progress. fiscal.ts defines FY2026
+ * only, so FY2027 needs adding there before P1 FY2027 can be offered.
  */
 
 import { PERIODS, currentPeriod, type FiscalPeriod } from "../fiscal";
@@ -20,6 +19,14 @@ import { businessDate } from "../businessDay";
 /** Fiscal year label, derived the same way driveThruTrend.ts derives its key prefix. */
 export const FISCAL_YEAR = Number(PERIODS[0].end.slice(0, 4));
 
+/**
+ * The first period bonus is tracked for. P1–P9 FY2026 were never used (Josh,
+ * 2026-10-29), so they are not offered, scored or rebuilt — every bonus route,
+ * the nightly rollup and the period picker go through parsePeriodLabel or
+ * listBonusPeriods. Their stored rows are left in place, unused.
+ */
+export const FIRST_BONUS_PERIOD = 10;
+
 export function periodLabel(p: FiscalPeriod): string {
   return `P${p.period} FY${FISCAL_YEAR}`;
 }
@@ -27,7 +34,9 @@ export function periodLabel(p: FiscalPeriod): string {
 export function parsePeriodLabel(label: string): FiscalPeriod | null {
   const m = label.match(/^P(\d+) FY(\d{4})$/);
   if (!m || Number(m[2]) !== FISCAL_YEAR) return null;
-  return PERIODS.find((p) => p.period === Number(m[1])) ?? null;
+  const n = Number(m[1]);
+  if (n < FIRST_BONUS_PERIOD) return null;
+  return PERIODS.find((p) => p.period === n) ?? null;
 }
 
 function toDate(s: string): Date {
@@ -104,7 +113,7 @@ export function resolveBonusWindow(label: string): BonusWindow | null {
  */
 export function listBonusPeriods(): { label: string; isPartial: boolean }[] {
   const cur = currentPeriod();
-  return PERIODS.filter((p) => p.period <= cur.period)
+  return PERIODS.filter((p) => p.period >= FIRST_BONUS_PERIOD && p.period <= cur.period)
     .sort((a, b) => b.period - a.period)
     .map((p) => ({ label: periodLabel(p), isPartial: p.period === cur.period }));
 }

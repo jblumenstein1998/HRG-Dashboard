@@ -12,10 +12,10 @@
 
 import { ingestPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
-import { resolveBonusWindow } from "./periods";
+import { listBonusPeriods, resolveBonusWindow } from "./periods";
 import { scoreStore } from "./engine";
 import type { MetricValues } from "./engine";
-import { OVERRIDE_PREFIX } from "./rules";
+import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM } from "./rules";
 
 /**
  * Metrics whose source can only ever report the present, so a closed period's
@@ -74,7 +74,17 @@ export function mergeInputs(auto: MetricValues, manual: Map<string, number> | un
 export async function computePeriod(
   periodLabel: string,
   berryToken: string | null,
-  opts: { refreshCosts?: boolean; force?: boolean } = {}
+  opts: {
+    refreshCosts?: boolean;
+    force?: boolean;
+    /**
+     * Keep Jolt, Slack and inventory counts from the last stored run instead
+     * of pulling them live — the Bonus tab's manual refresh (Josh,
+     * 2026-10-29). Ignored for a period that has never been computed, which
+     * has nothing to keep.
+     */
+    reuseSlowSources?: boolean;
+  } = {}
 ): Promise<ComputeReport> {
   const window = resolveBonusWindow(periodLabel);
   if (!window) {
@@ -106,8 +116,11 @@ export async function computePeriod(
   // Imported lazily so the module graph for the read-only routes doesn't drag
   // in every vendor client.
   const { resolvePeriodMetrics } = await import("./metrics");
-  const { byStore, diagnostics } = await resolvePeriodMetrics(window, berryToken);
+  const existing = await getMetrics(periodLabel);
+  const skipSlowSources = !!opts.reuseSlowSources && existing.size > 0;
+  const { byStore, diagnostics } = await resolvePeriodMetrics(window, berryToken, { skipSlowSources });
   warnings.push(...diagnostics.warnings);
+  if (skipSlowSources) warnings.push("Jolt, Slack and inventory counts kept from the early-morning run");
 
   // Carry forward anything this run couldn't resolve.
   //
@@ -117,19 +130,25 @@ export async function computePeriod(
   // lost categories they had legitimately scored the day before. A stale value
   // carried forward is far better than a category that quietly stops being
   // scoreable, and the next good run overwrites it anyway.
-  const existing = await getMetrics(periodLabel);
+  //
+  // Except where the resolver says an absence is its answer: retention left
+  // pending because someone still has to be checked must stay pending, not
+  // revert to whatever the last run thought.
+  //
+  // This is also how a manual refresh keeps the slow sources it skipped.
+  const authoritative = new Set(diagnostics.authoritative);
   let retained = 0;
   for (const [storeId, values] of byStore) {
     const prior = existing.get(storeId);
     if (!prior) continue;
     for (const [metric, value] of prior) {
-      if (!values.has(metric)) {
+      if (!values.has(metric) && !authoritative.has(metric)) {
         values.set(metric, value);
         retained++;
       }
     }
   }
-  if (retained > 0) {
+  if (retained > 0 && !skipSlowSources) {
     warnings.push(`${retained} metric values carried forward from the previous run (a vendor did not respond)`);
   }
 
@@ -257,4 +276,36 @@ export async function rescoreFromStored(
     positions: writes.length,
     warnings: [],
   };
+}
+
+/**
+ * Re-derive retention for every open period it is computed for, and rescore.
+ *
+ * What the retention review calls after somebody says whether a hire worked.
+ * One answer settles a person's 30-, 60- and 90-day anniversaries, which
+ * usually fall in different periods, so every computed, unlocked period from
+ * RETENTION_AUTO_FROM on is refreshed — retention alone, from Postgres and the
+ * day-cached PAR employee lists, with no other vendor touched.
+ */
+export async function refreshRetention(): Promise<string[]> {
+  const { getRetention, retentionMetrics, RETENTION_METRIC_IDS } = await import("../workstreamRetention");
+
+  const refreshed: string[] = [];
+  for (const { label } of listBonusPeriods()) {
+    const window = resolveBonusWindow(label);
+    if (!window || window.period.period < RETENTION_AUTO_FROM) continue;
+    if (await isLocked(label)) continue;
+    const stored = await getMetrics(label);
+    if (stored.size === 0) continue;
+
+    const fresh = retentionMetrics(await getRetention(window.start, window.end));
+    for (const [storeId, values] of stored) {
+      for (const id of RETENTION_METRIC_IDS) values.delete(id);
+      for (const [id, value] of fresh.get(storeId) ?? []) values.set(id, value);
+    }
+    await saveMetrics(label, stored);
+    await rescoreFromStored(label);
+    refreshed.push(label);
+  }
+  return refreshed;
 }

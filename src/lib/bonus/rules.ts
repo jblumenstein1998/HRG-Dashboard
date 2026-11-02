@@ -33,6 +33,13 @@
 import { ZCASE_GOALS } from "./goals";
 import type { Condition, PositionRules, PositionId } from "./types";
 
+/**
+ * First fiscal period new-hire retention is computed for (workstreamRetention.ts).
+ * Earlier periods are entered by hand: retention needs our synced Workstream copy,
+ * which remembers a leaver's store, and its first sync was 2026-10-04.
+ */
+export const RETENTION_AUTO_FROM = 11;
+
 // ── Shared conditions ────────────────────────────────────────────────────────
 
 /**
@@ -469,8 +476,8 @@ const QUALITY: PositionRules = {
         {
           id: "q_jolt_completion",
           label: "Jolt checklist completion",
-          // Jolt's own Complete (%) — complete / (done + missed) — over the
-          // period window, the figure the Jolt tab reports. The metric key is
+          // The Jolt tab's Complete (%) — done ÷ due, lists counted on their
+          // deadline day — over the period window. The metric key is
           // deliberately not the criterion id: manual entries are stored under
           // the id, and keeping them apart means an entry made while this was
           // hand-keyed can no longer shadow the live figure. Correcting a
@@ -586,16 +593,37 @@ const QUALITY: PositionRules = {
           target: { cmp: "lte", value: 1.0 },
           note: "Measured as absolute variance, since the doc's ±1.5% / ±1% bands are symmetric.",
         },
+        // Inventory counts, from Net-Chef (netchefInventory.ts). The doc's 0/1/2
+        // rating — "full at beginning of week + daily critical" / "all counts
+        // completed accurately" — was replaced by Josh on 2026-10-28 with a
+        // full count every week at both levels, and ≥95% / 100% of critical
+        // counts. "Accurately" was dropped: Net-Chef cannot say whether a count
+        // was right. Two conditions rather than one so the strict ladder does
+        // the rest: both at target is 100%, both at threshold is 50%.
+        //
+        // Replaces criterion `q_inventory_counts`. Its one hand entry (P9
+        // Columbia) is superseded by the computed figures.
         {
-          id: "q_inventory_counts",
-          label: "Inventory counts",
-          metric: "q_inventory_counts",
-          source: "manual",
-          unit: "rating",
-          grain: "entered",
+          id: "q_full_counts_weekly",
+          label: "Full inventory count every Monday",
+          metric: "q_full_counts_weekly",
+          source: "auto",
+          unit: "boolean",
+          grain: "period",
           threshold: { cmp: "gte", value: 1 },
-          target: { cmp: "gte", value: 2 },
-          note: "0 = not completed. 1 = completed (full at beginning of week + daily critical). 2 = all counts completed accurately.",
+          target: { cmp: "gte", value: 1 },
+          note: "One full count per week, entered on the Monday after it. A Tuesday or Sunday-night entry is late.",
+        },
+        {
+          id: "q_critical_counts",
+          label: "Daily critical counts (AM + PM)",
+          metric: "q_critical_counts_pct",
+          source: "auto",
+          unit: "percent",
+          grain: "period",
+          threshold: { cmp: "gte", value: 95 },
+          target: { cmp: "gte", value: 100 },
+          note: "Share of the period's AM and PM critical-item counts that were done, Mondays excused (the full count covers them). A count entered before 2:15 AM belongs to the night before.",
         },
         {
           id: "q_truck_order_resolution",
@@ -738,9 +766,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_30",
           label: "30-day new hire retention",
           metric: "t_retention_30",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 70 },
           target: { cmp: "gte", value: 80 },
         },
@@ -748,9 +777,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_60",
           label: "60-day new hire retention",
           metric: "t_retention_60",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 60 },
           target: { cmp: "gte", value: 70 },
         },
@@ -758,9 +788,10 @@ const TRAINING: PositionRules = {
           id: "t_retention_90",
           label: "90-day new hire retention",
           metric: "t_retention_90",
-          source: "manual",
+          source: "auto",
+          autoFromPeriod: RETENTION_AUTO_FROM,
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 60 },
           target: { cmp: "gte", value: 70 },
         },
@@ -776,9 +807,10 @@ const TRAINING: PositionRules = {
               id: "t_retention_90_95",
               label: "90-day retention ≥95%",
               metric: "t_retention_90",
-              source: "manual",
+              source: "auto",
+              autoFromPeriod: RETENTION_AUTO_FROM,
               unit: "percent",
-              grain: "entered",
+              grain: "period",
               threshold: { cmp: "gte", value: 95 },
               target: { cmp: "gte", value: 95 },
             },
@@ -793,9 +825,10 @@ const TRAINING: PositionRules = {
               id: "t_retention_60_95",
               label: "60-day retention ≥95%",
               metric: "t_retention_60",
-              source: "manual",
+              source: "auto",
+              autoFromPeriod: RETENTION_AUTO_FROM,
               unit: "percent",
-              grain: "entered",
+              grain: "period",
               threshold: { cmp: "gte", value: 95 },
               target: { cmp: "gte", value: 95 },
             },
@@ -980,12 +1013,12 @@ const GM: PositionRules = {
           id: "gm_labor_pct",
           label: "Labor % of sales",
           metric: "gm_labor_pct",
-          source: "manual",
+          source: "auto",
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "between", value: 21, value2: 22 },
           target: { cmp: "between", value: 19, value2: 21 },
-          note: "Manual entry — PAR exposes labor minutes but never labor dollars, and no connected system holds pay rates. Both gates are two-sided: below 19% misses Target as surely as above 21% does.",
+          note: "From the period P&L dropped onto this tab: Total Salaries and Wages ÷ Total Sales. Pending until the P&L is in. Both gates are two-sided: below 19% misses Target as surely as above 21% does.",
         },
         {
           id: "gm_splh",
@@ -1077,12 +1110,16 @@ const GM: PositionRules = {
         {
           id: "gm_slack_completion",
           label: "Slack completion rate",
-          metric: "gm_slack_completion",
-          source: "manual",
+          // The four daily reports in the store's channel (8:30 AM previous
+          // day, 2:30, 5:30, 8:30 PM, local), on time ÷ required. Read from
+          // Slack by lib/slackReports.ts; correct it with the override.
+          metric: "slackCompletionPct",
+          source: "auto",
           unit: "percent",
-          grain: "entered",
+          grain: "period",
           threshold: { cmp: "gte", value: 95 },
           target: { cmp: "gte", value: 95 },
+          note: "Reports posted by deadline (8:30 AM, 2:30, 5:30, 8:30 PM local) ÷ reports due. Up to 15 minutes late counts as on time; later posts don't count.",
         },
       ],
       disqualifiers: [
@@ -1179,6 +1216,7 @@ export const OVERRIDABLE_METRICS: { metric: string; label: string; unit: Conditi
   { metric: "smgAccuracy", label: "Order accuracy (overrides SMG Accuracy top box)", unit: "percent" },
   { metric: "cogsPct", label: "Food cost % (overrides Net-Chef)", unit: "percent" },
   { metric: "varianceAbsPct", label: "Food cost variance % (overrides Net-Chef)", unit: "percent" },
+  { metric: "slackCompletionPct", label: "Slack completion % (overrides Slack)", unit: "percent" },
 ];
 
 export const OVERRIDE_PREFIX = "override_";

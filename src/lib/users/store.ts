@@ -289,6 +289,45 @@ export async function recordLogin(id: string): Promise<void> {
 }
 
 /**
+ * One heartbeat from components/ActivityTracker: marks the current five-minute
+ * block as one in which this person was using the dashboard. The primary key
+ * makes repeats in the same block free.
+ */
+export async function recordActivity(userId: string): Promise<void> {
+  await ensureUserSchema();
+  await sql`
+    INSERT INTO app_activity (user_id, bucket)
+    VALUES (${userId}, date_bin('5 minutes', now(), TIMESTAMPTZ '2000-01-01 00:00:00+00'))
+    ON CONFLICT DO NOTHING
+  `;
+}
+
+/**
+ * Uses in the last 30 days, by user id, for the People table on Users &
+ * Access. Anyone missing has none.
+ *
+ * A use is a run of active blocks; a gap of more than 30 minutes starts a new
+ * one, so someone who keeps the tab open and checks it every couple of hours
+ * gets one use per check-in.
+ */
+export async function usesLast30Days(): Promise<Record<string, number>> {
+  await ensureUserSchema();
+  const rows = (await sql`
+    WITH blocks AS (
+      SELECT user_id, bucket,
+        lag(bucket) OVER (PARTITION BY user_id ORDER BY bucket) AS prev
+      FROM app_activity
+      WHERE bucket > now() - interval '30 days'
+    )
+    SELECT user_id,
+      count(*) FILTER (WHERE prev IS NULL OR bucket - prev > interval '30 minutes')::int AS uses
+    FROM blocks
+    GROUP BY user_id
+  `) as { user_id: string; uses: number }[];
+  return Object.fromEntries(rows.map((r) => [r.user_id, r.uses]));
+}
+
+/**
  * Removes an account outright. Returns a sentence to show, or null on success.
  *
  * `disabled_at` exists because this table was assumed to be referenced by audit

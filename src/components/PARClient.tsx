@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, Fragment } from "react";
+import { useState, useCallback, useEffect, useRef, Fragment, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { PARLocation } from "@/lib/par";
 import TabOptions from "@/components/TabOptions";
@@ -8,9 +8,11 @@ import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader, type StoreFilter } from "@/components/StoreFilter";
 import type { PARLocationResult, PARDailyRow } from "@/app/api/par/data/route";
 import { CopyableTitle } from "@/components/CopyImageButton";
+import PosWeeklyTrendChart from "@/components/PosWeeklyTrendChart";
 import { PERIODS, currentPeriod, type FiscalPeriod } from "@/lib/fiscal";
 import { businessDate } from "@/lib/businessDay";
 import { lastNWeeks, bucketDaily, productivityOf, tplhOf, type Week } from "@/lib/parWeekly";
+import { avgCheck, compPct, productivity, tplh } from "@/lib/parFigures";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -185,6 +187,21 @@ function PosTierTable({
   const fmtMetric = metric === "dollars" ? fmtProductivity : fmtTplh;
   const metricArr = (d: StoreData) => (metric === "dollars" ? d.productivity : d.tplh);
 
+  // Sorts within each tier; with no column picked, tiers keep their
+  // highest-sales-first order. Column keys follow the cells left to right:
+  // m0 is the newest week/period (metric index 2), m2 the oldest (index 0).
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (loc: PARLocation, key: string): number | string | null => {
+    if (key === "name") return loc.name;
+    const d = dataMap[loc.storeId];
+    if (!d) return null;
+    if (key === "sales") return d.primarySales;
+    const m = metricArr(d);
+    return m[{ m0: 2, m1: 1, m2: 0 }[key as "m0" | "m1" | "m2"]] ?? null;
+  };
+  const thClass = "text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide";
+  const subLabel = (label: string) => <><br /><span className="normal-case font-normal tracking-normal text-gray-400">{label}</span></>;
+
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -203,19 +220,11 @@ function PosTierTable({
         </colgroup>
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {salesColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[0]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[0]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[1]}</span>
-            </th>
-            <th className="text-right px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              {metricColTitle}<br /><span className="normal-case font-normal tracking-normal text-gray-400">{colLabels[2]}</span>
-            </th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
+            <SortableTh sortKey="sales" sort={sort} onSort={toggle} className={thClass}>{salesColTitle}{subLabel(colLabels[0])}</SortableTh>
+            <SortableTh sortKey="m0" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[0])}</SortableTh>
+            <SortableTh sortKey="m1" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[1])}</SortableTh>
+            <SortableTh sortKey="m2" sort={sort} onSort={toggle} className={thClass}>{metricColTitle}{subLabel(colLabels[2])}</SortableTh>
           </tr>
         </thead>
         <tbody>
@@ -228,7 +237,7 @@ function PosTierTable({
                   {tier.label}
                 </td>
               </tr>
-              {tier.stores.map(loc => {
+              {sortRows(tier.stores, sort, sortValue).map(loc => {
                 const d = dataMap[loc.storeId];
                 const isOpen = expandedIds.has(loc.storeId);
                 const m = metricArr(d);
@@ -364,7 +373,7 @@ function WeeklyBreakdown({ daily, rangeStart, rangeEnd, metric }: { daily: PARDa
 
 type RangeField = "yesterday" | "wtd" | "ptd" | "ytd";
 type MetricFigure = { value: number; prior: number; compPct: number | null };
-type StoreMetricComp = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, MetricFigure>;
+type StoreMetricComp = { storeId: string; name: string; state: "TN" | "VA" | "TX" } & Record<RangeField, MetricFigure>;
 
 const COMP_RANGE_COLS: { field: RangeField; label: string }[] = [
   { field: "yesterday", label: "Yesterday" },
@@ -373,9 +382,6 @@ const COMP_RANGE_COLS: { field: RangeField; label: string }[] = [
   { field: "ytd", label: "YTD" },
 ];
 
-function derivedCompPct(value: number, prior: number): number | null {
-  return prior === 0 ? null : ((value - prior) / prior) * 100;
-}
 
 // Group comp % is same-store. A store with nothing a year ago — one that opened
 // inside the window, as Portland did on 2026-10-05 — still adds to the group's
@@ -385,7 +391,7 @@ function sumFigures(stores: StoreMetricComp[], field: RangeField): MetricFigure 
   const value = stores.reduce((s, r) => s + r[field].value, 0);
   const prior = stores.reduce((s, r) => s + r[field].prior, 0);
   const compValue = stores.filter(r => r[field].prior > 0).reduce((s, r) => s + r[field].value, 0);
-  return { value, prior, compPct: derivedCompPct(compValue, prior) };
+  return { value, prior, compPct: compPct(compValue, prior) };
 }
 
 /**
@@ -430,6 +436,72 @@ function useMetricComp(endpoint: string) {
   return { stores, loading, refetch };
 }
 
+// ── Column sorting for the grouped tables ─────────────────────────────────────
+// A header click reorders the stores *inside* each group — market (TN / VA /
+// TX, or the leader's selection) on the comp tables, sales tier on the
+// Productivity/TPLH card; the subtotal rows and Total - HRG stay put.
+// Clicks cycle first direction → reverse → back to the default order. Numbers
+// start high-to-low (the question is usually "who's on top"), Location A–Z.
+// Comp columns sort on the comp % (same-store change vs last year), not the
+// dollar figure — a store with no prior year has no comp % and sinks.
+
+type SortDir = "asc" | "desc";
+type SortState = { key: string; dir: SortDir } | null;
+
+function useColumnSort() {
+  const [sort, setSort] = useState<SortState>(null);
+  const toggle = useCallback((key: string, firstDir: SortDir) => {
+    setSort(prev => {
+      if (prev?.key !== key) return { key, dir: firstDir };
+      if (prev.dir === firstDir) return { key, dir: firstDir === "asc" ? "desc" : "asc" };
+      return null;
+    });
+  }, []);
+  return { sort, toggle };
+}
+
+// Missing values (no labor hours, nobody clocked in) sink to the bottom in
+// either direction rather than leading an ascending sort.
+function sortRows<T>(rows: T[], sort: SortState, value: (row: T, key: string) => number | string | null): T[] {
+  if (!sort) return rows;
+  const mult = sort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = value(a, sort.key);
+    const vb = value(b, sort.key);
+    if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
+    const diff = typeof va === "string" || typeof vb === "string"
+      ? String(va).localeCompare(String(vb))
+      : va - vb;
+    return diff * mult;
+  });
+}
+
+function SortableTh({
+  sortKey, sort, onSort, firstDir = "desc", align = "right", className, children,
+}: {
+  sortKey: string;
+  sort: SortState;
+  onSort: (key: string, firstDir: SortDir) => void;
+  firstDir?: SortDir;
+  align?: "left" | "right";
+  className: string;
+  children: ReactNode;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th className={className} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey, firstDir)}
+        className={`inline-flex items-baseline gap-1 uppercase tracking-wide cursor-pointer select-none hover:text-gray-700 ${align === "right" ? "flex-row-reverse text-right" : "text-left"} ${active ? "text-gray-700" : ""}`}
+      >
+        <span className={`text-[9px] ${active ? "" : "invisible"}`}>{active && sort.dir === "asc" ? "▲" : "▼"}</span>
+        <span>{children}</span>
+      </button>
+    </th>
+  );
+}
+
 function MetricFigureCell({ figure, fmt }: { figure: MetricFigure; fmt: (v: number) => string }) {
   return (
     <td className="px-2 py-1 text-right tabular-nums text-xs whitespace-nowrap">
@@ -456,6 +528,7 @@ function MetricCompTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -464,16 +537,20 @@ function MetricCompTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are
   // read against — narrowing it to the selection would make it restate the
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
+
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (s: StoreMetricComp, key: string) => (key === "name" ? s.name : s[key as RangeField].compPct);
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -484,11 +561,11 @@ function MetricCompTable({
       <table className="w-full">
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {COMP_RANGE_COLS.map(c => (
-              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.field} sortKey={c.field} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
           </tr>
         </thead>
@@ -499,7 +576,7 @@ function MetricCompTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, sortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
@@ -542,17 +619,14 @@ type AvgCheckRaw = {
   netSalesTY: number; netSalesLY: number; txTY: number; txLY: number;
   compNetSalesTY?: number; compTxTY?: number;
 };
-type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" } & Record<RangeField, AvgCheckRaw>;
+type StoreAvgCheckRaw = { storeId: string; name: string; state: "TN" | "VA" | "TX" } & Record<RangeField, AvgCheckRaw>;
 
-function avgCheck(netSales: number, tx: number): number {
-  return tx > 0 ? netSales / tx : 0;
-}
 
 function deriveAvgCheckFigure(raw: AvgCheckRaw): MetricFigure {
   const value = avgCheck(raw.netSalesTY, raw.txTY);
   const prior = avgCheck(raw.netSalesLY, raw.txLY);
   const compValue = avgCheck(raw.compNetSalesTY ?? raw.netSalesTY, raw.compTxTY ?? raw.txTY);
-  return { value, prior, compPct: derivedCompPct(compValue, prior) };
+  return { value, prior, compPct: compPct(compValue, prior) };
 }
 
 function sumAvgCheckRaw(stores: StoreAvgCheckRaw[], field: RangeField): AvgCheckRaw {
@@ -598,6 +672,7 @@ function AvgCheckCompTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -606,16 +681,20 @@ function AvgCheckCompTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are
   // read against — narrowing it to the selection would make it restate the
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
+
+  const { sort, toggle } = useColumnSort();
+  const sortValue = (s: StoreAvgCheckRaw, key: string) => (key === "name" ? s.name : deriveAvgCheckFigure(s[key as RangeField]).compPct);
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -626,11 +705,11 @@ function AvgCheckCompTable({
       <table className="w-full">
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {COMP_RANGE_COLS.map(c => (
-              <th key={c.field} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.field} sortKey={c.field} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
           </tr>
         </thead>
@@ -641,7 +720,7 @@ function AvgCheckCompTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, sortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
@@ -679,7 +758,7 @@ function AvgCheckCompTable({
 // internals that must never end up in a client bundle.
 
 type SnapshotRaw = {
-  storeId: string; name: string; state: "TN" | "VA";
+  storeId: string; name: string; state: "TN" | "VA" | "TX";
   netSalesTY: number; netSalesLY: number; txTY: number; txLY: number; laborHoursTY: number;
   // Only the live "Today" range reports who's on the clock right now.
   clockedInTY: number | null;
@@ -749,10 +828,10 @@ function snapshotRangeLabel(range: SnapshotRange): string {
 }
 
 function deriveNetSalesFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: derivedCompPct(r.compNetSalesTY ?? r.netSalesTY, r.netSalesLY) };
+  return { value: r.netSalesTY, prior: r.netSalesLY, compPct: compPct(r.compNetSalesTY ?? r.netSalesTY, r.netSalesLY) };
 }
 function deriveTxFigure(r: SnapshotRaw): MetricFigure {
-  return { value: r.txTY, prior: r.txLY, compPct: derivedCompPct(r.compTxTY ?? r.txTY, r.txLY) };
+  return { value: r.txTY, prior: r.txLY, compPct: compPct(r.compTxTY ?? r.txTY, r.txLY) };
 }
 function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
   return deriveAvgCheckFigure(r);
@@ -760,10 +839,10 @@ function deriveSnapshotAvgCheckFigure(r: SnapshotRaw): MetricFigure {
 // Productivity ($/labor hour) and TPLH (transactions/labor hour) are
 // this-year-only — the snapshot carries no prior-year labor hours.
 function deriveSplh(r: SnapshotRaw): number | null {
-  return r.laborHoursTY > 0 ? r.netSalesTY / r.laborHoursTY : null;
+  return productivity(r.netSalesTY, r.laborHoursTY);
 }
 function deriveSnapshotTplh(r: SnapshotRaw): number | null {
-  return r.laborHoursTY > 0 ? r.txTY / r.laborHoursTY : null;
+  return tplh(r.txTY, r.laborHoursTY);
 }
 function sumSnapshotRaw(stores: SnapshotRaw[]): SnapshotRaw {
   const clockedIn = stores.filter(r => r.clockedInTY != null);
@@ -913,6 +992,7 @@ function SnapshotVsLastYearTable({
   // filtered table can't show one leader's stores under a market-wide average.
   const tnStores = stores.filter(s => s.state === "TN" && inFilter(filter.allowed, s.name));
   const vaStores = stores.filter(s => s.state === "VA" && inFilter(filter.allowed, s.name));
+  const txStores = stores.filter(s => s.state === "TX" && inFilter(filter.allowed, s.name));
   // Unfiltered, the markets are the split worth seeing, and an empty one is
   // dropped rather than totalled — an all-zeros "Total - VA" under a TN-only
   // selection reads as "VA sold nothing", not "no VA stores here".
@@ -921,16 +1001,28 @@ function SnapshotVsLastYearTable({
   // market split of it. "Total - Tommy Demorest" is the question being asked;
   // splitting his three stores back into TN and VA answers a different one.
   const groups = filter.label
-    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores] }]
+    ? [{ label: `Total - ${filter.label}`, stores: [...tnStores, ...vaStores, ...txStores] }]
     : [
         ...(tnStores.length > 0 ? [{ label: "Total - TN", stores: tnStores }] : []),
         ...(vaStores.length > 0 ? [{ label: "Total - VA", stores: vaStores }] : []),
+        ...(txStores.length > 0 ? [{ label: "Total - TX", stores: txStores }] : []),
       ];
 
   // HRG is deliberately not filtered. It is the benchmark the rows above are
   // read against — narrowing it to the selection would make it restate the
   // subtotal directly above it and leave nothing to compare to.
   const hrgStores = stores;
+
+  // Kept across range changes, so flipping from PTD to YTD re-ranks by the
+  // same column.
+  const { sort, toggle } = useColumnSort();
+  const snapshotSortValue = (s: SnapshotRaw, key: string): number | string | null => {
+    if (key === "name") return s.name;
+    if (key === "splh") return deriveSplh(s);
+    if (key === "tplh") return deriveSnapshotTplh(s);
+    if (key === "clockedIn") return s.clockedInTY;
+    return SNAPSHOT_METRIC_COLS.find(c => c.key === key)?.derive(s).compPct ?? null;
+  };
 
   const periods = completedPeriods();
   const quarters = completedQuarters();
@@ -1024,21 +1116,21 @@ function SnapshotVsLastYearTable({
         </colgroup>
         <thead>
           <tr className="border-b border-gray-100">
-            <th className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</th>
+            <SortableTh sortKey="name" sort={sort} onSort={toggle} firstDir="asc" align="left" className="text-left px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Location</SortableTh>
             {SNAPSHOT_METRIC_COLS.map(c => (
-              <th key={c.key} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+              <SortableTh key={c.key} sortKey={c.key} sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
                 {c.label} <span className="normal-case font-normal text-gray-300">(TY / LY, Δ%)</span>
-              </th>
+              </SortableTh>
             ))}
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            <SortableTh sortKey="splh" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               Productivity
-            </th>
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            </SortableTh>
+            <SortableTh sortKey="tplh" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               TPLH
-            </th>
-            <th className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
+            </SortableTh>
+            <SortableTh sortKey="clockedIn" sort={sort} onSort={toggle} className="text-right px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
               Clocked In
-            </th>
+            </SortableTh>
           </tr>
         </thead>
         <tbody>
@@ -1048,7 +1140,7 @@ function SnapshotVsLastYearTable({
             <>
               {groups.map(group => (
                 <Fragment key={group.label}>
-                  {group.stores.map(s => (
+                  {sortRows(group.stores, sort, snapshotSortValue).map(s => (
                     <tr key={s.storeId} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-1 text-xs font-medium text-gray-900 whitespace-nowrap">
                         {s.name} <span className="ml-1 text-gray-400">{s.state}</span>
@@ -1110,6 +1202,7 @@ export default function PARClient({
   const avgCheckComp = useAvgCheckComp();
   const salesSnapshot = useSalesSnapshot(snapshotRange);
   const [refreshing, setRefreshing] = useState(false);
+  const [trendRefreshToken, setTrendRefreshToken] = useState(0);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -1123,6 +1216,7 @@ export default function PARClient({
     transactionsComp.refetch();
     avgCheckComp.refetch();
     salesSnapshot.refetch();
+    setTrendRefreshToken(t => t + 1);
     setRefreshing(false);
   };
 
@@ -1200,6 +1294,9 @@ export default function PARClient({
           range={snapshotRange}
           onRangeChange={setSnapshotRange}
         />
+        <div className="mt-6">
+          <PosWeeklyTrendChart filter={storeFilter} refreshToken={trendRefreshToken} />
+        </div>
         <div className="mt-6">
           <MetricCompTable title="Net Sales" stores={netSalesComp.stores} loading={netSalesComp.loading} filter={storeFilter} fmt={fmtDollars} />
         </div>

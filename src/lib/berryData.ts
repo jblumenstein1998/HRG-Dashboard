@@ -3,6 +3,7 @@ import { ensureSession, invalidateSession } from "@/lib/supersetSession";
 import { sql } from "@/lib/db";
 import { resolveRange, type RangeKey } from "@/lib/fiscal";
 import { businessDateISO } from "@/lib/businessDay";
+import { finalAfter as finalAfterDay } from "@/lib/sourceCache";
 
 const CHART_ID = 93;
 const DATASOURCE_ID = 18;
@@ -42,12 +43,69 @@ function dayBefore(iso: string): string {
  * back it up a day before comparing, same convention as formatRangeDates.
  */
 export function isClosedRange(timeRange: string): boolean {
+  const end = effectiveEndDate(timeRange);
+  return end !== null && end < todayCentralISO();
+}
+
+/**
+ * One spelling per span of days. Ranges reach here two ways — presets ending
+ * at an exclusive midnight ("Yesterday" = D : D+1T00:00:00) and custom or
+ * T7/Last Week ranges ending at D T23:59:59 — and each spelling was its own
+ * cache row, so the Slack accuracy check and the Drive-Thru tab held separate
+ * copies of 10/29 that disagreed. The inclusive end becomes the next midnight.
+ */
+export function canonicalTimeRange(timeRange: string): string {
+  const [start, end] = timeRange.split(" : ").map(s => s.trim());
+  const m = end?.match(/^(\d{4})-(\d{2})-(\d{2})T23:59:59$/);
+  if (!m) return timeRange;
+  const next = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1)).toISOString().slice(0, 10);
+  return `${start} : ${next}T00:00:00`;
+}
+
+/** Last business date a range covers, or null for one ending "now". */
+function effectiveEndDate(timeRange: string): string | null {
   const [, endRaw] = timeRange.split(" : ").map(s => s.trim());
-  if (endRaw === "now") return false;
+  if (endRaw === "now") return null;
   const endDateStr = endRaw.split("T")[0];
   const endTime = endRaw.split("T")[1] ?? "";
-  const effectiveEndDate = endTime.startsWith("00:00:00") ? dayBefore(endDateStr) : endDateStr;
-  return effectiveEndDate < todayCentralISO();
+  return endTime.startsWith("00:00:00") ? dayBefore(endDateStr) : endDateStr;
+}
+
+/**
+ * When a closed range's numbers stop changing: 12:00 UTC (7 AM Central) the
+ * day after its last date — past PAR's 2:15 AM end of day, plus the few hours
+ * BerryAI lags. A copy fetched before then is a snapshot of an unfinished day
+ * and must not be kept forever: on 10/29 the Slack accuracy check cached
+ * that day at 5:19 PM (111 of Springfield's 332 cars, lane 2:12 against the
+ * real 2:31), and once the day closed that copy was served as final.
+ */
+function finalAfter(timeRange: string): number {
+  return finalAfterDay(effectiveEndDate(timeRange) ?? "9999-12-31");
+}
+
+/** The cache key for one business day — the same one the Drive-Thru tab's Yesterday uses. */
+export function dayTimeRange(day: string): string {
+  return canonicalTimeRange(`${day}T00:00:00 : ${day}T23:59:59`);
+}
+
+/**
+ * Several whole days from the cache in one query, for the Slack checks of a
+ * range. Returns only copies getDriveThruMetrics would itself serve without
+ * refetching; the caller sends the rest through getDriveThruMetrics.
+ */
+export async function cachedDriveThruDays(days: string[]): Promise<Map<string, DriveThruPayload>> {
+  if (days.length === 0) return new Map();
+  const byKey = new Map(days.map((d) => [dayTimeRange(d), d]));
+  const rows = (await sql`
+    SELECT time_range, payload, fetched_at FROM drive_thru_cache WHERE time_range = ANY(${[...byKey.keys()]}::text[])
+  `) as { time_range: string; payload: DriveThruPayload; fetched_at: string }[];
+  const out = new Map<string, DriveThruPayload>();
+  for (const r of rows) {
+    const fetchedAt = new Date(r.fetched_at).getTime();
+    const servable = (isClosedRange(r.time_range) && fetchedAt >= finalAfter(r.time_range)) || Date.now() - fetchedAt < ROLLING_TTL_MS;
+    if (servable) out.set(byKey.get(r.time_range)!, r.payload);
+  }
+  return out;
 }
 
 async function getCachedPayload(timeRange: string): Promise<{ payload: DriveThruPayload; fetchedAt: Date } | null> {
@@ -186,17 +244,24 @@ export type DriveThruPayload = {
  */
 export async function getDriveThruMetrics(
   token: string,
-  timeRange: string,
+  requestedRange: string,
   rangeLabel: string,
   opts: { bust?: boolean } = {},
 ): Promise<DriveThruPayload> {
+  // Every caller asking for the same days gets the same query and the same
+  // cached copy, so no two screens can show different numbers for them.
+  const timeRange = canonicalTimeRange(requestedRange);
   const closed = isClosedRange(timeRange);
 
   if (!opts.bust) {
     const cached = await getCachedPayload(timeRange);
     if (cached) {
-      if (closed) return cached.payload; // permanent — the period is over, numbers can't change
-      if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return cached.payload;
+      // The copy is shared; the label is the caller's own.
+      const hit = { ...cached.payload, range_label: rangeLabel };
+      // Permanent — the period is over, numbers can't change — but only if it
+      // was fetched once the data was final; an earlier copy refreshes below.
+      if (closed && cached.fetchedAt.getTime() >= finalAfter(timeRange)) return hit;
+      if (Date.now() - cached.fetchedAt.getTime() < ROLLING_TTL_MS) return hit;
     }
   }
 

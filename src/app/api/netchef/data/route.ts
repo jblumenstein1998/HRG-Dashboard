@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
     const name = LOCATION_NAMES[id];
     if (!name) return NextResponse.json({ error: "Unknown locationId" }, { status: 400 });
     try {
-      const { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase } = await fetchLocationReport(id, start, end);
+      // fresh=1 re-asks Net-Chef for this one store and window only, where
+      // bust=1 throws away every Net-Chef cache. The Food Cost tab uses it to
+      // recheck a store whose sales disagree with PAR.
+      const fresh = searchParams.get("fresh") === "1";
+      const { actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase } = await fetchLocationReport(id, start, end, { bust: fresh });
       const loc: LocationData = { locationId: id, locationName: name, actualCostPct, actualCostDollars, variancePct, varianceDollars, salesBase };
       return NextResponse.json(loc);
     } catch (err) {

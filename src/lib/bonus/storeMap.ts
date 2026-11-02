@@ -28,15 +28,19 @@ export type BonusStore = {
   storeId: string;
   /** Display name. Matches PAR_LOCATIONS, STORE_LABELS and Net-Chef exactly. */
   name: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   /**
    * Lowercase fragment of the street address, matched against a BerryAI
    * branch's `location` field. Copied from STORE_CONFIG in src/lib/stores.ts —
    * BerryAI has no store id at all, so the address is the only join available.
    */
   berryFragment: string;
-  /** Net-Chef's internal location id, for fetchLocationReport(). */
-  netchefLocationId: number;
+  /**
+   * Net-Chef's internal location id, for fetchLocationReport(). Null for a
+   * store HRG's Net-Chef login can't see yet — it has no food cost until the
+   * id lands here, rather than borrowing another store's.
+   */
+  netchefLocationId: number | null;
   /**
    * smg_scores.unit_key. Identical to storeId today, but named separately so a
    * future SMG unit whose key stops matching the PAR id is a one-line fix here
@@ -89,7 +93,48 @@ export const GOOGLE_PLACE_IDS: Record<string, string> = {
   "57004": "ChIJ33C-l02guokR1E_xH7WF6DU", // Chesapeake — 2316 Chesapeake Square Ring Rd., Chesapeake, VA 23321
   "57006": "ChIJj8yitn2wuokRK72I8td8S3E", // Hillcrest — 125 Hillcrest Pkwy., Chesapeake, VA 23322
   "57007": "ChIJ77ptGADBuokRgqNLt4w7CbU", // Beach — 2332 Elson Green Ave., Virginia Beach, VA 23456
+  "53003": "ChIJ3bIZ8aa0WoYRDAudiuR_Nsc", // Killeen — 2150 S Clear Creek Rd, Killeen, TX 76549
+  "53004": "ChIJIxqkKW9rRYYRMJDOTPEu3Qg", // Temple — 2002 S 31st St, Temple, TX 76504
+  "53005": "ChIJacHQNXnFRIYRCCvFi5dOQfk", // Pflugerville — 1301 FM 685, Pflugerville, TX 78660
+  "62802": "ChIJV6cAxw2TXIYRKyWQ5IPIEd0", // Cibolo — 176 W Borgfeld Rd, Cibolo, TX 78108
+  "62804": "ChIJjcmR_1D1XIYR9ldVW15jBsk", // Windcrest — 7304 N Interstate 35, Windcrest, TX 78218
+  "62803": "ChIJk6rgmlZDXIYR1eZ3-ZqtgJA", // Alamo — 11903 Alamo Ranch Pkwy, San Antonio, TX 78253
 };
+
+/**
+ * Each store's private Slack channel, where the four daily reports are posted
+ * (lib/slackReports.ts). Named `<store>-<PAR id>` in Slack, which is how these
+ * were matched on 2026-10-29.
+ */
+export const SLACK_CHANNEL_IDS: Record<string, string> = {
+  "28901": "C098QMMERUL", // #columbia-28901
+  "36001": "C099B1KK63A", // #springfield-36001
+  "42601": "C098M4SH8G5", // #white-house-42601
+  "56301": "C0A1PF35QF3", // #brentwood-56301
+  "61401": "C098LF99VFY", // #spring-hill-61401
+  "75075": "C0BQ2QU1VGW", // #portland-75075
+  "57001": "C0AQW844QCU", // #college-drive-57001
+  "57002": "C0ARLU4NH40", // #hampton-57002
+  "57003": "C0AQW84TGDA", // #oyster-point-57003
+  "57004": "C0AQP7ZA9D3", // #chesapeake-square-57004
+  "57005": "C0AR5H74TCH", // #jefferson-avenue-57005
+  "57006": "C0AQSKYMZDG", // #hillcrest-57006
+  "57007": "C0AR5GZGQ01", // #virginia-beach-57007
+  // Texas: the channels exist and the bot is in all six, but the stores don't
+  // post the reports yet. A mapped channel is scored, so these stay out (and
+  // the stores read as pending) until Texas starts reporting:
+  //   "53003": "C0CCUDXTDUG", // #killeen-53003
+  //   "53004": "C0CCUDZ2VA4", // #temple-53004
+  //   "53005": "C0CBTRP8C9Z", // #pflugerville-53005
+  //   "62802": "C0CBUPTAE85", // #cibolo-62802
+  //   "62803": "C0CBTRRLFPV", // #alamo-62803
+  //   "62804": "C0CBTRQNL5R", // #windcrest-62804
+};
+
+/** The store's local time zone. Slack reporting deadlines are local times. */
+export function storeTimeZone(store: BonusStore): string {
+  return store.state === "VA" ? "America/New_York" : "America/Chicago";
+}
 
 export const BONUS_STORES: BonusStore[] = [
   // Tennessee
@@ -100,10 +145,8 @@ export const BONUS_STORES: BonusStore[] = [
   { storeId: "42601", name: "White House", state: "TN", berryFragment: "800 hwy. 76",             netchefLocationId: 1002, smgUnitKey: "42601", workstreamLocationUuid: "4a386af2-6f69-43ac-a8e0-cb89f61a8914" },
   { storeId: "56301", name: "Brentwood",   state: "TN", berryFragment: "471 old hickory",         netchefLocationId: 425,  smgUnitKey: "56301", workstreamLocationUuid: "9b60d4a8-1a7e-4762-946d-94d716a5cf05" },
   { storeId: "61401", name: "Spring Hill", state: "TN", berryFragment: "4882 port royal",         netchefLocationId: 632,  smgUnitKey: "61401", workstreamLocationUuid: "4f95fa9f-247c-4987-8f90-fa39f9eadf87" },
-  // Opened 2026. BerryAI has no branch for it yet (city as the fragment, see
-  // lib/stores.ts) and PAR calls fail with a named error until PAR_TOKEN_75075
-  // is set — both read as "no data", never as zero.
-  { storeId: "75075", name: "Portland",    state: "TN", berryFragment: "portland",                netchefLocationId: 1303, smgUnitKey: "75075", workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
+  // Opened 2026-10-05.
+  { storeId: "75075", name: "Portland",    state: "TN", berryFragment: "409 hwy 52",              netchefLocationId: 1303, smgUnitKey: "75075", workstreamLocationUuid: "404f251b-0a2d-4939-a808-e16873c838a5" },
   // Virginia
   { storeId: "57001", name: "College",     state: "VA", berryFragment: "6120 college",            netchefLocationId: 465,  smgUnitKey: "57001", workstreamLocationUuid: "741c82a9-3257-418b-a9e2-47549abba51f" },
   { storeId: "57002", name: "Hampton",     state: "VA", berryFragment: "2201 todds",              netchefLocationId: 901,  smgUnitKey: "57002", workstreamLocationUuid: "c27cebfa-4993-4305-8100-62eeb7911432" },
@@ -114,6 +157,22 @@ export const BONUS_STORES: BonusStore[] = [
   // right and the word is wrong; this is the one the evidence saved.
   { storeId: "57006", name: "Hillcrest",   state: "VA", berryFragment: "125 hillcrest",           netchefLocationId: 869,  smgUnitKey: "57006", workstreamLocationUuid: "51a81a04-d1e9-4746-9520-c92bbdd11bdc" },
   { storeId: "57007", name: "Beach",       state: "VA", berryFragment: "2332 elson green",        netchefLocationId: 1137, smgUnitKey: "57007", workstreamLocationUuid: "ab838180-2577-48d7-a77c-c2875a7fe625" },
+  // Texas — acquired October 2026. PAR, BerryAI, SMG and Google are connected; Net-Chef
+  // doesn't list them for HRG's login yet and Workstream uuids are unconfirmed.
+  // Each null reads as "no data" for that vendor until its id is filled in here.
+  //
+  //   53003 Killeen       2150 S Clear Creek Rd, Killeen, TX 76549
+  //   53004 Temple        2002 S 31st St, Temple, TX 76504
+  //   53005 Pflugerville  1301 FM 685, Pflugerville, TX 78660
+  //   62802 Cibolo        176 W Borgfeld Rd, Cibolo, TX 78108
+  //   62803 Alamo         11903 Alamo Ranch Pkwy, San Antonio, TX 78253
+  //   62804 Windcrest     7304 N Interstate 35, Windcrest, TX 78218
+  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "2150 s. clear creek",     netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
+  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "2002 s. 31st",            netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
+  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "1301 farm to market 685", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
+  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "176 borgfeld",            netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
+  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "11903 alamo ranch",       netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
+  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "7304 n. interstate 35",   netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
 ];
 
 /**
@@ -133,7 +192,9 @@ export const WORKSTREAM_ONLY_LOCATIONS = [
 export const BONUS_STORE_IDS: string[] = BONUS_STORES.map((s) => s.storeId);
 
 const BY_ID = new Map(BONUS_STORES.map((s) => [s.storeId, s]));
-const BY_NETCHEF = new Map(BONUS_STORES.map((s) => [s.netchefLocationId, s]));
+const BY_NETCHEF = new Map(
+  BONUS_STORES.filter((s) => s.netchefLocationId !== null).map((s) => [s.netchefLocationId as number, s]),
+);
 
 export function storeById(storeId: string): BonusStore | null {
   return BY_ID.get(storeId) ?? null;

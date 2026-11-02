@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { ZCASE_GOALS } from "@/lib/bonus/goals";
 import { formatSyncStamp, prettyUnit, STORE_LABELS, TONE_TEXT, type ScoreTone } from "@/lib/surveyMeta";
+import { TeamButton, TeamPanel } from "@/components/TeamOnDuty";
 
 type ZCaseRow = {
   caseKey: string;
@@ -683,6 +684,7 @@ function OutstandingRow({
   detail: ZCaseDetail | null;
   state: DetailState;
 }) {
+  const [teamOpen, setTeamOpen] = useState(false);
   const hrs = row.openHours ?? 0;
   const stripe = hrs >= 24 ? "bg-red-600" : hrs >= 12 ? "bg-amber-600" : "bg-gray-300";
 
@@ -711,6 +713,7 @@ function OutstandingRow({
             <span className="text-sm font-semibold text-gray-900">{storeLabel(row.store, row.unitName)}</span>
             <CaseLink row={row} />
             <TypeTag type={row.type} />
+            <TeamButton open={teamOpen} onClick={() => setTeamOpen((v) => !v)} />
             {hrs >= 24 && (
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
                 Past 24 hrs
@@ -730,6 +733,11 @@ function OutstandingRow({
           ▼
         </span>
       </div>
+      {teamOpen && (
+        <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3 pt-0.5">
+          <TeamPanel url={`/api/smg/zcase/${row.caseKey}/team`} note={"guest's visit time"} />
+        </div>
+      )}
       {expanded && (
         // Indented to line up with the store name, past the stripe.
         <div className="bg-gray-50/60 pl-[2.15rem] pr-4 pb-3.5 pt-0.5">
@@ -846,38 +854,51 @@ function StoreRow({
                 <div className="py-2 text-xs text-gray-500">No ZCases for this store in the window.</div>
               )}
               {cases.map((c) => (
-                <div
-                  key={c.caseKey}
-                  className="flex items-center gap-3 py-1.5 border-b border-gray-100 last:border-b-0 text-[12.5px]"
-                >
-                  <CaseLink row={c} />
-                  <TypeTag type={c.type} />
-                  {c.escalated && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-700">
-                      Escalated
-                    </span>
-                  )}
-                  <span className="ml-auto text-gray-500 tabular-nums">{shortDate(c.eventAt)}</span>
-                  <span className="w-24 text-right tabular-nums">
-                    {c.resolvedAt === null ? (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
-                        open {c.openHours ?? 0} hrs
-                      </span>
-                    ) : (c.resolutionHours ?? 0) > 24 ? (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
-                        {c.resolutionHours} hrs
-                      </span>
-                    ) : (
-                      <span className="text-gray-700">{c.resolutionHours} hrs</span>
-                    )}
-                  </span>
-                </div>
+                <CaseLine key={c.caseKey} c={c} />
               ))}
             </div>
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** One case under an expanded store row, with its team-on-duty panel. */
+function CaseLine({ c }: { c: ZCaseRow }) {
+  const [teamOpen, setTeamOpen] = useState(false);
+  return (
+    <div className="border-b border-gray-100 last:border-b-0">
+      <div className="flex items-center gap-3 py-1.5 text-[12.5px]">
+        <CaseLink row={c} />
+        <TypeTag type={c.type} />
+        <TeamButton open={teamOpen} onClick={() => setTeamOpen((v) => !v)} />
+        {c.escalated && (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-700">
+            Escalated
+          </span>
+        )}
+        <span className="ml-auto text-gray-500 tabular-nums">{shortDate(c.eventAt)}</span>
+        <span className="w-24 text-right tabular-nums">
+          {c.resolvedAt === null ? (
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">
+              open {c.openHours ?? 0} hrs
+            </span>
+          ) : (c.resolutionHours ?? 0) > 24 ? (
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+              {c.resolutionHours} hrs
+            </span>
+          ) : (
+            <span className="text-gray-700">{c.resolutionHours} hrs</span>
+          )}
+        </span>
+      </div>
+      {teamOpen && (
+        <div className="pb-2.5">
+          <TeamPanel url={`/api/smg/zcase/${c.caseKey}/team`} note={"guest's visit time"} />
+        </div>
+      )}
+    </div>
   );
 }
 

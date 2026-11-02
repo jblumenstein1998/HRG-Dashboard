@@ -23,7 +23,7 @@ import type { StaffOnClock, StoreRoster, WorkstreamFacts } from "./staffing";
 export type StoreDay = {
   storeId: string;
   storeName: string;
-  state: "TN" | "VA";
+  state: "TN" | "VA" | "TX";
   timeZone: string;
   localDate: string;
   today: PARShift[];

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loginBerryService } from "@/lib/berryAuth";
 import { computePeriod, rescoreFromStored } from "@/lib/bonus/compute";
-import { getInputs, isLocked, saveInputs, type InputWrite } from "@/lib/bonus/store";
+import { getInputs, isLocked, isStoreLocked, saveInputs, type InputWrite } from "@/lib/bonus/store";
 import { resolveBonusWindow } from "@/lib/bonus/periods";
 import { storeById } from "@/lib/bonus/storeMap";
 
@@ -70,6 +70,12 @@ export async function POST(req: NextRequest) {
       // be worse than a visible rejection.
       return NextResponse.json(
         { error: `${period} is locked and cannot be edited. Unlock it first.` },
+        { status: 409 }
+      );
+    }
+    if (await isStoreLocked(period, storeId)) {
+      return NextResponse.json(
+        { error: `This scorecard is locked. Unlock it to make changes.` },
         { status: 409 }
       );
     }

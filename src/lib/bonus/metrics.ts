@@ -26,12 +26,16 @@ import { getTrend, getDailyTrend, type TrendPoint, type TrendStorePoint } from "
 import { queryScores } from "../smgStore";
 import { getPeriodCosts } from "../netchefRollup";
 import { BONUS_STORES } from "./storeMap";
+import { mapLimit, STORE_CONCURRENCY, storeSlackReport } from "../slackCompletion";
 import { completeWeeksIn, FISCAL_YEAR, type BonusWindow } from "./periods";
 import { rollupByStore } from "@/lib/smgCaseStore";
-import { fetchCompletionByLocation } from "../jolt";
+import { fetchStoreLists } from "../jolt";
 import { fetchZuReport, fetchZuTestReport, SERVSAFE_MANAGER_TEST_ID } from "../schoox";
+import { getRetention, retentionMetrics, RETENTION_METRIC_IDS } from "../workstreamRetention";
+import { getStoreInventoryCounts } from "../netchefInventory";
+import { businessDateISO } from "../businessDay";
 import { BONUS_ZCASE_TYPES } from "./goals";
-import { BONUS_RULES } from "./rules";
+import { BONUS_RULES, RETENTION_AUTO_FROM } from "./rules";
 import { passesGate, resolveGates, type MetricValues } from "./engine";
 import type { Condition } from "./types";
 
@@ -111,6 +115,15 @@ export type ResolveDiagnostics = {
   joltStores: number;
   /** Stores the ZU snapshot resolved for. */
   zuStores: number;
+  /** Stores Net-Chef returned inventory counts for. */
+  inventoryStores: number;
+  /** Stores whose Slack channel could be read. */
+  slackStores: number;
+  /**
+   * Metrics this run answered for definitively, so an absent value means
+   * "pending on purpose" and must not be carried forward from an earlier run.
+   */
+  authoritative: string[];
   warnings: string[];
 };
 
@@ -120,11 +133,19 @@ export type ResolveDiagnostics = {
  * `berryToken` is optional: without it the drive-thru sources are skipped and
  * those criteria come back pending rather than wrong. That keeps the whole
  * scorecard from failing when a Superset session can't be established.
+ *
+ * `skipSlowSources` leaves out the three sources nothing else stores — Jolt,
+ * Slack and Net-Chef inventory counts, ~17s of the ~20s a run takes (timed
+ * 2026-10-29). The Bonus tab's manual refresh sets it: compute.ts then carries
+ * those figures forward from the early-morning run, so a refresh is quick and
+ * they are as of that run.
  */
 export async function resolvePeriodMetrics(
   window: BonusWindow,
-  berryToken: string | null
+  berryToken: string | null,
+  opts: { skipSlowSources?: boolean } = {},
 ): Promise<{ byStore: Map<string, MetricValues>; diagnostics: ResolveDiagnostics }> {
+  const live = !opts.skipSlowSources;
   const warnings: string[] = [];
   const weeks = completeWeeksIn(window.start, window.end);
   // Week numbers count from the fiscal year start, not the period start — both
@@ -334,8 +355,12 @@ export async function resolvePeriodMetrics(
   }
 
   // ── Jolt ───────────────────────────────────────────────────────────────────
-  // Checklist completion for the Quality Director, the same Complete (%) the
-  // Jolt tab reports: complete ÷ (done + missed) over the period window.
+  // Checklist completion for the Quality Director: the Jolt tab's own figure
+  // (fetchStoreLists completePct — done ÷ due, each list counted on its
+  // deadline day, the day ending 3 AM). The Jolt tab is the source of truth
+  // (Josh, 2026-10-29). This used to read Jolt's List Completion Report
+  // (fetchCompletionByLocation), which counts lists by the day they were handed
+  // out and so differed from the Jolt tab by a list or two a day.
   //
   // Jolt answers for an arbitrary date range, so a closed period can always be
   // re-derived and this needs no snapshot — unlike the Schoox figures, which
@@ -346,9 +371,9 @@ export async function resolvePeriodMetrics(
   // and scoring "no Jolt" as "failed Jolt" would zero 40% of the Quality card
   // for stores that were never given the tool.
   let joltStores = 0;
-  try {
-    const completion = await fetchCompletionByLocation(window.start, window.end);
-    const byName = new Map(completion.locations.map((l) => [l.store, l]));
+  if (live) try {
+    const completion = await fetchStoreLists(window.start, window.end);
+    const byName = new Map(completion.stores.map((s) => [s.store, s]));
     for (const store of BONUS_STORES) {
       const v = vals(store.storeId);
       if (!v) continue;
@@ -365,6 +390,36 @@ export async function resolvePeriodMetrics(
     }
   } catch (err) {
     warnings.push(`Jolt fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── Slack reporting ────────────────────────────────────────────────────────
+  // The GM's Slack completion rate: the four daily reports each store owes its
+  // channel, posted by their local deadline (lib/slackReports.ts).
+  //
+  // Read straight from Slack history, so a closed period re-derives the same
+  // answer and needs no snapshot. A channel the bot can't read leaves that
+  // store pending; compute.ts carries the last good figure forward.
+  // The admin tab's Slack table runs the same storeSlackReport.
+  let slackStores = 0;
+  const slackErrors = new Map<string, string[]>();
+  if (live) await mapLimit(BONUS_STORES, STORE_CONCURRENCY,
+    async (store) => {
+      try {
+        const { result } = await storeSlackReport(store, window.start, window.end);
+        const v = vals(store.storeId);
+        put(v, "slackCompletionPct", result.pct);
+        put(v, "slackReportsRequired", result.required);
+        put(v, "slackReportsLate", result.late);
+        put(v, "slackReportsMissed", result.missed);
+        slackStores++;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        slackErrors.set(reason, [...(slackErrors.get(reason) ?? []), store.name]);
+      }
+    },
+  );
+  for (const [reason, stores] of slackErrors) {
+    warnings.push(`Slack reports unreadable for ${stores.join(", ")}: ${reason} — left pending`);
   }
 
   // ── Zaxby's University (Schoox) ────────────────────────────────────────────
@@ -401,9 +456,81 @@ export async function resolvePeriodMetrics(
     warnings.push(`ZU fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // ── Inventory counts (Net-Chef) ────────────────────────────────────────────
+  // One login and one report per store: Daily Inventory Counts ignores the
+  // location filter the other Net-Chef reports take (netchefInventory.ts).
+  // A store that fails is left absent — pending — and compute.ts carries the
+  // last good figure forward, as for any vendor outage.
+  let inventoryStores = 0;
+  const today = businessDateISO();
+  if (live) await Promise.all(
+    BONUS_STORES.map(async (store) => {
+      // No Net-Chef id yet (a store HRG's login can't see) — stays pending.
+      const locationId = store.netchefLocationId;
+      if (locationId === null) return;
+      const v = vals(store.storeId);
+      try {
+        const counts = await getStoreInventoryCounts(locationId, window.start, window.end, today);
+        put(v, "q_critical_counts_pct", counts.criticalPct);
+        put(v, "q_full_counts_weekly", counts.fullCountsOnTime);
+        inventoryStores++;
+      } catch (err) {
+        warnings.push(
+          `Inventory counts failed for ${store.name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+  );
+
+  // ── Labor % (the period P&L dropped onto the Bonus tab) ────────────────────
+  // Read from Postgres, not a vendor: financials.ts stores each upload. A store
+  // the P&L hasn't covered yet stays pending.
+  try {
+    const { laborPctByStore, LABOR_METRIC } = await import("./financials");
+    for (const [storeId, pct] of await laborPctByStore(window.periodLabel)) {
+      const v = byStore.get(storeId);
+      if (v) put(v, LABOR_METRIC, pct);
+    }
+  } catch (err) {
+    warnings.push(`P&L labor % read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── New-hire retention (Workstream + PAR) ──────────────────────────────────
+  // Computed from the first period our synced Workstream copy fully covers;
+  // earlier periods are entered by hand (autoFromPeriod in rules.ts).
+  //
+  // Unlike every other source here, an absent retention value after a good run
+  // is deliberate — somebody in the cohort still has to be checked against PAR
+  // — so the metrics are reported as authoritative and compute.ts never papers
+  // over the gap with the previous run's figure.
+  const authoritative: string[] = [];
+  if (window.period.period >= RETENTION_AUTO_FROM) {
+    try {
+      const report = await getRetention(window.start, window.end);
+      for (const [storeId, values] of retentionMetrics(report)) {
+        const v = byStore.get(storeId);
+        if (!v) continue;
+        for (const [key, value] of values) put(v, key, value);
+      }
+      authoritative.push(...RETENTION_METRIC_IDS);
+      const pending = report.stores.filter((s) => Object.values(s.byDay).some((d) => d.unverified > 0));
+      if (pending.length > 0) {
+        warnings.push(
+          `Retention pending review at ${pending.map((s) => s.storeName).join(", ")} — ` +
+            `new hires with no matching PAR record`,
+        );
+      }
+    } catch (err) {
+      warnings.push(`Retention failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   return {
     byStore,
     diagnostics: {
+      authoritative,
+      inventoryStores,
+      slackStores,
       weeks: weeks.length,
       zuStores,
       smgPeriodRows: periodRows.length,

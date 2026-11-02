@@ -89,6 +89,8 @@ function drive(m: StoreMetrics | undefined, tierSales: number | null): DriveThru
   };
 }
 
+const NO_FOOD: LocationReport = { actualCostPct: null, actualCostDollars: null, variancePct: null, varianceDollars: null, salesBase: null };
+
 const supersetRange = (s: Span) => `${s.start}T00:00:00 : ${s.end}T23:59:59`;
 
 export async function buildOpsData(wk: WbrWeek, labels: string[]): Promise<OpsData> {
@@ -118,10 +120,13 @@ export async function buildOpsData(wk: WbrWeek, labels: string[]): Promise<OpsDa
   const out = new Map<string, StoreOps>();
   await Promise.all(
     stores.map(async s => {
+      // A store Net-Chef doesn't carry yet (the Texas stores) reads as no data.
+      const nc = s.netchefLocationId;
+      const report = (a: string, b: string) => (nc == null ? Promise.resolve(NO_FOOD) : fetchLocationReport(nc, a, b));
       const [w, p, pw, weekSales, ptdSales] = await Promise.all([
-        fetchLocationReport(s.netchefLocationId, week.start, week.end),
-        fetchLocationReport(s.netchefLocationId, ptd.start, ptd.end),
-        fetchLocationReport(s.netchefLocationId, prior.start, prior.end),
+        report(week.start, week.end),
+        report(ptd.start, ptd.end),
+        report(prior.start, prior.end),
         getNetSalesForRange(s.storeId, week.start, week.end),
         getNetSalesForRange(s.storeId, ptd.start, ptd.end),
       ]);

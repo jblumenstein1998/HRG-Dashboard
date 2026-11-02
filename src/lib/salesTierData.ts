@@ -6,6 +6,7 @@ import {
   getLaborHoursForRange,
   getDailyRowsForRange,
 } from "@/lib/parRollup";
+import { productivity, round2 } from "@/lib/parFigures";
 
 function daysBetweenInclusive(start: string, end: string): number {
   const [sy, sm, sd] = start.split("-").map(Number);
@@ -107,9 +108,25 @@ export async function getSalesTierData(rangeKey: RangeKey): Promise<SalesTierDat
       getTierSales(loc.storeId, start, end, t7),
     ]);
     salesByStoreId[loc.storeId] = tier.value;
-    productivityByStoreId[loc.storeId] = laborHours > 0 ? Math.round((netSales / laborHours) * 100) / 100 : null;
+    const splh = productivity(netSales, laborHours);
+    productivityByStoreId[loc.storeId] = splh === null ? null : round2(splh);
     salesLabel = tier.label; // identical shape for every store — just keep the last one
   }
 
   return { salesByStoreId, productivityByStoreId, driveThruLabel, salesLabel };
+}
+
+/**
+ * Just the tier sales, for any start/end rather than a named range — the
+ * Management tab takes arbitrary dates. Same weekly-equivalent rule.
+ */
+export async function getTierSalesForDates(start: string, end: string): Promise<Record<string, number>> {
+  const t7 = resolveDateBounds("t7" as RangeKey);
+  const out: Record<string, number> = {};
+  await Promise.all(
+    PAR_LOCATIONS.map(async (loc) => {
+      out[loc.storeId] = (await getTierSales(loc.storeId, start, end, t7)).value;
+    }),
+  );
+  return out;
 }

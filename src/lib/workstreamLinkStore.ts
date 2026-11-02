@@ -23,7 +23,7 @@
  * per location, so one person working two restaurants is legitimately two PAR
  * rows pointing at the same Workstream uuid.
  *
- * Schema creation follows the smgStore.ts / adminLinksStore.ts pattern: an
+ * Schema creation follows the smgStore.ts pattern: an
  * idempotent ensure* memoised per process, called before every read and write.
  */
 

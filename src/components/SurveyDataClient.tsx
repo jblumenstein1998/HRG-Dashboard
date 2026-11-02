@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import SurveyTrendChart from "@/components/SurveyTrendChart";
 import ZCasesSection from "@/components/ZCasesSection";
+import GoogleReviewsSection from "@/components/GoogleReviewsSection";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader } from "@/components/StoreFilter";
@@ -370,6 +371,10 @@ export default function SurveyDataClient({
     () => rows.filter((u) => marketOf(u.key, u.name) === "VA" && inFilter(storeFilter.allowed, u.label)),
     [rows, storeFilter.allowed],
   );
+  const tx = useMemo(
+    () => rows.filter((u) => marketOf(u.key, u.name) === "TX" && inFilter(storeFilter.allowed, u.label)),
+    [rows, storeFilter.allowed],
+  );
 
   /** SMG's region-manager rows for whichever window is selected. */
   const publishedRows = useMemo(() => {
@@ -409,10 +414,10 @@ export default function SurveyDataClient({
    */
   const hrgSummary = useMemo(() => {
     // Always store level now that the level picker is gone, so the estate is
-    // simply both markets.
-    const units = [...tn, ...va];
+    // simply every market.
+    const units = [...tn, ...va, ...tx];
     return summarise(units, metrics, matchPublished([...publishedRows, ...combinedRows], units, metrics));
-  }, [tn, va, metrics, publishedRows, combinedRows]);
+  }, [tn, va, tx, metrics, publishedRows, combinedRows]);
 
   /**
    * One flat list of stores — the market split lives in the summary rows at the
@@ -721,6 +726,10 @@ export default function SurveyDataClient({
           answered.
         </p>
 
+        {/* Current Google ratings — follows the store filter, not the period
+            picker, since Google has no notion of a period. */}
+        <GoogleReviewsSection stores={zcaseStores} refreshKey={refreshKey} />
+
         {/* Always store-level with its own grain and range, so it can span a
             longer history than whichever single period the table is showing. */}
         <div className="mt-5">
@@ -728,6 +737,7 @@ export default function SurveyDataClient({
             dateBasis={DATE_BASIS}
             showTN={marketShown(storeFilter.allowed, "TN")}
             showVA={marketShown(storeFilter.allowed, "VA")}
+            showTX={marketShown(storeFilter.allowed, "TX")}
           />
         </div>
 

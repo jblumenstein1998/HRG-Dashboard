@@ -6,6 +6,8 @@ export const maxDuration = 300;
 // Manual trigger for backfilling the PAR rollup table over a date range.
 // POST /api/par/rollup/backfill { "start": "2026-07-15", "end": "2026-07-21" }
 // Optional "dryRun": true reports what would change without writing.
+// Optional "stores": ["62802", …] limits it to those PAR store ids — how a
+// store that came online with years of PAR history gets that history in.
 //
 // Shares rerollRange with the nightly cron rather than keeping a second write
 // path: the guards that matter here — read live so a stale cache cannot be
@@ -15,12 +17,12 @@ export const maxDuration = 300;
 // Keep ranges to a couple of weeks per request; 12 stores x 2 API calls per day
 // adds up, and the summary makes it easy to walk a long span in chunks.
 export async function POST(req: NextRequest) {
-  const { start, end, dryRun } = await req.json();
+  const { start, end, dryRun, stores } = await req.json();
   if (!start || !end) {
     return NextResponse.json({ error: "start and end (YYYY-MM-DD) are required" }, { status: 400 });
   }
 
-  const summary = await rerollRange(start, end, dryRun === true);
+  const summary = await rerollRange(start, end, dryRun === true, Array.isArray(stores) ? stores.map(String) : undefined);
   console.log(
     `[par-backfill]${summary.dryRun ? " DRY RUN" : ""} ${start}..${end} ` +
     `storeDays=${summary.storeDays} written=${summary.written} changed=${summary.changed} ` +

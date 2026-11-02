@@ -29,7 +29,7 @@ const rangeKeyDescription =
   "(a specific full fiscal period, e.g. \"p4\" for Period 4). Omit if using startDate/endDate instead.";
 
 const storeNameSchema = z.string().describe(
-  "Store name, e.g. \"Hillcrest\", \"Brentwood\". Matches HRG's Zaxby's locations across TN and VA."
+  "Store name, e.g. \"Hillcrest\", \"Brentwood\". Matches HRG's Zaxby's locations across TN, VA and TX."
 );
 const dateRangeSchema = {
   rangeKey: z.string().optional().describe(rangeKeyDescription),
@@ -56,7 +56,7 @@ function changePct(current: number, prior: number): number | null {
 }
 
 export const listStores = tool({
-  description: "Lists all HRG store locations with their state (TN/VA), for disambiguating store names.",
+  description: "Lists all HRG store locations with their state (TN/VA/TX), for disambiguating store names.",
   inputSchema: z.object({}),
   execute: async () => {
     return listResolvedStores().map(s => ({ name: s.name, state: s.state }));
@@ -382,7 +382,7 @@ export const queryMetrics = tool({
 
 export const getAllStoresNetSales = tool({
   description:
-    "Gets net sales for EVERY HRG store in a single call, with per-state (TN/VA) and company-wide totals " +
+    "Gets net sales for EVERY HRG store in a single call, with per-state (TN/VA/TX) and company-wide totals " +
     "already summed. Use this for any question covering more than one store: \"all stores\", \"the whole " +
     "company\", \"which store did best\", a ranked list, or a regional summary. Never call getNetSales " +
     "repeatedly to assemble a multi-store answer, and never add the stores up yourself — the rollups here " +

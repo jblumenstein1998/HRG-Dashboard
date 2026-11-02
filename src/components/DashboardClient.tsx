@@ -7,7 +7,7 @@ import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
-import { RangeKey, PERIODS } from "@/lib/fiscal";
+import { RangeKey, PERIODS, resolveRange } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel, getStoreSection, type StoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
@@ -56,6 +56,9 @@ export default function DashboardClient({
   const [driveThruLabel, setDriveThruLabel] = useState("");
   const [salesLabel, setSalesLabel] = useState("");
   const storeFilter = useStoreFilter(leaders);
+  // The one day on screen, when there is one — a daypart's team on duty only
+  // means something for a single date. The range opens at that date's midnight.
+  const teamDate = rangeKey === "today" || rangeKey === "yesterday" ? resolveRange(rangeKey).range.slice(0, 10) : null;
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -399,6 +402,7 @@ export default function DashboardClient({
                         rangeLabel={rangeLabel}
                         viewMode={viewMode}
                         salesByStoreId={salesByStoreId}
+                        teamDate={teamDate}
                       />
                     );
                   })}
@@ -448,6 +452,7 @@ function SectionGroup({
   rangeLabel,
   viewMode,
   salesByStoreId,
+  teamDate,
 }: {
   section: StoreSection;
   branches: BranchStore[];
@@ -457,6 +462,7 @@ function SectionGroup({
   rangeLabel: string;
   viewMode: "summary" | "daypart";
   salesByStoreId: Record<string, number>;
+  teamDate: string | null;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
 
@@ -485,6 +491,7 @@ function SectionGroup({
               rangeLabel={rangeLabel}
               viewMode={viewMode}
               salesForTier={visible ? salesForTier : null}
+              teamDate={teamDate}
             />
           );
         })}
