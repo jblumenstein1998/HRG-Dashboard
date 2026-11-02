@@ -61,7 +61,7 @@ export default function OperatingTargetsPanel({ targets }: { targets: OperatingT
           </ul>
         </div>
         <div>
-          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Multipliers &amp; bonuses · not on the sheet</h3>
+          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Multipliers &amp; bonuses</h3>
           <table className="w-full">
             <tbody>
               {targets.notOnSheet.map((r) => (
