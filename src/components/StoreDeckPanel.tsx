@@ -4,34 +4,66 @@ import { useState } from "react";
 import type { WbrWeekOption } from "@/lib/wbr/weeks";
 
 /**
- * The single-store deck download: pick a store and a week, get a PowerPoint of
- * that store's sales, labor, food cost and drive-thru. Sits on the Admin tab.
+ * The store presentation: pick a store and a week, get that store's overview,
+ * sales, labor, drive-thru, food cost, SMG and compliance slides. Sits on the
+ * Admin tab.
+ *
+ * Someone signed in with their HRG Google account saves it straight into their
+ * own Google Drive as Google Slides (a "Store Reviews" folder): the button goes
+ * to /api/wbr/drive/start, Google asks once for permission, and the page comes
+ * back here with the link (`driveResult`). A shared store login has no Drive,
+ * so it gets the PowerPoint download — which everyone else keeps as a fallback.
  *
  * `weeks` and `stores` come from the server so the render and the browser
  * agree on which Sunday was last and which stores are on PAR.
  */
+
+export type DriveResult =
+  | { status: "saved"; url: string; name: string; warnings: string[] }
+  | { status: "error"; message: string };
+
 export default function StoreDeckPanel({
   weeks,
   stores,
+  canDrive,
+  driveResult,
+  initialStore,
+  initialWeekEnd,
 }: {
   weeks: WbrWeekOption[];
   stores: { label: string; section: string }[];
+  /** Signed in with Google (not a shared store login). */
+  canDrive: boolean;
+  /** What the last Drive save came back with, if the page was just returned to. */
+  driveResult: DriveResult | null;
+  initialStore?: string;
+  initialWeekEnd?: string;
 }) {
-  const [store, setStore] = useState(stores[0]?.label ?? "");
-  const [weekEnd, setWeekEnd] = useState(weeks[0]?.weekEnd ?? "");
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ fileName: string; warnings: string[] } | null>(null);
+  const [store, setStore] = useState(stores.some((s) => s.label === initialStore) ? initialStore! : (stores[0]?.label ?? ""));
+  const [weekEnd, setWeekEnd] = useState(weeks.some((w) => w.weekEnd === initialWeekEnd) ? initialWeekEnd! : (weeks[0]?.weekEnd ?? ""));
+  const [busy, setBusy] = useState<"drive" | "download" | null>(null);
+  const [downloaded, setDownloaded] = useState<{ fileName: string; warnings: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The Drive result stays up until the selection changes.
+  const [drive, setDrive] = useState<DriveResult | null>(driveResult);
 
   const sections = [...new Set(stores.map((s) => s.section))];
 
   const reset = () => {
-    setResult(null);
+    setDownloaded(null);
     setError(null);
+    setDrive(null);
+  };
+
+  const saveToDrive = () => {
+    setBusy("drive");
+    reset();
+    // A full navigation: Google's permission page, then the build, then back here.
+    window.location.href = `/api/wbr/drive/start?${new URLSearchParams({ store, weekEnd })}`;
   };
 
   const download = async () => {
-    setBusy(true);
+    setBusy("download");
     reset();
     try {
       const res = await fetch("/api/wbr/store", {
@@ -55,15 +87,26 @@ export default function StoreDeckPanel({
       a.download = fileName;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setResult({ fileName, warnings });
+      setDownloaded({ fileName, warnings });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   const select = "text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer";
+  const primary = "text-xs px-3 py-1.5 rounded-lg border border-gray-300 bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50 transition";
+  const secondary = "text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition";
+
+  const warnings = (list: string[]) =>
+    list.length > 0 && (
+      <ul className="list-disc pl-4 text-yellow-700">
+        {list.map((w) => (
+          <li key={w}>{w}</li>
+        ))}
+      </ul>
+    );
 
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4">
@@ -71,7 +114,9 @@ export default function StoreDeckPanel({
         <div className="mr-auto">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-900">Store presentation</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Downloads a PowerPoint for one store and week: overview, sales, labor, drive-thru, food cost, SMG and compliance.
+            {canDrive
+              ? "Saves to your Google Drive as Google Slides, in a Store Reviews folder: overview, sales, labor, drive-thru, food cost, SMG and compliance."
+              : "Downloads a PowerPoint for one store and week: overview, sales, labor, drive-thru, food cost, SMG and compliance."}
           </p>
         </div>
         <select
@@ -80,7 +125,7 @@ export default function StoreDeckPanel({
             setStore(e.target.value);
             reset();
           }}
-          disabled={busy}
+          disabled={!!busy}
           aria-label="Store"
           className={select}
         >
@@ -102,7 +147,7 @@ export default function StoreDeckPanel({
             setWeekEnd(e.target.value);
             reset();
           }}
-          disabled={busy}
+          disabled={!!busy}
           aria-label="Week"
           className={select}
         >
@@ -112,30 +157,40 @@ export default function StoreDeckPanel({
             </option>
           ))}
         </select>
-        <button
-          onClick={download}
-          disabled={busy || !store}
-          className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 bg-gray-900 text-white hover:bg-gray-700 disabled:opacity-50 transition"
-        >
-          {busy ? "Building…" : "Download presentation"}
+        {canDrive && (
+          <button onClick={saveToDrive} disabled={!!busy || !store} className={primary}>
+            {busy === "drive" ? "Saving to Drive…" : "Save to Google Drive"}
+          </button>
+        )}
+        <button onClick={download} disabled={!!busy || !store} className={canDrive ? secondary : primary}>
+          {busy === "download" ? "Building…" : canDrive ? "Download .pptx" : "Download presentation"}
         </button>
       </div>
 
       {busy && <p className="mt-3 text-xs text-gray-500">This takes up to a minute.</p>}
       {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
-      {result && (
+
+      {drive?.status === "saved" && (
         <div className="mt-3 text-xs text-gray-700 space-y-1">
           <p>
-            Downloaded <span className="font-medium text-gray-900">{result.fileName}</span>. Open it in PowerPoint, or
-            upload it to Google Drive to open it as Google Slides.
+            Saved <span className="font-medium text-gray-900">{drive.name}</span> to your Google Drive, in Store
+            Reviews.{" "}
+            <a href={drive.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-700 hover:underline">
+              Open in Google Slides →
+            </a>
           </p>
-          {result.warnings.length > 0 && (
-            <ul className="list-disc pl-4 text-yellow-700">
-              {result.warnings.map((w) => (
-                <li key={w}>{w}</li>
-              ))}
-            </ul>
-          )}
+          {warnings(drive.warnings)}
+        </div>
+      )}
+      {drive?.status === "error" && <p className="mt-3 text-xs text-red-600">Couldn&apos;t save to Google Drive: {drive.message}</p>}
+
+      {downloaded && (
+        <div className="mt-3 text-xs text-gray-700 space-y-1">
+          <p>
+            Downloaded <span className="font-medium text-gray-900">{downloaded.fileName}</span>. Open it in PowerPoint,
+            or upload it to Google Drive to open it as Google Slides.
+          </p>
+          {warnings(downloaded.warnings)}
         </div>
       )}
     </section>

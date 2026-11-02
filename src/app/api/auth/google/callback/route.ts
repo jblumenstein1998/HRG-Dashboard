@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { exchangeCode, OAUTH_COOKIE } from "@/lib/users/google";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "@/lib/users/session";
 import { findByEmail, recordLogin } from "@/lib/users/store";
+import { DRIVE_STATE_PREFIX } from "@/lib/google/drive";
+import { finishDriveSave } from "@/lib/wbr/driveSave";
+
+// A Drive save builds and uploads a deck on the way back, which takes a few seconds.
+export const maxDuration = 120;
 
 /**
  * Where Google sends the browser back.
@@ -24,6 +29,10 @@ function fail(request: NextRequest, message: string) {
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
+
+  // "Save to Google Drive" comes back through this registered URL too; its
+  // state is marked, and it never touches the session.
+  if (params.get("state")?.startsWith(DRIVE_STATE_PREFIX)) return finishDriveSave(request);
 
   // The user pressed Cancel, or Google refused (commonly a personal account
   // caught by the `hd` hint).

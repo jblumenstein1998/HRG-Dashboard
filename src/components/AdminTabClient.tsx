@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import TabOptions from "@/components/TabOptions";
-import StoreDeckPanel from "@/components/StoreDeckPanel";
+import StoreDeckPanel, { type DriveResult } from "@/components/StoreDeckPanel";
 import type { WbrWeekOption } from "@/lib/wbr/weeks";
 import OperatingTargetsPanel from "@/components/OperatingTargetsPanel";
 import type { OperatingTargets } from "@/lib/operatingTargets";
@@ -22,13 +22,17 @@ import type { Tab } from "@/lib/users/tabs";
  * looking at an empty tab); its route checks the same tick.
  */
 export default function AdminTabClient({
-  tabs, isAdmin, targets, deckWeeks, deckStores,
+  tabs, isAdmin, targets, deckWeeks, deckStores, canDrive, driveResult, initialStore, initialWeekEnd,
 }: {
   tabs: Tab[];
   isAdmin: boolean;
   targets: OperatingTargets;
   deckWeeks: WbrWeekOption[];
   deckStores: { label: string; section: string }[];
+  canDrive: boolean;
+  driveResult: DriveResult | null;
+  initialStore: string;
+  initialWeekEnd: string;
 }) {
   const router = useRouter();
 
@@ -76,7 +80,14 @@ export default function AdminTabClient({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 space-y-5">
-        <StoreDeckPanel weeks={deckWeeks} stores={deckStores} />
+        <StoreDeckPanel
+          weeks={deckWeeks}
+          stores={deckStores}
+          canDrive={canDrive}
+          driveResult={driveResult}
+          initialStore={initialStore}
+          initialWeekEnd={initialWeekEnd}
+        />
         <OperatingTargetsPanel targets={targets} />
       </main>
     </div>
