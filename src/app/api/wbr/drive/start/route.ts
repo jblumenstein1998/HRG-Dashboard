@@ -5,8 +5,10 @@ import { buildDriveAuthUrl, DRIVE_COOKIE, DRIVE_STATE_PREFIX } from "@/lib/googl
 import { resolveDeckTarget } from "@/lib/wbr/generateStore";
 
 /**
- * GET /api/wbr/drive/start?store=<label>&weekEnd=YYYY-MM-DD
- *  or ?leader=<leader id>&weekEnd=… for every store that leader covers
+ * GET /api/wbr/drive/start?target=<store filter>&weekEnd=YYYY-MM-DD
+ *
+ * `target` is the ribbon's store-filter value: "" (all stores), "va"/"tn"/"tx",
+ * "leader:<id>" or "store:<label>" — lib/wbr/generateStore resolves it.
  *
  * Begins "Save to Google Drive" for the store presentation: checks the person
  * may make decks (the Management tab) and signs in with Google (a shared store login
@@ -29,17 +31,17 @@ export async function GET(request: NextRequest) {
   if (!googleConfigured()) return back("Google isn't configured on this deployment.");
 
   const p = request.nextUrl.searchParams;
-  const leader = p.get("leader") ?? "";
-  const store = leader ? "" : (p.get("store") ?? "");
-  const target = await resolveDeckTarget({ store, leader });
-  if (!target) return back(leader ? "None of that leader's stores are on PAR." : "Pick a store.");
+  const target = p.get("target") ?? "";
+  const resolved = await resolveDeckTarget(target);
+  if (!resolved) return back("Pick a store, market or leader.");
+  if (!resolved.stores.length) return back(`${resolved.name}: none of these stores are on PAR yet.`);
   const weekEnd = /^\d{4}-\d{2}-\d{2}$/.test(p.get("weekEnd") ?? "") ? p.get("weekEnd")! : "";
 
   const state = DRIVE_STATE_PREFIX + randomToken(16);
   const { verifier, challenge } = await createPkce();
   const res = NextResponse.redirect(buildDriveAuthUrl({ origin: request.nextUrl.origin, state, challenge, email: viewer.user.email }));
   // What to build rides with the state; httpOnly, lax (the return is a cross-site redirect), ten minutes.
-  res.cookies.set(DRIVE_COOKIE, `${state}.${verifier}.${Buffer.from(JSON.stringify({ store, leader, weekEnd })).toString("base64url")}`, {
+  res.cookies.set(DRIVE_COOKIE, `${state}.${verifier}.${Buffer.from(JSON.stringify({ target, weekEnd })).toString("base64url")}`, {
     httpOnly: true,
     secure: request.nextUrl.protocol === "https:",
     sameSite: "lax",

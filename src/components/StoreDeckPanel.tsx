@@ -2,13 +2,16 @@
 
 import { useState } from "react";
 import type { WbrWeekOption } from "@/lib/wbr/weeks";
+import { ALL_STORES } from "@/lib/stores";
+import { StoreFilterPicker, type Leader, type StoreFilterValue } from "@/components/StoreFilter";
 
 /**
- * The store presentation: pick a store and a week, get that store's overview,
- * sales, labor, drive-thru, food cost, SMG and compliance slides. Or pick an
- * above-store leader (the ribbon's list) for one deck of all their stores,
- * ordered slide by slide (lib/wbr/generateStore). Sits on the Management tab,
- * shown only to people signed in with Google.
+ * The store presentation: pick what to cover — the same dropdown as the ribbon
+ * (all stores, a market, an above-store leader or one store) — and a week, and
+ * get overview, sales, labor, drive-thru, food cost, SMG and compliance slides
+ * for each store. A deck of more than one store is ordered slide by slide
+ * (lib/wbr/generateStore). Sits on the Management tab, shown only to people
+ * signed in with Google.
  *
  * Someone signed in with their HRG Google account saves it straight into their
  * own Google Drive as Google Slides (a "Store Reviews" folder): the button goes
@@ -16,57 +19,44 @@ import type { WbrWeekOption } from "@/lib/wbr/weeks";
  * back here with the link (`driveResult`). There is no PowerPoint download:
  * the deck only ever goes to the person's own Drive.
  *
- * `weeks` and `stores` come from the server so the render and the browser
- * agree on which Sunday was last and which stores are on PAR.
+ * `weeks` comes from the server so the render and the browser agree on which
+ * Sunday was last.
  */
 
 export type DriveResult =
   | { status: "saved"; url: string; name: string; warnings: string[] }
   | { status: "error"; message: string };
 
-/** An above-store leader from the ribbon's list, with how many of their stores a deck covers. */
-export type DeckLeader = { id: string; name: string; stores: number };
-
 export default function StoreDeckPanel({
   weeks,
-  stores,
   leaders,
   driveResult,
-  initialStore,
-  initialLeader,
+  initialTarget,
   initialWeekEnd,
 }: {
   weeks: WbrWeekOption[];
-  stores: { label: string; section: string }[];
-  leaders: DeckLeader[];
+  /** The ribbon's leaders. */
+  leaders: Leader[];
   /** What the last Drive save came back with, if the page was just returned to. */
   driveResult: DriveResult | null;
-  initialStore?: string;
-  initialLeader?: string;
+  /** A store-filter value, as the ribbon's: "", "va", "leader:<id>", "store:<label>". */
+  initialTarget?: string;
   initialWeekEnd?: string;
 }) {
-  // "leader:<id>" or "store:<label>", like the ribbon's store filter.
-  const [target, setTarget] = useState(() => {
-    if (leaders.some((l) => l.id === initialLeader)) return `leader:${initialLeader}`;
-    if (stores.some((s) => s.label === initialStore)) return `store:${initialStore}`;
-    return stores[0] ? `store:${stores[0].label}` : "";
-  });
+  const [target, setTarget] = useState<StoreFilterValue>(initialTarget ?? `store:${ALL_STORES[0]?.label ?? ""}`);
   const [weekEnd, setWeekEnd] = useState(weeks.some((w) => w.weekEnd === initialWeekEnd) ? initialWeekEnd! : (weeks[0]?.weekEnd ?? ""));
   const [busy, setBusy] = useState(false);
   // The Drive result stays up until the selection changes.
   const [drive, setDrive] = useState<DriveResult | null>(driveResult);
 
-  const sections = [...new Set(stores.map((s) => s.section))];
-  const leader = target.startsWith("leader:") ? leaders.find((l) => l.id === target.slice("leader:".length)) : undefined;
-
   const reset = () => setDrive(null);
+  const single = target.startsWith("store:");
 
   const saveToDrive = () => {
     setBusy(true);
     reset();
-    const pick: Record<string, string> = leader ? { leader: leader.id } : { store: target.slice("store:".length) };
     // A full navigation: Google's permission page, then the build, then back here.
-    window.location.href = `/api/wbr/drive/start?${new URLSearchParams({ ...pick, weekEnd })}`;
+    window.location.href = `/api/wbr/drive/start?${new URLSearchParams({ target, weekEnd })}`;
   };
 
   const select = "text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer";
@@ -91,37 +81,17 @@ export default function StoreDeckPanel({
             cost, SMG and compliance.
           </p>
         </div>
-        <select
+        <StoreFilterPicker
+          leaders={leaders}
           value={target}
-          onChange={(e) => {
-            setTarget(e.target.value);
+          onChange={(v) => {
+            setTarget(v);
             reset();
           }}
           disabled={busy}
-          aria-label="Store or leader"
-          className={select}
-        >
-          {leaders.length > 0 && (
-            <optgroup label="Above-store leader">
-              {leaders.map((l) => (
-                <option key={l.id} value={`leader:${l.id}`}>
-                  {l.name} ({l.stores} {l.stores === 1 ? "store" : "stores"})
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {sections.map((sec) => (
-            <optgroup key={sec} label={sec}>
-              {stores
-                .filter((s) => s.section === sec)
-                .map((s) => (
-                  <option key={s.label} value={`store:${s.label}`}>
-                    {s.label}
-                  </option>
-                ))}
-            </optgroup>
-          ))}
-        </select>
+          className="py-1.5"
+          stores
+        />
         <select
           value={weekEnd}
           onChange={(e) => {
@@ -138,18 +108,18 @@ export default function StoreDeckPanel({
             </option>
           ))}
         </select>
-        <button onClick={saveToDrive} disabled={busy || !target} className={primary}>
+        <button onClick={saveToDrive} disabled={busy} className={primary}>
           {busy ? "Saving to Drive…" : "Save to Google Drive"}
         </button>
       </div>
 
-      {leader && !busy && (
+      {!single && !busy && (
         <p className="mt-3 text-xs text-gray-500">
-          One deck for all {leader.stores} of {leader.name}&apos;s stores, with the same slide for every store side by side:
-          each store&apos;s overview, then each store&apos;s sales, and so on.
+          One deck for every store in this selection, with the same slide for each store side by side: each store&apos;s
+          overview, then each store&apos;s sales, and so on.
         </p>
       )}
-      {busy && <p className="mt-3 text-xs text-gray-500">{leader ? "This can take a few minutes." : "This takes up to a minute."}</p>}
+      {busy && <p className="mt-3 text-xs text-gray-500">{single ? "This takes up to a minute." : "This can take a few minutes."}</p>}
 
       {drive?.status === "saved" && (
         <div className="mt-3 text-xs text-gray-700 space-y-1">
@@ -164,7 +134,6 @@ export default function StoreDeckPanel({
         </div>
       )}
       {drive?.status === "error" && <p className="mt-3 text-xs text-red-600">Couldn&apos;t save to Google Drive: {drive.message}</p>}
-
     </section>
   );
 }

@@ -29,24 +29,37 @@ const CONCURRENCY = 4;
 
 const md = (iso: string) => `${Number(iso.slice(5, 7))}.${Number(iso.slice(8, 10))}`;
 
-/** What a deck is for: one store, or one leader's stores. */
-export type DeckTarget = { store?: string; leader?: string };
+const MARKETS: Record<string, { name: string; section: string }> = {
+  va: { name: "VA", section: "Virginia" },
+  tn: { name: "TN", section: "Tennessee" },
+  tx: { name: "TX", section: "Texas" },
+};
 
 /**
- * The stores a target covers, in the tabs' order, and what to call the deck.
- * Only PAR-connected stores can be built; a leader with none of those, or a
- * name that isn't a store or leader, comes back null.
+ * The stores a deck covers, in the tabs' order, and what to call the deck.
+ *
+ * `target` is the ribbon's store-filter value (components/StoreFilter): ""
+ * for all stores, "va"/"tn"/"tx", "leader:<id>" or "store:<label>". Only
+ * PAR-connected stores can be built; a selection with none of those, or a
+ * value that names nothing, comes back with `stores` empty or as null.
  */
-export async function resolveDeckTarget(t: DeckTarget): Promise<{ name: string; stores: string[] } | null> {
-  const options = storeDeckOptions().map((s) => s.label);
-  if (t.leader) {
-    const leader = (await listLeaders()).find((l) => l.id === t.leader);
-    if (!leader) return null;
-    const stores = options.filter((s) => leader.stores.includes(s));
-    return stores.length ? { name: leader.name, stores } : null;
+export async function resolveDeckTarget(target: string): Promise<{ name: string; stores: string[] } | null> {
+  const options = storeDeckOptions();
+  const labels = (keep: (s: { label: string; section: string }) => boolean) => options.filter(keep).map((s) => s.label);
+  if (target === "") return { name: "All Stores", stores: labels(() => true) };
+  if (target in MARKETS) {
+    const m = MARKETS[target];
+    return { name: m.name, stores: labels((s) => s.section === m.section) };
   }
-  const store = options.find((s) => s === t.store);
-  return store ? { name: store, stores: [store] } : null;
+  if (target.startsWith("leader:")) {
+    const leader = (await listLeaders()).find((l) => l.id === target.slice("leader:".length));
+    return leader ? { name: leader.name, stores: labels((s) => leader.stores.includes(s.label)) } : null;
+  }
+  if (target.startsWith("store:")) {
+    const store = target.slice("store:".length);
+    return { name: store, stores: labels((s) => s.label === store) };
+  }
+  return null;
 }
 
 async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {

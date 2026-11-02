@@ -119,6 +119,7 @@ export function StoreFilterPicker({
   onChange,
   className = "",
   stores = false,
+  disabled = false,
 }: {
   leaders: Leader[];
   value: StoreFilterValue;
@@ -126,10 +127,12 @@ export function StoreFilterPicker({
   className?: string;
   /** Also offer each store on its own. Off by default, so other tabs are unchanged. */
   stores?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <select
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       aria-label="Filter stores"
       className={`text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white text-gray-600 cursor-pointer ${className}`}
