@@ -4,7 +4,8 @@ const nextConfig: NextConfig = {
   // The WBR template is read from disk at request time, which the tracer can't
   // see; without this the deployed route has no template to fill.
   outputFileTracingIncludes: {
-    "/api/wbr/store": ["./src/lib/wbr/template/**/*"],
+    // Drive saves build the store presentation on Google's return to this callback.
+    "/api/auth/google/callback": ["./src/lib/wbr/template/**/*"],
   },
   // The old /smg and /guest-satisfaction tabs were replaced by the survey-data
   // tab, which now carries the "SMG" name. Anyone holding a bookmark to either

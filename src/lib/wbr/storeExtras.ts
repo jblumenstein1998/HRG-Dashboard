@@ -6,7 +6,7 @@
  * Every source is read through the same function its dashboard tab or the bonus
  * scorecard uses, so a slide can't disagree with the tab. Each is fetched on its
  * own and fails on its own: a dead Slack token leaves that section reading
- * "unavailable" and a warning on the download, not a broken deck.
+ * "unavailable" and a warning beside the saved deck, not a broken one.
  */
 
 import { getBerryAuth } from "@/lib/auth";
@@ -99,6 +99,14 @@ const centralDate = (ts: string) => new Date(ts).toLocaleDateString("en-CA", { t
 
 /** Fiscal week number for a Monday — how SMG and the drive-thru trend number weeks. */
 const fiscalWeek = (monday: string) => Math.round((Date.parse(monday) - Date.parse(FISCAL_YEAR_START)) / (7 * 86_400_000)) + 1;
+
+/** "HRG Columbia BOH midday checklist" → "BOH midday checklist"; anything else unchanged. */
+export function withoutStorePrefix(title: string, store: string): string {
+  let t = title.trim();
+  if (/^HRG\s/i.test(t)) t = t.slice(3).trimStart();
+  if (t.toLowerCase().startsWith(store.toLowerCase() + " ")) t = t.slice(store.length).trimStart();
+  return t;
+}
 
 async function attempt<T>(label: string, warnings: string[], run: () => Promise<T>): Promise<T | null> {
   try {
@@ -207,7 +215,12 @@ export async function buildExtras(o: { label: string; storeId: string; weeks: We
       ? Promise.resolve(null)
       : attempt("Jolt (lists)", warnings, async () =>
           (await fetchListCompletion(week.start, week.end)).lists
-            .map((l) => ({ title: l.title, s: l.byStore.find((b) => b.store === o.label) }))
+            // "HRG Columbia BOH midday checklist" → "BOH midday checklist": the
+            // slide already names the store.
+            .map((l) => ({
+              title: withoutStorePrefix(l.title, o.label),
+              s: l.byStore.find((b) => b.store === o.label),
+            }))
             .filter((x) => x.s && (x.s.missedCount || x.s.lateCount))
             .map((x) => ({ title: x.title, due: x.s!.listCount, late: x.s!.lateCount, missed: x.s!.missedCount }))
             .sort((a, b) => b.missed - a.missed || b.late - a.late),

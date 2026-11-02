@@ -803,18 +803,35 @@ function nameList(c: Canvas, x: number, y: number, w: number, h: number, title: 
     c.text(x, y + 13, w, 12, empty, { size: 7.5, color: C.gray500 });
     return;
   }
-  const rowH = 13;
-  const fit = Math.floor((h - 14) / rowH);
-  const shown = rows.length > fit ? rows.slice(0, fit - 1) : rows;
-  const maxChars = Math.floor((w - 84) / 4.1);
-  shown.forEach((r, i) => {
-    const ry = y + 13 + i * rowH;
-    const left = r.left.length > maxChars ? r.left.slice(0, maxChars - 1) + "…" : r.left;
-    c.text(x, ry, w - 56, 12, left, { size: 7, color: C.gray700 });
-    c.text(x + w - 70, ry, 70, 12, r.right, { size: 7, bold: true, color: r.color, align: "END" });
+  // The figure on the right sizes its own column; the name gets the rest and
+  // wraps onto a second line rather than being cut off. Room is judged at
+  // ~4.1pt a character — wide enough for the font Google Slides substitutes —
+  // and a name that would need a third line is the only thing shortened.
+  const line = 9.5;
+  // Each row's figure takes only the width it needs, so a name beside "2 late"
+  // gets more room than one beside "1 missed · 1 late".
+  const fitted = rows.map((r) => {
+    const rightW = r.right.length * 4.2 + 8;
+    const nameW = w - rightW - 6;
+    const perLine = Math.floor((nameW - 14) / 4.1);
+    const twoLines = perLine * 2;
+    const left = r.left.length > twoLines ? r.left.slice(0, twoLines - 1) + "…" : r.left;
+    const lines = left.length > perLine ? 2 : 1;
+    return { ...r, left, rightW, nameW, h: lines * line + 4 };
   });
-  if (shown.length < rows.length) {
-    c.text(x, y + 13 + shown.length * rowH, w, 12, `+${rows.length - shown.length} more`, { size: 7, color: C.gray400 });
+  let ry = y + 13;
+  const bottom = y + h;
+  let shown = 0;
+  for (const r of fitted) {
+    const roomForMore = shown < fitted.length - 1 ? 12 : 0;
+    if (ry + r.h + roomForMore > bottom) break;
+    c.text(x, ry, r.nameW, r.h, r.left, { size: 7, color: C.gray700, valign: "TOP" });
+    c.text(x + w - r.rightW, ry, r.rightW, line + 3, r.right, { size: 7, bold: true, color: r.color, align: "END", noWrap: true });
+    ry += r.h;
+    shown++;
+  }
+  if (shown < rows.length) {
+    c.text(x, ry, w, 12, `+${rows.length - shown} more`, { size: 7, color: C.gray400 });
   }
 }
 
@@ -876,7 +893,7 @@ export function storeComplianceSlide(d: StoreDeckData): Canvas {
       [`${ptdName(d)} to date`, pt?.completePct == null ? "—" : `${pt.completePct.toFixed(1)}%`, ink(joltTone(pt?.completePct))],
     ];
     lines.forEach(([k, v, col], i) => {
-      const ly = top + 84 + i * 20;
+      const ly = top + 80 + i * 16;
       if (i) c.rule(jx + 12, ly - 3, cw - 24, 0.5, C.gray100);
       c.text(jx + 12, ly, cw - 24, 14, k, { size: 7.5, color: C.gray500 });
       c.text(jx + 12, ly, cw - 24, 14, v, { size: 7.5, bold: true, color: col ?? C.gray900, align: "END" });
@@ -884,9 +901,9 @@ export function storeComplianceSlide(d: StoreDeckData): Canvas {
     nameList(
       c,
       jx + 12,
-      top + 170,
+      top + 148,
       cw - 24,
-      380 - 10 - (top + 170),
+      380 - 8 - (top + 148),
       "Missed or late this week",
       x.jolt.lists.map((l) => ({
         left: l.title,

@@ -345,7 +345,6 @@ export default function ManagementClient({
           <StoreDeckPanel
             weeks={deck.weeks}
             stores={deck.stores}
-            canDrive
             driveResult={deck.driveResult}
             initialStore={deck.initialStore}
             initialWeekEnd={deck.initialWeekEnd}
