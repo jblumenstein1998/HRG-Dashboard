@@ -21,7 +21,6 @@ import type { DriveThru } from "@/lib/wbr/opsData";
 import { SMG_METRICS } from "@/lib/wbr/storeExtras";
 import type { SlackDay } from "@/lib/slackReports";
 import { SLACK_SLOTS } from "@/lib/slackReports";
-import { DAYPARTS } from "@/lib/dayparts";
 import { change, count, usd0, usd2, weekSpan } from "@/lib/wbr/slides";
 import { mmss, pct1, varPct, varUsd } from "@/lib/wbr/slidesDistrict";
 import {
@@ -477,16 +476,8 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
 
 // ── 4. Drive-thru ────────────────────────────────────────────────────────────
 
-const DAYPART_NAME: Record<number, string> = { 1: "Morning", 2: "Lunch", 3: "Afternoon", 4: "Dinner", 5: "Evening", 6: "Late night" };
-function daypartName(index: number): string {
-  const dp = DAYPARTS.find((x) => x.index === index);
-  if (!dp) return `Daypart ${index}`;
-  const h = (m: number) => {
-    const h24 = Math.floor(m / 60) % 24;
-    return `${h24 % 12 === 0 ? 12 : h24 % 12}${h24 < 12 ? "a" : "p"}`;
-  };
-  return `${DAYPART_NAME[index] ?? `Daypart ${index}`}  ${h(dp.startMinutes)}–${h(dp.endMinutes)}`;
-}
+/** BerryAI's daypart index, as the Drive-Thru tab numbers them. */
+const daypartName = (index: number) => `Daypart ${index}`;
 
 export function storeDriveSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
@@ -505,7 +496,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
   tileRow(c, 72, 54, [
     { label: "Lane · week", value: mmss(dt?.laneSecs), tone: driveTone(dt?.laneSecs, dt?.tierSales, "lane"), lines: [[{ text: `${ptdName(d)} to date ` }, { text: mmss(dp?.laneSecs), color: ink(driveTone(dp?.laneSecs, dp?.tierSales, "lane")) }]] },
     { label: "Window · week", value: mmss(dt?.windowSecs), tone: driveTone(dt?.windowSecs, dt?.tierSales, "window"), lines: [[{ text: `${ptdName(d)} to date ` }, { text: mmss(dp?.windowSecs), color: ink(driveTone(dp?.windowSecs, dp?.tierSales, "window")) }]] },
-    { label: "Peak lane · lunch & dinner", value: mmss(dt?.peakLaneSecs), tone: driveTone(dt?.peakLaneSecs, dt?.tierSales, "lane"), lines: [[{ text: `Non-peak ` }, { text: mmss(dt?.nonPeakLaneSecs), color: ink(driveTone(dt?.nonPeakLaneSecs, dt?.tierSales, "lane")) }]] },
+    { label: "Peak lane · dayparts 2 & 4", value: mmss(dt?.peakLaneSecs), tone: driveTone(dt?.peakLaneSecs, dt?.tierSales, "lane"), lines: [[{ text: `Non-peak ` }, { text: mmss(dt?.nonPeakLaneSecs), color: ink(driveTone(dt?.nonPeakLaneSecs, dt?.tierSales, "lane")) }]] },
     { label: "Cars · week", value: dt?.cars ? count(dt.cars) : "—", lines: [[{ text: dp?.cars ? `${count(dp.cars)} ${ptdName(d)} to date` : "" }]] },
     { label: "Flagged pull-forwards", value: dt?.flagged != null ? count(dt.flagged) : "—", tone: pullForwardTone(dt?.flagged), lines: [[{ text: `Goal ≤${PULL_FORWARD_GOAL} a week` }]] },
   ]);
@@ -552,7 +543,7 @@ export function storeDriveSlide(d: StoreDeckData): Canvas {
     ],
   }));
   rows.push(
-    { total: true, cells: [{ text: "Peak (lunch, dinner)" }, goalCell(mmss(dt?.peakLaneSecs), driveTone(dt?.peakLaneSecs, sales, "lane")), goalCell(mmss(dt?.peakWindowSecs), driveTone(dt?.peakWindowSecs, sales, "window")), { text: "" }, { text: "" }] },
+    { total: true, cells: [{ text: "Peak (dayparts 2, 4)" }, goalCell(mmss(dt?.peakLaneSecs), driveTone(dt?.peakLaneSecs, sales, "lane")), goalCell(mmss(dt?.peakWindowSecs), driveTone(dt?.peakWindowSecs, sales, "window")), { text: "" }, { text: "" }] },
     { total: true, cells: [{ text: "Non-peak" }, goalCell(mmss(dt?.nonPeakLaneSecs), driveTone(dt?.nonPeakLaneSecs, sales, "lane")), goalCell(mmss(dt?.nonPeakWindowSecs), driveTone(dt?.nonPeakWindowSecs, sales, "window")), { text: "" }, { text: "" }] },
     { total: true, cells: [{ text: "Week" }, goalCell(mmss(dt?.laneSecs), driveTone(dt?.laneSecs, sales, "lane")), goalCell(mmss(dt?.windowSecs), driveTone(dt?.windowSecs, sales, "window")), { text: dt?.cars ? count(dt.cars) : "—" }, { text: "" }] },
   );
