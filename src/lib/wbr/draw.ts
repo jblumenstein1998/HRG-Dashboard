@@ -55,7 +55,8 @@ export type TextStyle = {
 export type Shape =
   | { kind: "box"; x: number; y: number; w: number; h: number; fill: string; line?: string; round?: boolean; radius?: number }
   | { kind: "text"; x: number; y: number; w: number; h: number; content: string; style: TextStyle }
-  | { kind: "chart"; x: number; y: number; w: number; h: number; spec: ChartShapeSpec };
+  | { kind: "chart"; x: number; y: number; w: number; h: number; spec: ChartShapeSpec }
+  | { kind: "stripes"; x: number; y: number; w: number; h: number; color: string; width: number; gap: number };
 
 /** One slide's shapes, in drawing order (later ones on top). */
 export class Canvas {
@@ -77,6 +78,15 @@ export class Canvas {
       w += 20;
     }
     if (content) this.shapes.push({ kind: "text", x, y, w, h, content, style });
+  }
+
+  /**
+   * Diagonal candy-cane stripes ("/") filling the box, `width` thick every
+   * `width + gap` points. Drawn as one freeform clipped to the box rather than
+   * a pattern fill, which Google Slides drops on import.
+   */
+  stripes(x: number, y: number, w: number, h: number, color: string, opts: { width?: number; gap?: number } = {}) {
+    this.shapes.push({ kind: "stripes", x, y, w, h, color, width: opts.width ?? 2, gap: opts.gap ?? 2.5 });
   }
 
   /** A native PowerPoint line chart filling the box. */

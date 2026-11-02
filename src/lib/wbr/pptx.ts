@@ -46,7 +46,48 @@ const avLst = (s: { w: number; h: number; round?: boolean; radius?: number }) =>
     : `<a:avLst/>`;
 
 /** `chartRel` is the slide relationship id of this shape's chart part, for chart shapes. */
+/** Clips a convex polygon to the half-plane where f(pt) >= 0 (Sutherland–Hodgman, one edge). */
+function clip(poly: [number, number][], f: (p: [number, number]) => number): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const fa = f(a);
+    const fb = f(b);
+    if (fa >= 0) out.push(a);
+    if ((fa >= 0) !== (fb >= 0)) {
+      const t = fa / (fa - fb);
+      out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
+    }
+  }
+  return out;
+}
+
+/** "/" stripes across a w×h box: bands between the lines x + (h − y) = k and k + width, every width + gap. */
+function stripePaths(w: number, h: number, width: number, gap: number): string {
+  const rect: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+  const paths: string[] = [];
+  for (let k = -width; k < w + h; k += width + gap) {
+    const band = clip(clip(rect, ([x, y]) => x + (h - y) - k), ([x, y]) => k + width - (x + (h - y)));
+    if (band.length < 3) continue;
+    const pt = ([x, y]: [number, number]) => `<a:pt x="${emu(x)}" y="${emu(y)}"/>`;
+    paths.push(
+      `<a:path w="${emu(w)}" h="${emu(h)}"><a:moveTo>${pt(band[0])}</a:moveTo>` +
+        band.slice(1).map((p) => `<a:lnTo>${pt(p)}</a:lnTo>`).join("") +
+        `<a:close/></a:path>`,
+    );
+  }
+  return paths.join("");
+}
+
 function shapeXml(s: Shape, id: number, chartRel?: string): string {
+  if (s.kind === "stripes") {
+    return (
+      `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Stripes ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
+      `<p:spPr>${xfrm(s)}<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/>` +
+      `<a:pathLst>${stripePaths(s.w, s.h, s.width, s.gap)}</a:pathLst></a:custGeom>${fill(s.color)}<a:ln><a:noFill/></a:ln></p:spPr></p:sp>`
+    );
+  }
   if (s.kind === "chart") {
     return (
       `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +

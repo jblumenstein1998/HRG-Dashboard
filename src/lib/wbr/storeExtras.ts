@@ -17,7 +17,8 @@ import { queryZCases, queryOutstanding } from "@/lib/smgCaseStore";
 import { fetchZuMembers, fetchZuReport } from "@/lib/schoox";
 import { fetchCompletionByLocation, fetchListCompletion, STORES_WITHOUT_JOLT } from "@/lib/jolt";
 import { storeSlackReport } from "@/lib/slackCompletion";
-import type { SlackDay } from "@/lib/slackReports";
+import type { SlackDay, SlackSlot } from "@/lib/slackReports";
+import { checkStoreReports } from "@/lib/slackAccuracy";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { BONUS_ZCASE_TYPES } from "@/lib/bonus/goals";
 import { FISCAL_YEAR } from "@/lib/bonus/periods";
@@ -70,7 +71,22 @@ export type Extras = {
     /** This week's lists the store missed or finished late, worst first. */
     lists: { title: string; due: number; late: number; missed: number }[];
   };
-  slack: { week: SlackDay[]; weekPct: number | null; ptdPct: number | null; ptdRequired: number; ptdOnTime: number } | null;
+  slack: {
+    week: SlackDay[];
+    weekPct: number | null;
+    ptdPct: number | null;
+    ptdRequired: number;
+    ptdOnTime: number;
+    /**
+     * The week's posted reports whose figures didn't match the dashboard,
+     * keyed "date|slot" — the Slack accuracy check the admin table runs. Null
+     * when the check itself couldn't run.
+     */
+    inaccurate: Set<string> | null;
+    /** Posted reports that could be checked, and how many of those were right. */
+    checked: number;
+    accurate: number;
+  } | null;
   warnings: string[];
 };
 
@@ -211,7 +227,27 @@ export async function buildExtras(o: { label: string; storeId: string; weeks: We
               if (v === "on_time") ok++;
             }
           }
-          return { week: weekDays, weekPct: due ? (ok / due) * 100 : null, ptdPct: r.result.pct, ptdRequired: r.result.required, ptdOnTime: r.result.onTime };
+          // Accuracy: the same check as the admin Slack table, over the week's
+          // messages, joined to the grid by the message that filled each slot.
+          let inaccurate: Set<string> | null = null;
+          let checked = 0;
+          let accurate = 0;
+          try {
+            const checks = await checkStoreReports(bonusStore, r.timeZone, r.messages, week.start, week.end);
+            inaccurate = new Set();
+            for (const d of weekDays) {
+              for (const [slot, ts] of Object.entries(d.posts) as [SlackSlot, string | null][]) {
+                const c = ts ? checks.get(ts) : undefined;
+                if (!c || c.accurate == null) continue;
+                checked++;
+                if (c.accurate) accurate++;
+                else inaccurate.add(`${d.date}|${slot}`);
+              }
+            }
+          } catch (err) {
+            warnings.push(`Slack accuracy unavailable: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          return { week: weekDays, weekPct: due ? (ok / due) * 100 : null, ptdPct: r.result.pct, ptdRequired: r.result.required, ptdOnTime: r.result.onTime, inaccurate, checked, accurate };
         })
       : Promise.resolve(null),
   ]);

@@ -696,35 +696,61 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
 
 // ── 7. Compliance ────────────────────────────────────────────────────────────
 
-const SLOT_TONE: Record<string, { fill: string; label: string }> = {
-  on_time: { fill: C.green600, label: "On time" },
-  late: { fill: C.yellow600, label: "Late" },
-  missed: { fill: C.red600, label: "Missed" },
-  upcoming: { fill: C.gray200, label: "Not yet due" },
+/**
+ * The admin Slack table's cell tones (AdminSlackReports STATUS_CELL): a -50
+ * tint with -800/-700 text. An inaccurate report keeps its status tint and
+ * gets candy-cane stripes in that hue's -200 step, light enough to read the
+ * label through.
+ */
+const SLOT_TONE: Record<"on_time" | "late" | "missed", { bg: string; fg: string; stripe: string; label: string }> = {
+  on_time: { bg: "#f0fdf4", fg: "#166534", stripe: "#bbf7d0", label: "On time" }, // green-50 / 800 / 200
+  late: { bg: "#fffbeb", fg: "#92400e", stripe: "#fde68a", label: "Late" }, // amber-50 / 800 / 200
+  missed: { bg: "#fef2f2", fg: "#b91c1c", stripe: "#fecaca", label: "Missed" }, // red-50 / 700 / 200
 };
 
-function slackGrid(c: Canvas, x: number, y: number, w: number, days: SlackDay[]) {
-  const nameW = 52;
+function slotCell(c: Canvas, x: number, y: number, w: number, h: number, status: keyof typeof SLOT_TONE, inaccurate: boolean) {
+  const t = SLOT_TONE[status];
+  c.box(x, y, w, h, t.bg, { round: true, radius: 2.5 });
+  if (inaccurate) c.stripes(x + 0.6, y + 0.6, w - 1.2, h - 1.2, t.stripe, { width: 2, gap: 2 });
+  c.text(x, y, w, h, t.label, { size: 6, bold: true, color: t.fg, align: "CENTER" });
+}
+
+function slackGrid(c: Canvas, x: number, y: number, w: number, days: SlackDay[], inaccurate: Set<string> | null) {
+  const nameW = 50;
   const cw = (w - nameW) / SLACK_SLOTS.length;
   const heads = ["8:30a", "2:30p", "5:30p", "8:30p"];
-  SLACK_SLOTS.forEach((s, i) => c.text(x + nameW + i * cw, y, cw, 9, heads[i], { size: 6, bold: true, color: C.gray400, align: "CENTER" }));
+  SLACK_SLOTS.forEach((_, i) => c.text(x + nameW + i * cw, y, cw, 9, heads[i], { size: 6, bold: true, color: C.gray400, align: "CENTER" }));
   days.forEach((day, r) => {
-    const ry = y + 12 + r * 17;
+    const ry = y + 12 + r * 18;
     c.text(x, ry, nameW, 14, dayLabel(day.date), { size: 7, color: C.gray700 });
-    SLACK_SLOTS.forEach((s, i) => {
-      const st = day.slots[s.id];
-      const fill = st == null ? C.gray100 : (SLOT_TONE[st]?.fill ?? C.gray100);
-      c.box(x + nameW + i * cw + 4, ry + 2, cw - 8, 10, fill, { round: true, radius: 2 });
+    SLACK_SLOTS.forEach((sl, i) => {
+      const st = day.slots[sl.id];
+      const cx = x + nameW + i * cw + 2;
+      // Every report is due by the time a deck is made; a closed day has nothing owed.
+      if (st == null || st === "upcoming") {
+        c.text(cx, ry + 1.5, cw - 4, 12, "—", { size: 6, color: C.gray300, align: "CENTER" });
+        return;
+      }
+      slotCell(c, cx, ry + 1.5, cw - 4, 12, st, !!inaccurate?.has(`${day.date}|${sl.id}`));
     });
   });
   // Key
+  const ky = y + 12 + days.length * 18 + 6;
+  const keys: { status: keyof typeof SLOT_TONE; inaccurate: boolean; label: string }[] = [
+    { status: "on_time", inaccurate: false, label: "On time" },
+    { status: "late", inaccurate: false, label: "Late" },
+    { status: "missed", inaccurate: false, label: "Missed" },
+    { status: "on_time", inaccurate: true, label: "Posted, inaccurate" },
+  ];
   let kx = x;
-  const ky = y + 12 + days.length * 17 + 4;
-  for (const k of [SLOT_TONE.on_time, SLOT_TONE.late, SLOT_TONE.missed, { fill: C.gray100, label: "Not due" }]) {
-    c.box(kx, ky + 2, 7, 6, k.fill, { round: true, radius: 1.5 });
-    c.text(kx + 8, ky - 1, 50, 10, k.label, { size: 6, color: C.gray500 });
-    kx += 12 + k.label.length * 3.4 + 8;
+  for (const k of keys) {
+    const t = SLOT_TONE[k.status];
+    c.box(kx, ky + 1, 12, 8, t.bg, { line: t.stripe, round: true, radius: 1.5 });
+    if (k.inaccurate) c.stripes(kx + 0.6, ky + 1.6, 10.8, 6.8, t.stripe, { width: 1.5, gap: 2 });
+    c.text(kx + 13, ky - 1, 80, 11, k.label, { size: 6, color: C.gray500 });
+    kx += 13 + k.label.length * 3.1 + 12;
   }
+  if (inaccurate == null) c.text(x, ky + 12, w, 9, "Accuracy couldn't be checked for this week.", { size: 6, color: C.gray400 });
 }
 
 /** A titled list of name → figure rows that stops with "+N more" when it runs out of room. */
@@ -752,7 +778,7 @@ function nameList(c: Canvas, x: number, y: number, w: number, h: number, title: 
 export function storeComplianceSlide(d: StoreDeckData): Canvas {
   const c = new Canvas();
   const x = d.extras;
-  frame(c, d, "Compliance", "ZU: Schoox, as of today — it reports only the present · Jolt: done ÷ due, as on the Jolt tab · Slack: the four daily reports, on time ÷ due · ZU and Jolt: goal 100%, 50% at 95% · Slack: goal 95%, 50% at 90%");
+  frame(c, d, "Compliance", "ZU as of today (Schoox reports only the present) · Jolt done ÷ due · Slack on time ÷ due; striped = figures don't match the dashboard · goals: ZU, Jolt 100%, 50% at 95%; Slack 95%, 50% at 90%");
   const cw = (R - L - 2 * 8) / 3;
   const top = 72;
   const h = 380 - top;
@@ -839,7 +865,11 @@ export function storeComplianceSlide(d: StoreDeckData): Canvas {
     c.text(sx + 12, top + 34, cw - 24, 34, s.weekPct == null ? "—" : `${s.weekPct.toFixed(0)}%`, { size: 28, bold: true, color: ink(slackTone(s.weekPct)) });
     c.text(sx + 12, top + 68, cw - 24, 10, `${ptdName(d)} to date `, { size: 7, color: C.gray500 });
     c.text(sx + 60, top + 68, cw - 72, 10, s.ptdPct == null ? "—" : `${s.ptdPct.toFixed(0)}%  (${s.ptdOnTime} of ${s.ptdRequired})`, { size: 7, bold: true, color: ink(slackTone(s.ptdPct)) });
-    slackGrid(c, sx + 12, top + 90, cw - 24, s.week);
+    if (s.checked) {
+      c.text(sx + 12, top + 80, cw - 24, 10, "Accurate", { size: 7, color: C.gray500 });
+      c.text(sx + 60, top + 80, cw - 72, 10, `${s.accurate} of ${s.checked} posted reports`, { size: 7, bold: true, color: s.accurate < s.checked ? C.red600 : C.gray900 });
+    }
+    slackGrid(c, sx + 12, top + 100, cw - 24, s.week, s.inaccurate);
   }
 
   return c;
