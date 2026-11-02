@@ -15,7 +15,8 @@
  * direction only.
  */
 
-import { C, Canvas, type ChartShapeSpec, type Tone } from "@/lib/wbr/draw";
+import { C, Canvas, type Tone } from "@/lib/wbr/draw";
+import { lineChart, type LineChartSpec } from "@/lib/wbr/drawChart";
 import type { Gate } from "@/lib/bonus/types";
 import type { DayFigures, StoreDeckData } from "@/lib/wbr/storeData";
 import type { DriveThru } from "@/lib/wbr/opsData";
@@ -71,17 +72,19 @@ const LAST_YEAR = { color: C.gray400, width: 1.5, dash: true };
 const GOAL = { color: C.green600, width: 1, dash: true };
 const EDGE = { color: C.yellow600, width: 1, dash: true };
 
-// Excel number formats for the chart axes and labels.
-const FMT_K = `"$"#,##0.0,"K"`;
-const FMT_COUNT = `#,##0`;
-const FMT_USD2 = `"$"#,##0.00`;
-const FMT_RATIO = `0.00`;
-const FMT_PCT1 = `0.0"%"`;
+// Chart label formats — drawn as text, so these are exactly what's printed.
+type Fmt = (v: number) => string;
+/** "$74.6K"; a whole thousand (an axis gridline) prints as "$110K". */
+const FMT_K: Fmt = (v) => "$" + (v % 1000 === 0 ? String(v / 1000) : (v / 1000).toFixed(1)) + "K";
+const FMT_COUNT: Fmt = (v) => Math.round(v).toLocaleString("en-US");
+const FMT_USD2: Fmt = (v) => "$" + v.toFixed(2);
+const FMT_RATIO: Fmt = (v) => v.toFixed(2);
+const FMT_PCT1: Fmt = (v) => `${v.toFixed(1)}%`;
 /** SMG scores are top-box shares — percentages, as the SMG tab prints them. */
-const FMT_SCORE = `0"%"`;
+const FMT_SCORE: Fmt = (v) => `${Math.round(v)}%`;
 const smgPct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v)}%`);
-const FMT_TIME = `m:ss`;
-const TIME = { format: FMT_TIME, scale: 1 / 86400, steps: [5, 10, 15, 20, 30, 60, 120] };
+/** Drive times in seconds, as m:ss; gridlines on whole 5/10/15… seconds. */
+const TIME = { fmt: (v: number) => mmss(v), steps: [5, 10, 15, 20, 30, 60, 120] };
 
 // ── Change text, the PctCell way ─────────────────────────────────────────────
 
@@ -151,14 +154,14 @@ function legend(c: Canvas, right: number, y: number, items: { name: string; styl
   }
 }
 
-/** A trend chart card: heading, legend (one entry per distinct series name), native line chart. */
-function chartCard(c: Canvas, x: number, y: number, w: number, h: number, o: { title: string; note: string; spec: ChartShapeSpec }) {
+/** A trend chart card: heading, legend (one entry per distinct series name), drawn line chart. */
+function chartCard(c: Canvas, x: number, y: number, w: number, h: number, o: { title: string; note: string; spec: LineChartSpec }) {
   card(c, x, y, w, h);
   heading(c, x + 12, y + 8, w - 24, o.title, o.note);
   const seen = new Set<string>();
   const items = o.spec.series.filter((s) => !seen.has(s.name) && seen.add(s.name)).map((s) => ({ name: s.name, style: s }));
   legend(c, x + w - 12, y + 9, items);
-  c.chart(x + 4, y + 30, w - 10, h - 34, o.spec);
+  lineChart(c, x + 8, y + 32, w - 18, h - 38, o.spec);
 }
 
 // ── Tiles ────────────────────────────────────────────────────────────────────
@@ -351,7 +354,7 @@ export function storeOverviewSlide(d: StoreDeckData): Canvas {
     note: trendNote(d),
     spec: {
       categories: weekCats(d),
-      format: FMT_K,
+      fmt: FMT_K,
       series: [
         { name: "This year", values: d.weeks.map((w) => w.netSales), ...THIS_YEAR },
         { name: "Last year", values: d.weeks.map((w) => w.py?.netSales ?? null), ...LAST_YEAR },
@@ -384,7 +387,7 @@ export function storeSalesSlide(d: StoreDeckData): Canvas {
   frame(c, d, "Sales");
 
   const cw = (R - L - 2 * 8) / 3;
-  const charts: { title: string; format: string; ty: (number | null)[]; ly: (number | null)[] }[] = [
+  const charts: { title: string; format: Fmt; ty: (number | null)[]; ly: (number | null)[] }[] = [
     { title: "Net Sales", format: FMT_K, ty: d.weeks.map((w) => w.netSales), ly: d.weeks.map((w) => w.py?.netSales ?? null) },
     { title: "Transactions", format: FMT_COUNT, ty: d.weeks.map((w) => w.transactions), ly: d.weeks.map((w) => w.py?.transactions ?? null) },
     { title: "Average Check", format: FMT_USD2, ty: d.weeks.map((w) => w.avgCheck), ly: d.weeks.map((w) => w.py?.avgCheck ?? null) },
@@ -393,7 +396,7 @@ export function storeSalesSlide(d: StoreDeckData): Canvas {
     chartCard(c, L + i * (cw + 8), 72, cw, 130, {
       title: ch.title,
       note: trendNote(d),
-      spec: { categories: weekCats(d), format: ch.format, series: [{ name: "This year", values: ch.ty, ...THIS_YEAR }, { name: "Last year", values: ch.ly, ...LAST_YEAR }] },
+      spec: { categories: weekCats(d), fmt: ch.format, series: [{ name: "This year", values: ch.ty, ...THIS_YEAR }, { name: "Last year", values: ch.ly, ...LAST_YEAR }] },
     });
   });
 
@@ -450,15 +453,15 @@ export function storeLaborSlide(d: StoreDeckData): Canvas {
       note: ch.note,
       spec: {
         categories: weekCats(d),
-        format: ch.format,
+        fmt: ch.format,
         series: [
           { name: "This year", values: d.weeks.map((w) => w[ch.key]), ...THIS_YEAR, labelColor: ink(tone[ch.key](now[ch.key])) },
           // Both ends of a ranged goal (productivity's $82–87), one legend entry;
           // the 50% level gets its own yellow line only where it sits lower.
-          ...((): ChartShapeSpec["series"] => {
+          ...((): LineChartSpec["series"] => {
             const goal = `Goal ${gateLabel(ch.g.target, ch.fmt)}`;
             const hi = highOf(ch.g.target);
-            const lines: ChartShapeSpec["series"] = [{ name: goal, values: flat(d, lowOf(ch.g.target)), ...GOAL }];
+            const lines: LineChartSpec["series"] = [{ name: goal, values: flat(d, lowOf(ch.g.target)), ...GOAL }];
             if (hi != null) lines.push({ name: goal, values: flat(d, hi), ...GOAL });
             if (lowOf(ch.g.threshold) < lowOf(ch.g.target)) lines.push({ name: `50% ${gateLabel(ch.g.threshold, ch.fmt)}`, values: flat(d, lowOf(ch.g.threshold)), ...EDGE });
             return lines;
@@ -611,7 +614,7 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
     note: trendNote(d),
     spec: {
       categories: weekCats(d),
-      format: FMT_PCT1,
+      fmt: FMT_PCT1,
       series: [
         { name: "This store", values: cogs, ...THIS_YEAR, labelColor: ink(cogsTone(cogs[cogs.length - 1])) },
         { name: "Goal 28.5%", values: flat(d, 28.5), ...GOAL },
@@ -624,7 +627,7 @@ export function storeFoodSlide(d: StoreDeckData): Canvas {
     note: `${trendNote(d)} · negative is under theoretical`,
     spec: {
       categories: weekCats(d),
-      format: `0.00"%";(0.00"%")`,
+      fmt: (v) => varPct(v),
       series: [
         { name: "This store", values: vari, ...THIS_YEAR, labelColor: ink(varianceTone(vari[vari.length - 1])) },
         { name: "Goal ±1.0%", values: flat(d, 1), ...GOAL },
@@ -673,7 +676,7 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
     note: trendNote(d),
     spec: {
       categories: weekCats(d),
-      format: FMT_SCORE,
+      fmt: FMT_SCORE,
       ceiling: 100,
       series: [
         { name: "This store", values: osat, ...THIS_YEAR, labelColor: ink(smgTone(osat[osat.length - 1], OSAT)) },
@@ -803,7 +806,7 @@ function nameList(c: Canvas, x: number, y: number, w: number, h: number, title: 
   const rowH = 13;
   const fit = Math.floor((h - 14) / rowH);
   const shown = rows.length > fit ? rows.slice(0, fit - 1) : rows;
-  const maxChars = Math.floor((w - 60) / 3.6);
+  const maxChars = Math.floor((w - 84) / 4.1);
   shown.forEach((r, i) => {
     const ry = y + 13 + i * rowH;
     const left = r.left.length > maxChars ? r.left.slice(0, maxChars - 1) + "…" : r.left;

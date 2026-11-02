@@ -31,31 +31,23 @@ export const C = {
 
 export const FONT = "Geist";
 
-/** A native line chart; lib/wbr/pptxChart.ts writes it. Kept structural here so draw.ts stays dependency-free. */
-export type ChartShapeSpec = {
-  categories: string[];
-  series: { name: string; values: (number | null)[]; color: string; width?: number; dash?: boolean; markers?: boolean; labelLast?: boolean; labelColor?: string }[];
-  format: string;
-  /** Values are written ×scale (1/86400 turns seconds into an Excel time for "m:ss"). */
-  scale?: number;
-  /** Gridline steps to choose from, in unscaled units. */
-  steps?: number[];
-  /** Axis never goes above this (scores top out at 100). */
-  ceiling?: number;
-};
-
 export type TextStyle = {
   size: number;
   color: string;
   bold?: boolean;
   align?: "START" | "CENTER" | "END";
   valign?: "TOP" | "MIDDLE" | "BOTTOM";
+  /** One line, never wrapped — axis and point labels, which must not break if a viewer substitutes a wider font. */
+  noWrap?: boolean;
 };
 
 export type Shape =
   | { kind: "box"; x: number; y: number; w: number; h: number; fill: string; line?: string; round?: boolean; radius?: number }
   | { kind: "text"; x: number; y: number; w: number; h: number; content: string; style: TextStyle }
-  | { kind: "chart"; x: number; y: number; w: number; h: number; spec: ChartShapeSpec }
+  /** An open polyline through `points` (slide points), stroked, unfilled. */
+  | { kind: "path"; points: [number, number][]; color: string; width: number; dash?: boolean }
+  /** A filled circle centred on (cx, cy). */
+  | { kind: "dot"; cx: number; cy: number; r: number; fill: string; line?: string; lineWidth?: number }
   | { kind: "stripes"; x: number; y: number; w: number; h: number; color: string; width: number; gap: number };
 
 /** One slide's shapes, in drawing order (later ones on top). */
@@ -89,9 +81,14 @@ export class Canvas {
     this.shapes.push({ kind: "stripes", x, y, w, h, color, width: opts.width ?? 2, gap: opts.gap ?? 2.5 });
   }
 
-  /** A native PowerPoint line chart filling the box. */
-  chart(x: number, y: number, w: number, h: number, spec: ChartShapeSpec) {
-    this.shapes.push({ kind: "chart", x, y, w, h, spec });
+  /** A stroked polyline — chart lines, gridlines and goal lines (lib/wbr/drawChart). */
+  path(points: [number, number][], color: string, opts: { width?: number; dash?: boolean } = {}) {
+    if (points.length > 1) this.shapes.push({ kind: "path", points, color, width: opts.width ?? 1, dash: opts.dash });
+  }
+
+  /** A filled circle, optionally ringed — the points on a chart line. */
+  dot(cx: number, cy: number, r: number, fill: string, opts: { line?: string; lineWidth?: number } = {}) {
+    this.shapes.push({ kind: "dot", cx, cy, r, fill, ...opts });
   }
 
   /** A rounded chip with centred text — the WoW/YoY and status pills. */
