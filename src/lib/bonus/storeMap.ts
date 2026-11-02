@@ -167,12 +167,12 @@ export const BONUS_STORES: BonusStore[] = [
   //   62802 Cibolo        176 W Borgfeld Rd, Cibolo, TX 78108
   //   62803 Alamo         11903 Alamo Ranch Pkwy, San Antonio, TX 78253
   //   62804 Windcrest     7304 N Interstate 35, Windcrest, TX 78218
-  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "2150 s. clear creek",     netchefLocationId: null, smgUnitKey: "53003", workstreamLocationUuid: null },
-  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "2002 s. 31st",            netchefLocationId: null, smgUnitKey: "53004", workstreamLocationUuid: null },
-  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "1301 farm to market 685", netchefLocationId: null, smgUnitKey: "53005", workstreamLocationUuid: null },
-  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "176 borgfeld",            netchefLocationId: null, smgUnitKey: "62802", workstreamLocationUuid: null },
-  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "11903 alamo ranch",       netchefLocationId: null, smgUnitKey: "62803", workstreamLocationUuid: null },
-  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "7304 n. interstate 35",   netchefLocationId: null, smgUnitKey: "62804", workstreamLocationUuid: null },
+  { storeId: "53003", name: "Killeen",      state: "TX", berryFragment: "2150 s. clear creek",     netchefLocationId: 485, smgUnitKey: "53003", workstreamLocationUuid: null },
+  { storeId: "53004", name: "Temple",       state: "TX", berryFragment: "2002 s. 31st",            netchefLocationId: 587, smgUnitKey: "53004", workstreamLocationUuid: null },
+  { storeId: "53005", name: "Pflugerville", state: "TX", berryFragment: "1301 farm to market 685", netchefLocationId: 555, smgUnitKey: "53005", workstreamLocationUuid: null },
+  { storeId: "62802", name: "Cibolo",       state: "TX", berryFragment: "176 borgfeld",            netchefLocationId: 503, smgUnitKey: "62802", workstreamLocationUuid: null },
+  { storeId: "62803", name: "Alamo",        state: "TX", berryFragment: "11903 alamo ranch",       netchefLocationId: 1045, smgUnitKey: "62803", workstreamLocationUuid: null },
+  { storeId: "62804", name: "Windcrest",    state: "TX", berryFragment: "7304 n. interstate 35",   netchefLocationId: 1131, smgUnitKey: "62804", workstreamLocationUuid: null },
 ];
 
 /**

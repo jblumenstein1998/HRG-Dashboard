@@ -282,6 +282,14 @@ export const LOCATION_NAMES: Record<number, string> = {
   1137: "Beach",
   1002: "White House",
   1303: "Portland",
+  // Texas, on Net-Chef from 2026-11-02 (Net-Chef names: Killeen_53003,
+  // Temple_53004, Pflugerville_53005, Cibolo_62802, SanAntonio_62803/62804).
+  485:  "Killeen",
+  587:  "Temple",
+  555:  "Pflugerville",
+  503:  "Cibolo",
+  1045: "Alamo",
+  1131: "Windcrest",
 };
 
 // ── Report fetch ──────────────────────────────────────────────────────────────

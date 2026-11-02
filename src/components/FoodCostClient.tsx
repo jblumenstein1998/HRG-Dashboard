@@ -6,7 +6,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { FISCAL_YEAR_START, currentPeriod, PERIODS, resolveRange, type RangeKey } from "@/lib/fiscal";
-import { STORE_COLOR, TN_STORES, VA_STORES } from "@/lib/surveyMeta";
+import { STORE_COLOR, TN_STORES, TX_STORES, VA_STORES } from "@/lib/surveyMeta";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, totalLabelFor, type Leader } from "@/components/StoreFilter";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
@@ -916,7 +916,7 @@ function HistoryChart() {
   const [points, setPoints] = useState<PeriodPoint[]>([]);
   const [status, setStatus] = useState<"loading" | "done" | "error">("loading");
   const [visibleStores, setVisibleStores] = useState<Set<string>>(new Set());
-  const [visibleAverages, setVisibleAverages] = useState(new Set(["TN Avg", "VA Avg", "HRG Avg"]));
+  const [visibleAverages, setVisibleAverages] = useState(new Set(["TN Avg", "VA Avg", "TX Avg", "HRG Avg"]));
   const [periodRange, setPeriodRange] = useState<{ start: number; end: number } | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -955,6 +955,7 @@ function HistoryChart() {
 
   const tnNames = TN_STORES.filter(n => storeNames.includes(n));
   const vaNames = VA_STORES.filter(n => storeNames.includes(n));
+  const txNames = TX_STORES.filter(n => storeNames.includes(n));
 
   const range = periodRange ?? { start: 0, end: points.length - 1 };
   const visiblePoints = points.slice(range.start, range.end + 1);
@@ -968,12 +969,14 @@ function HistoryChart() {
     ...pt,
     "TN Avg": avgVals(tnNames, pt),
     "VA Avg": avgVals(vaNames, pt),
+    "TX Avg": avgVals(txNames, pt),
     "HRG Avg": avgVals(storeNames, pt),
   }));
 
-  const AVG_KEYS = ["TN Avg", "VA Avg", "HRG Avg"] as const;
-  const AVG_COLORS: Record<string, string> = { "TN Avg": "#f97316", "VA Avg": "#a855f7", "HRG Avg": "#374151" };
-  const AVG_ACCENT: Record<string, string>  = { "TN Avg": "#c2410c", "VA Avg": "#a855f7", "HRG Avg": "#374151" };
+  // TX only once Net-Chef has Texas numbers in the window, so an empty line never shows.
+  const AVG_KEYS = (txNames.length ? ["TN Avg", "VA Avg", "TX Avg", "HRG Avg"] : ["TN Avg", "VA Avg", "HRG Avg"]) as string[];
+  const AVG_COLORS: Record<string, string> = { "TN Avg": "#f97316", "VA Avg": "#a855f7", "TX Avg": "#0d9488", "HRG Avg": "#374151" };
+  const AVG_ACCENT: Record<string, string>  = { "TN Avg": "#c2410c", "VA Avg": "#a855f7", "TX Avg": "#0f766e", "HRG Avg": "#374151" };
 
   const visibleMax = pointsWithAverages.reduce((max, pt) => {
     for (const name of storeNames) {
@@ -1021,6 +1024,7 @@ function HistoryChart() {
 
   const tnAll = tnNames.length > 0 && tnNames.every(n => visibleStores.has(n));
   const vaAll = vaNames.length > 0 && vaNames.every(n => visibleStores.has(n));
+  const txAll = txNames.length > 0 && txNames.every(n => visibleStores.has(n));
 
   return (
     <div ref={cardRef} className="bg-white rounded-xl border border-gray-200 p-4 mt-6">
@@ -1129,6 +1133,31 @@ function HistoryChart() {
             </label>
           ))}
         </div>
+        {txNames.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none w-8">
+              <input
+                type="checkbox"
+                checked={txAll}
+                onChange={e => toggleGroup(TX_STORES, e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              TX
+            </label>
+            {txNames.map(name => (
+              <label key={name} className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={visibleStores.has(name)}
+                  onChange={() => toggleStore(name)}
+                  style={{ accentColor: STORE_COLOR[name] ?? "#6b7280" }}
+                  className="rounded border-gray-300"
+                />
+                {name}
+              </label>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 border-t border-gray-100">
           {AVG_KEYS.map(key => (
             <label key={key} className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none" style={{ color: AVG_COLORS[key] }}>
