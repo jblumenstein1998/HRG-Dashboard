@@ -12,7 +12,7 @@
 
 import { BONUS_RULES, TRANSACTION_KICKER_FACTOR } from "@/lib/bonus/rules";
 import { fmtGateValue } from "@/lib/bonus/display";
-import type { Condition, Gate } from "@/lib/bonus/types";
+import { POSITION_LABELS, POSITION_ORDER, type Condition, type Gate } from "@/lib/bonus/types";
 
 export type TargetRow = { metric: string; threshold: string; target: string; note?: string };
 export type TargetSection = { title: string; rows: TargetRow[] };
@@ -20,8 +20,8 @@ export type OperatingTargets = {
   northStar: string;
   sections: TargetSection[];
   guardrails: string[];
-  /** Scored or coloured by the dashboard, but not on the sheet. */
-  notOnSheet: TargetRow[];
+  /** Multipliers and one-time bonuses in the binder's plans that the one-page sheet leaves out. */
+  notOnSheet: { earns: string; who: string; pays: string }[];
 };
 
 type Node = { conditions?: Node[]; disqualifiers?: Node[]; categories?: Node[]; multipliers?: Node[]; id?: string; metric?: string };
@@ -185,11 +185,21 @@ export function buildOperatingTargets(): OperatingTargets {
       "Completing another person's ZU",
     ],
     notOnSheet: [
+      // Every category multiplier in the scorecards, read from the rules.
+      ...POSITION_ORDER.flatMap((pos) =>
+        BONUS_RULES[pos].categories.flatMap((cat) =>
+          cat.multipliers.map((m) => ({
+            earns: m.label,
+            who: `${POSITION_LABELS[pos]} · ${cat.label}`,
+            pays: `${m.factor}× category`,
+          })),
+        ),
+      ),
+      // A flat dollar award, recorded on the Quality scorecard and decided on the Bonus tab.
       {
-        metric: "Flagged drive-thru pull-forwards, every week",
-        threshold: "—",
-        target: gate(c("dt_pull_forwards").target, "count"),
-        note: "Drive-Thru Director: 1.25× on Speed of Service when met every week",
+        earns: "Most ArrowStream credits received across all stores",
+        who: "Quality Director · one-time bonus",
+        pays: "$ value of credits",
       },
     ],
   };

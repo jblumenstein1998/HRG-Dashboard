@@ -61,17 +61,16 @@ export default function OperatingTargetsPanel({ targets }: { targets: OperatingT
           </ul>
         </div>
         <div>
-          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Also used, not on the sheet</h3>
+          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Multipliers &amp; bonuses · not on the sheet</h3>
           <table className="w-full">
             <tbody>
               {targets.notOnSheet.map((r) => (
-                <tr key={r.metric} className="border-b border-gray-50 last:border-0">
-                  <td className="py-1 text-gray-700">
-                    {r.metric}
-                    {r.note && <span className="block text-gray-400">{r.note}</span>}
+                <tr key={r.who + r.earns} className="border-b border-gray-50 last:border-0">
+                  <td className="py-1 pr-3 text-gray-700">
+                    {r.earns}
+                    <span className="block text-gray-400">{r.who}</span>
                   </td>
-                  <td className="w-20 py-1 text-right align-top tabular-nums text-gray-500">{r.threshold}</td>
-                  <td className="w-24 py-1 text-right align-top font-semibold tabular-nums text-gray-900">{r.target}</td>
+                  <td className="whitespace-nowrap py-1 text-right align-top font-semibold tabular-nums text-gray-900">{r.pays}</td>
                 </tr>
               ))}
             </tbody>
