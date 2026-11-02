@@ -53,15 +53,23 @@ export default function OperatingTargetsPanel({ targets }: { targets: OperatingT
 
       <div className="grid gap-x-8 gap-y-4 border-t border-gray-100 px-4 py-3 text-xs lg:grid-cols-2">
         <div>
-          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Bonus guardrails · any one zeroes the category</h3>
-          <ul className="list-disc space-y-0.5 pl-4 text-gray-600">
-            {targets.guardrails.map((g) => (
-              <li key={g}>{g}</li>
-            ))}
-          </ul>
+          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Category disqualifiers</h3>
+          <table className="w-full">
+            <tbody>
+              {targets.guardrails.map((g) => (
+                <tr key={g.who + g.text} className="border-b border-gray-50 last:border-0">
+                  <td className="py-1 pr-3 text-gray-700">
+                    {g.text}
+                    <span className="block text-gray-400">{g.who}</span>
+                  </td>
+                  <td className="whitespace-nowrap py-1 text-right align-top font-semibold text-gray-900">0% category</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
         <div>
-          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Multipliers &amp; bonuses</h3>
+          <h3 className="mb-1 font-semibold uppercase tracking-wide text-gray-700">Bonus multipliers</h3>
           <table className="w-full">
             <tbody>
               {targets.notOnSheet.map((r) => (

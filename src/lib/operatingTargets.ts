@@ -19,7 +19,8 @@ export type TargetSection = { title: string; rows: TargetRow[] };
 export type OperatingTargets = {
   northStar: string;
   sections: TargetSection[];
-  guardrails: string[];
+  /** Each category disqualifier, in the sheet's words, with the position and category it zeroes. */
+  guardrails: { text: string; who: string }[];
   /** Multipliers and one-time bonuses in the binder's plans that the one-page sheet leaves out. */
   notOnSheet: { earns: string; who: string; pays: string }[];
 };
@@ -108,6 +109,32 @@ export function buildOperatingTargets(): OperatingTargets {
     return text(`${FAIL[g.cmp]}${g.value}${unit}`);
   };
 
+  /** Where a disqualifier lives: "Quality Director · Food Safety, Compliance & Jolt Execution". */
+  const homeOf = (id: string): string => {
+    for (const pos of POSITION_ORDER) {
+      for (const cat of BONUS_RULES[pos].categories) {
+        if (cat.disqualifiers.some((d) => d.id === id)) return `${POSITION_LABELS[pos]} · ${cat.label}`;
+      }
+    }
+    throw new Error(`Operating targets: no disqualifier "${id}"`);
+  };
+  /**
+   * The worded rows, then any disqualifier in the rules none of them covers —
+   * under its own label — so a new one can't go missing from the list.
+   */
+  const guardrails = (rows: { ids: string[]; text: string }[]) => {
+    const covered = new Set(rows.flatMap((r) => r.ids));
+    const out = rows.map((r) => ({ text: r.text, who: homeOf(r.ids[0]) }));
+    for (const pos of POSITION_ORDER) {
+      for (const cat of BONUS_RULES[pos].categories) {
+        for (const d of cat.disqualifiers) {
+          if (!covered.has(d.id)) out.push({ text: d.label, who: `${POSITION_LABELS[pos]} · ${cat.label}` });
+        }
+      }
+    }
+    return out;
+  };
+
   return {
     northStar: `Grow transactions year over year in EVERY week of the bonus period — ${TRANSACTION_KICKER_FACTOR}× total bonus kicker across all six plans; one missed week means no kicker.`,
     sections: [
@@ -173,17 +200,23 @@ export function buildOperatingTargets(): OperatingTargets {
         ],
       },
     ],
-    // In the sheet's order and words.
-    guardrails: [
-      dq("dt_days_missing_target", (f) => `SOS ${f} missed target days per pay period`),
-      dq("dt_accuracy_weekly_floor", (f) => `Accuracy ${f} in any week`),
-      dq("hosp_osat_weekly_floor", (f) => `SMG ${f} per plan`),
-      "Dishonest weekly mocks",
-      dq("q_health_inspection_score", (f) => `County health score ${f} / failure, high-risk RER or Food Safety, or guest-area cleanliness violation`),
-      dq("q_jolt_on_time", (f) => `Jolt on-time ${f}`),
-      dq("t_bin_management", (f) => `Bin management ${f}`),
-      "Completing another person's ZU",
-    ],
+    guardrails: guardrails([
+      // In the sheet's order and words, split where one line covers two plans.
+      { ids: ["dt_days_missing_target"], text: dq("dt_days_missing_target", (f) => `SOS ${f} missed target days per pay period`) },
+      { ids: ["dt_accuracy_weekly_floor"], text: dq("dt_accuracy_weekly_floor", (f) => `Accuracy ${f} in any week`) },
+      {
+        ids: ["hosp_osat_weekly_floor", "hosp_friendliness_weekly_floor", "hosp_cleanliness_weekly_floor"],
+        text: dq("hosp_osat_weekly_floor", (f) => `SMG ${f} in any week (OSAT, Friendliness or Cleanliness)`),
+      },
+      { ids: ["q_mock_steritech_dishonest"], text: "Dishonest weekly mock Food Safety Steritech" },
+      { ids: ["agm_mock_rer_dishonest"], text: "Dishonest weekly mock RER Steritech" },
+      { ids: ["q_health_inspection_score"], text: dq("q_health_inspection_score", (f) => `County health score ${f} / failure`) },
+      { ids: ["q_high_risk"], text: "High-risk RER or Food Safety" },
+      { ids: ["hosp_health_cleanliness_violation"], text: "Guest-area cleanliness violation on a county health inspection" },
+      { ids: ["q_jolt_on_time"], text: dq("q_jolt_on_time", (f) => `Jolt on-time ${f}`) },
+      { ids: ["t_bin_management"], text: dq("t_bin_management", (f) => `Bin management ${f}`) },
+      { ids: ["gm_zu_completed_for_someone"], text: "Completing another person's ZU" },
+    ]),
     notOnSheet: [
       // Every category multiplier in the scorecards, read from the rules.
       ...POSITION_ORDER.flatMap((pos) =>
