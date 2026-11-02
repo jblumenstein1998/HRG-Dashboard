@@ -4,7 +4,6 @@ const nextConfig: NextConfig = {
   // The WBR template is read from disk at request time, which the tracer can't
   // see; without this the deployed route has no template to fill.
   outputFileTracingIncludes: {
-    "/api/wbr/generate": ["./src/lib/wbr/template/**/*"],
     "/api/wbr/store": ["./src/lib/wbr/template/**/*"],
   },
   // The old /smg and /guest-satisfaction tabs were replaced by the survey-data

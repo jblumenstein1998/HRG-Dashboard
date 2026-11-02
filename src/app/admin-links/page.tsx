@@ -1,8 +1,6 @@
 import AdminTabClient from "@/components/AdminTabClient";
 import { requireTab } from "@/lib/users/access";
 import { listLeaders } from "@/lib/users/leaders";
-import { todayCentralISO } from "@/lib/parRollup";
-import { recentWbrWeeks } from "@/lib/wbr/weeks";
 import { buildOperatingTargets } from "@/lib/operatingTargets";
 
 /**
@@ -21,7 +19,6 @@ export default async function AdminTabPage() {
       tabs={viewer.position.tabs}
       isAdmin={viewer.position.isAdmin}
       leaders={leaders}
-      wbrWeeks={recentWbrWeeks(todayCentralISO(), 26)}
       targets={buildOperatingTargets()}
     />
   );

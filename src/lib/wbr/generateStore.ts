@@ -8,10 +8,13 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { TEMPLATE_PATH } from "@/lib/wbr/generate";
+import path from "node:path";
 import { spliceDeck } from "@/lib/wbr/pptx";
 import { buildStoreDeck } from "@/lib/wbr/storeData";
 import { storeDeckSlides } from "@/lib/wbr/slidesStore";
+
+/** Bundled with the route by outputFileTracingIncludes in next.config.ts. */
+const TEMPLATE_PATH = path.join(process.cwd(), "src/lib/wbr/template/wbr-template.pptx");
 
 const md = (iso: string) => `${Number(iso.slice(5, 7))}.${Number(iso.slice(8, 10))}`;
 
