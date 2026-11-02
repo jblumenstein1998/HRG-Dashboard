@@ -12,6 +12,8 @@
 import { FONT } from "@/lib/wbr/draw";
 
 export type ChartSeries = {
+  /** Colour of the last point's label, when it should read against a goal. */
+  labelColor?: string;
   name: string;
   values: (number | null)[];
   color: string;
@@ -28,6 +30,12 @@ export type ChartSpec = {
   series: ChartSeries[];
   /** Excel number format for the axis and labels, e.g. `"$"#,##0.0,"K"`. */
   format: string;
+  /** Values are written ×scale (1/86400 turns seconds into an Excel time for "m:ss"). */
+  scale?: number;
+  /** Gridline steps to choose from, in unscaled units. */
+  steps?: number[];
+  /** Axis never goes above this (scores top out at 100). */
+  ceiling?: number;
 };
 
 const hex = (c: string) => c.replace("#", "").toUpperCase();
@@ -49,12 +57,14 @@ function niceStep(raw: number): number {
  * weekly figures move a few percent, and from zero every line is flat. Top gets
  * room for the last point's label.
  */
-export function axisRange(values: number[]): { min: number; max: number; step: number } {
+export function axisRange(values: number[], steps?: number[]): { min: number; max: number; step: number } {
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = hi - lo || Math.abs(hi) * 0.1 || 1;
-  const step = niceStep(span / 3);
-  const min = Math.max(0, Math.floor((lo - span * 0.15) / step) * step);
+  const step = steps?.length ? (steps.find((s) => s >= span / 4) ?? steps[steps.length - 1]) : niceStep(span / 3);
+  const floor = Math.floor((lo - span * 0.15) / step) * step;
+  // Only data that never goes negative keeps a floor at zero (variance does go negative).
+  const min = lo >= 0 ? Math.max(0, floor) : floor;
   const max = Math.ceil((hi + span * 0.25) / step) * step;
   return { min, max, step };
 }
@@ -62,7 +72,10 @@ export function axisRange(values: number[]): { min: number; max: number; step: n
 export function chartXml(spec: ChartSpec): string {
   const n = spec.categories.length;
   const all = spec.series.flatMap((s) => s.values).filter((v): v is number => v != null);
-  const range = all.length ? axisRange(all) : null;
+  const k = spec.scale ?? 1;
+  const raw = all.length ? axisRange(all, spec.steps) : null;
+  const range = raw && spec.ceiling != null ? { ...raw, max: Math.min(raw.max, spec.ceiling) } : raw;
+  const num = (v: number) => Number((v * k).toPrecision(12));
 
   const cat =
     `<c:cat><c:strLit><c:ptCount val="${n}"/>` +
@@ -84,13 +97,13 @@ export function chartXml(spec: ChartSpec): string {
       const dLbls =
         s.labelLast && last >= 0
           ? `<c:dLbls><c:dLbl><c:idx val="${last}"/><c:numFmt formatCode="${esc(spec.format)}" sourceLinked="0"/>` +
-            `<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${txPr(8, s.color, true)}<c:dLblPos val="t"/>` +
+            `<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${txPr(8, s.labelColor ?? s.color, true)}<c:dLblPos val="t"/>` +
             `<c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>` +
             `${off}</c:dLbls>`
           : "";
       const val =
         `<c:val><c:numLit><c:formatCode>${esc(spec.format)}</c:formatCode><c:ptCount val="${n}"/>` +
-        s.values.map((v, i) => (v == null ? "" : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`)).join("") +
+        s.values.map((v, i) => (v == null ? "" : `<c:pt idx="${i}"><c:v>${num(v)}</c:v></c:pt>`)).join("") +
         `</c:numLit></c:val>`;
       return (
         `<c:ser><c:idx val="${k}"/><c:order val="${k}"/><c:tx><c:v>${esc(s.name)}</c:v></c:tx>` +
@@ -100,7 +113,7 @@ export function chartXml(spec: ChartSpec): string {
     .join("");
 
   const scaling = range
-    ? `<c:scaling><c:orientation val="minMax"/><c:max val="${range.max}"/><c:min val="${range.min}"/></c:scaling>`
+    ? `<c:scaling><c:orientation val="minMax"/><c:max val="${num(range.max)}"/><c:min val="${num(range.min)}"/></c:scaling>`
     : `<c:scaling><c:orientation val="minMax"/></c:scaling>`;
 
   return (
@@ -116,7 +129,7 @@ export function chartXml(spec: ChartSpec): string {
     `<c:majorGridlines><c:spPr><a:ln w="6350">${solid("#e5e7eb")}<a:prstDash val="dash"/></a:ln></c:spPr></c:majorGridlines>` +
     `<c:numFmt formatCode="${esc(spec.format)}" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/>` +
     `<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>${txPr(7, "#9ca3af")}` +
-    `<c:crossAx val="5001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/>${range ? `<c:majorUnit val="${range.step}"/>` : ""}</c:valAx>` +
+    `<c:crossAx val="5001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/>${range ? `<c:majorUnit val="${num(range.step)}"/>` : ""}</c:valAx>` +
     `<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:plotArea><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>` +
     `<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>${txPr(7, "#9ca3af")}</c:chartSpace>`
   );

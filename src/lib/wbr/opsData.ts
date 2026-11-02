@@ -39,6 +39,8 @@ export type DriveThru = {
   nonPeakWindowSecs: number | null;
   /** Weekly-equivalent PAR sales — picks the goal tier, as on the Drive-Thru tab. */
   tierSales: number | null;
+  /** Berry's daypart breakdown (lib/dayparts indexes); absent on roll-ups. */
+  dayparts?: { index: number; laneSecs: number | null; windowSecs: number | null; cars: number | null }[];
 };
 
 export type StoreOps = {
@@ -85,6 +87,12 @@ function drive(m: StoreMetrics | undefined, tierSales: number | null): DriveThru
     peakWindowSecs: parseMMSS(m.peak.window_service),
     nonPeakWindowSecs: parseMMSS(m.nonpeak.window_service),
     tierSales,
+    dayparts: m.dayparts.map((dp) => ({
+      index: dp.index,
+      laneSecs: parseMMSS(dp.lane_total),
+      windowSecs: parseMMSS(dp.window_service),
+      cars: dp.total_cars,
+    })),
   };
 }
 

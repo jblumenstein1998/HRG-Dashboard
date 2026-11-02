@@ -72,7 +72,7 @@ export default function StoreDeckPanel({
         <div className="mr-auto">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-900">Store presentation</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Downloads a PowerPoint for one store and week: overview, sales, labor, food cost and drive-thru.
+            Downloads a PowerPoint for one store and week: overview, sales, labor, drive-thru, food cost, SMG and compliance.
           </p>
         </div>
         <select
@@ -122,7 +122,7 @@ export default function StoreDeckPanel({
         </button>
       </div>
 
-      {busy && <p className="mt-3 text-xs text-gray-500">This takes up to half a minute.</p>}
+      {busy && <p className="mt-3 text-xs text-gray-500">This takes up to a minute.</p>}
       {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
       {result && (
         <div className="mt-3 text-xs text-gray-700 space-y-1">

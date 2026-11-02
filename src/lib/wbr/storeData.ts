@@ -17,6 +17,7 @@ import { ALL_STORES } from "@/lib/stores";
 import { WBR_TARGETS, type StoreTargets } from "@/lib/wbr/targets";
 import { districtLeaders } from "@/lib/wbr/data";
 import { buildOpsData, type OpsData, type StoreOps } from "@/lib/wbr/opsData";
+import { buildExtras, type Extras } from "@/lib/wbr/storeExtras";
 
 /** Weeks of history on the trend charts, the deck's week included. */
 export const STORE_TREND_WEEKS = 8;
@@ -56,6 +57,8 @@ export type StoreDeckData = {
   targets: StoreTargets | null;
   ops: StoreOps | null;
   opsSpans: Pick<OpsData, "week" | "ptd">;
+  /** Trends, SMG, ZCases and compliance — lib/wbr/storeExtras. */
+  extras: Extras;
   warnings: string[];
 };
 
@@ -121,7 +124,8 @@ export async function buildStoreDeck(label: string, weekEnd?: string): Promise<S
     };
   });
 
-  const warnings = [...ops.gaps];
+  const extras = await buildExtras({ label, storeId: loc.storeId, weeks, ptd: { start: ops.ptd.start, end: ops.ptd.end } });
+  const warnings = [...ops.gaps, ...extras.warnings];
   const missing = days.filter((d) => !d.now).map((d) => d.date);
   if (missing.length) warnings.push(`${label}: no PAR data for ${missing.join(", ")} — the week's numbers are short.`);
   const targets = WBR_TARGETS[label] ?? null;
@@ -138,6 +142,7 @@ export async function buildStoreDeck(label: string, weekEnd?: string): Promise<S
     targets,
     ops: ops.stores.get(label) ?? null,
     opsSpans: { week: ops.week, ptd: ops.ptd },
+    extras,
     warnings,
   };
 }

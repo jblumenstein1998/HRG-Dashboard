@@ -3,8 +3,8 @@ import { requireTabApi } from "@/lib/users/adminGuard";
 import { generateStoreDeck } from "@/lib/wbr/generateStore";
 import { storeDeckOptions } from "@/lib/wbr/storeData";
 
-// Two PAR reads, three Net-Chef reports and two Berry reads for one store.
-export const maxDuration = 60;
+// PAR, Net-Chef (11 reports), Berry, SMG, ZCases, Schoox, Jolt and a period of Slack history for one store.
+export const maxDuration = 120;
 
 /**
  * POST { store: "<store label>", weekEnd?: "YYYY-MM-DD" (a Sunday) }

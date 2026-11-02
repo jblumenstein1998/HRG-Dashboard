@@ -34,8 +34,14 @@ export const FONT = "Geist";
 /** A native line chart; lib/wbr/pptxChart.ts writes it. Kept structural here so draw.ts stays dependency-free. */
 export type ChartShapeSpec = {
   categories: string[];
-  series: { name: string; values: (number | null)[]; color: string; width?: number; dash?: boolean; markers?: boolean; labelLast?: boolean }[];
+  series: { name: string; values: (number | null)[]; color: string; width?: number; dash?: boolean; markers?: boolean; labelLast?: boolean; labelColor?: string }[];
   format: string;
+  /** Values are written ×scale (1/86400 turns seconds into an Excel time for "m:ss"). */
+  scale?: number;
+  /** Gridline steps to choose from, in unscaled units. */
+  steps?: number[];
+  /** Axis never goes above this (scores top out at 100). */
+  ceiling?: number;
 };
 
 export type TextStyle = {
