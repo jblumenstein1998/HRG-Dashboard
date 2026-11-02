@@ -110,22 +110,25 @@ const COUNT_COLS: { key: ColKey; label: string; title: string }[] = [
   { key: "zcases", label: "zCases", title: "zCases whose guest visit fell during their shift" },
   {
     key: "slowLane",
-    label: "Total time > 1 min over goal",
+    label: "Total time >1 min over",
     title: "Dayparts where total lane time was more than 1:00 over the 100% goal (3:40 at ≤ $85k/week, 4:00 above)",
   },
   {
     key: "slowWindow",
-    label: "Window > 30s over goal",
+    label: "Window >30s over",
     title: "Dayparts where window time was more than 0:30 over the 100% goal (1:10 at ≤ $45k/week, 0:57 above)",
   },
-  { key: "joltProtein", label: "Jolt Protein missed / late", title: "Protein Traceability lists missed or late, while the list was open" },
-  { key: "joltTimeTemp", label: "Jolt Time Temp missed / late", title: "Time/Temperature lists missed or late, while the list was open" },
-  { key: "slackMissedLate", label: "Slack missed / late", title: "Slack reports missed or late, on the clock at the deadline" },
+  { key: "joltProtein", label: "Jolt Protein missed/late", title: "Protein Traceability lists missed or late, while the list was open" },
+  { key: "joltTimeTemp", label: "Jolt Time Temp missed/late", title: "Time/Temperature lists missed or late, while the list was open" },
+  { key: "slackMissedLate", label: "Slack missed/late", title: "Slack reports missed or late, on the clock at the deadline" },
   { key: "slackAccuracyPct", label: "Slack % accuracy", title: "Figures accurate ÷ figures posted, on reports due while on the clock" },
   { key: "total", label: "Total", title: "All the counts added together (everything but Slack % accuracy) — lower is better" },
 ];
 
 const POSITION_RANK: Record<string, number> = { "General Manager": 0, AGM: 1, Director: 2 };
+
+/** How a position prints in the table — short, so the column stays narrow. */
+const POSITION_SHORT: Record<string, string> = { "General Manager": "GM", "Assistant General Manager": "AGM" };
 
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -221,8 +224,8 @@ export default function ManagementClient({
       onClick={() =>
         setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: align === "left" ? "asc" : "desc" }))
       }
-      className={`px-3 py-2 font-medium cursor-pointer select-none hover:text-gray-800 align-bottom leading-tight ${
-        wrap ? "w-24 min-w-[5.5rem]" : "whitespace-nowrap"
+      className={`px-2 py-2 font-medium cursor-pointer select-none hover:text-gray-800 align-bottom leading-tight ${
+        wrap ? "w-[4.25rem] min-w-[4.25rem]" : "whitespace-nowrap"
       } ${align === "right" ? "text-right" : "text-left"}`}
     >
       {label}
@@ -399,12 +402,12 @@ export default function ManagementClient({
               )}
               {rows.map((r) => (
                 <tr key={r.uuid} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
-                  <td className="px-3 py-1.5 font-medium text-gray-900 whitespace-nowrap">
+                  <td className="px-2 py-1.5 font-medium text-gray-900 whitespace-nowrap">
                     {r.name}
                     {/* Zeros only mean a clean record if they were there to count. */}
                     {r.caveat && (
                       <span
-                        className="ml-2 text-[10px] font-normal text-gray-400"
+                        className="block text-[10px] font-normal leading-tight text-gray-400"
                         title={
                           r.caveat === "unmatched"
                             ? "Not linked to a PAR employee, so nothing can be counted for them — check Staffing's reconciliation"
@@ -415,13 +418,13 @@ export default function ManagementClient({
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.position}</td>
-                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.storeName ?? "—"}</td>
-                  <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums whitespace-nowrap">{pay(r)}</td>
+                  <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap" title={r.position}>{POSITION_SHORT[r.position] ?? r.position}</td>
+                  <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{r.storeName ?? "—"}</td>
+                  <td className="px-2 py-1.5 text-right text-gray-600 tabular-nums whitespace-nowrap">{pay(r)}</td>
                   {COUNT_COLS.map((c) => {
                     if (c.key === "slackAccuracyPct") {
                       return (
-                        <td key={c.key} className="px-3 py-1.5 text-right tabular-nums text-gray-700" title={`${r.slackFigures} figures`}>
+                        <td key={c.key} className="px-2 py-1.5 text-right tabular-nums text-gray-700" title={`${r.slackFigures} figures`}>
                           {r.slackAccuracyPct === null ? "—" : `${r.slackAccuracyPct.toFixed(1)}%`}
                         </td>
                       );
@@ -429,14 +432,14 @@ export default function ManagementClient({
                     if (c.key === "total") {
                       const t = total(r);
                       return (
-                        <td key={c.key} className={`px-3 py-1.5 text-right tabular-nums font-semibold border-l border-gray-100 ${t ? "text-gray-900" : "text-gray-300"}`}>
+                        <td key={c.key} className={`px-2 py-1.5 text-right tabular-nums font-semibold border-l border-gray-100 ${t ? "text-gray-900" : "text-gray-300"}`}>
                           {t ?? "—"}
                         </td>
                       );
                     }
                     const v = r[c.key as (typeof TOTAL_OF)[number]];
                     return (
-                      <td key={c.key} className={`px-3 py-1.5 text-right tabular-nums ${v > 0 ? "text-gray-900 font-medium" : "text-gray-300"}`}>
+                      <td key={c.key} className={`px-2 py-1.5 text-right tabular-nums ${v > 0 ? "text-gray-900 font-medium" : "text-gray-300"}`}>
                         {v}
                       </td>
                     );
