@@ -19,6 +19,7 @@ import { C, Canvas, type ChartShapeSpec, type Tone } from "@/lib/wbr/draw";
 import type { DayFigures, StoreDeckData } from "@/lib/wbr/storeData";
 import type { DriveThru } from "@/lib/wbr/opsData";
 import { SMG_METRICS } from "@/lib/wbr/storeExtras";
+import { LOWER_IS_BETTER } from "@/lib/surveyMeta";
 import type { SlackDay } from "@/lib/slackReports";
 import { SLACK_SLOTS } from "@/lib/slackReports";
 import { change, count, usd0, usd2, weekSpan } from "@/lib/wbr/slides";
@@ -614,21 +615,29 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
   const latest = smgLatest(d);
   const sw = d.extras.smgWeeks;
 
-  // Latest week, one tile per item.
+  // Latest week, one tile per item, with its goal and 50% level.
   tileRow(
     c,
     72,
-    52,
+    60,
     SMG_METRICS.map((m) => {
       const v = latest?.scores[m.name] ?? null;
-      return { label: m.label, value: smgPct(v), tone: smgTone(v, m.name), size: 15, lines: m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : [] };
+      // The SMG tab's bands (surveyMeta.scoreTone): 80 / 75, or ≤5 / ≤10 where lower is better.
+      const goals = LOWER_IS_BETTER.test(m.name) ? "Goal ≤5% · 50% ≤10%" : "Goal 80% · 50% 75%";
+      return {
+        label: m.label,
+        value: smgPct(v),
+        tone: smgTone(v, m.name),
+        size: 15,
+        lines: [[{ text: goals }], ...(m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : [])],
+      };
     }),
   );
 
   // OSAT trend, left; weekly scores by item, right.
   const half = (R - L - 8) / 2;
   const osat = sw.map((w) => w?.scores[OSAT] ?? null);
-  chartCard(c, L, 132, half, 150, {
+  chartCard(c, L, 140, half, 142, {
     title: "Overall Satisfaction",
     note: trendNote(d),
     spec: {
@@ -651,7 +660,7 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
     cells: [{ text: m.label, bold: false, color: C.gray900 }, ...shown.map(({ s }) => { const v = s?.scores[m.name] ?? null; return goalCell(smgPct(v), smgTone(v, m.name)); })] as Cell[],
   }));
   rows.push({ cells: [{ text: "Surveys", bold: false, color: C.gray500 }, ...shown.map(({ s }) => ({ text: s?.responses != null ? String(s.responses) : "—", color: C.gray500, bold: false }))] });
-  table(c, L + half + 8, 132, cols, rows, 18.5);
+  table(c, L + half + 8, 140, cols, rows, 17.3);
 
   // ZCases
   const z = d.extras.zcases;
