@@ -10,6 +10,11 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
   const viewer = await requireTab("/management");
   const leaders = await listLeaders();
   const q = await searchParams;
+  const deckStores = storeDeckOptions();
+  // The ribbon's leaders, counting only the stores a deck can be built for.
+  const deckLeaders = leaders
+    .map((l) => ({ id: l.id, name: l.name, stores: deckStores.filter((s) => l.stores.includes(s.label)).length }))
+    .filter((l) => l.stores > 0);
   return (
     <ManagementClient
       tabs={viewer.position.tabs}
@@ -21,9 +26,11 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
         viewer.user.email
           ? {
               weeks: recentWbrWeeks(todayCentralISO(), 26),
-              stores: storeDeckOptions(),
+              stores: deckStores,
+              leaders: deckLeaders,
               driveResult: driveResultOf(q),
               initialStore: one(q.store),
+              initialLeader: one(q.leader),
               initialWeekEnd: one(q.weekEnd),
             }
           : null

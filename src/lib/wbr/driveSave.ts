@@ -8,13 +8,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getViewer } from "@/lib/users/access";
 import { DRIVE_COOKIE, exchangeDriveCode, saveDeckToDrive } from "@/lib/google/drive";
-import { generateStoreDeck } from "@/lib/wbr/generateStore";
+import { generateStoreDeck, resolveDeckTarget } from "@/lib/wbr/generateStore";
 
 export async function finishDriveSave(request: NextRequest): Promise<NextResponse> {
   const params = request.nextUrl.searchParams;
   const stash = request.cookies.get(DRIVE_COOKIE)?.value ?? "";
   const [expectedState, verifier, payload] = stash.split(".");
-  let wanted: { store?: string; weekEnd?: string } = {};
+  let wanted: { store?: string; leader?: string; weekEnd?: string } = {};
   try {
     wanted = JSON.parse(Buffer.from(payload ?? "", "base64url").toString("utf8") || "{}");
   } catch {
@@ -24,7 +24,7 @@ export async function finishDriveSave(request: NextRequest): Promise<NextRespons
   const done = (q: Record<string, string>) => {
     const url = request.nextUrl.clone();
     url.pathname = "/management";
-    url.search = `?${new URLSearchParams({ ...q, store: wanted.store ?? "", weekEnd: wanted.weekEnd ?? "" })}`;
+    url.search = `?${new URLSearchParams({ ...q, store: wanted.store ?? "", leader: wanted.leader ?? "", weekEnd: wanted.weekEnd ?? "" })}`;
     const res = NextResponse.redirect(url);
     res.cookies.delete(DRIVE_COOKIE);
     return res;
@@ -33,7 +33,7 @@ export async function finishDriveSave(request: NextRequest): Promise<NextRespons
 
   if (params.get("error")) return fail(params.get("error") === "access_denied" ? "Google Drive access wasn't allowed." : params.get("error")!);
   const code = params.get("code");
-  if (!code || !expectedState || !verifier || params.get("state") !== expectedState || !wanted.store) {
+  if (!code || !expectedState || !verifier || params.get("state") !== expectedState || !(wanted.store || wanted.leader)) {
     return fail("That save expired or couldn't be verified. Please try again.");
   }
 
@@ -46,7 +46,11 @@ export async function finishDriveSave(request: NextRequest): Promise<NextRespons
     if (email !== viewer.user.email.toLowerCase()) {
       return fail(`Google returned ${email}, but you're signed in as ${viewer.user.email}.`);
     }
-    const deck = await generateStoreDeck({ store: wanted.store, weekEnd: wanted.weekEnd || undefined });
+    // Resolved again rather than carried from the start leg: a leader's stores
+    // may have changed on Users & Access in between.
+    const target = await resolveDeckTarget({ store: wanted.store, leader: wanted.leader });
+    if (!target) return fail(wanted.leader ? "None of that leader's stores are on PAR." : "That store isn't on PAR.");
+    const deck = await generateStoreDeck({ ...target, weekEnd: wanted.weekEnd || undefined });
     const name = deck.fileName.replace(/\.pptx$/i, "");
     const saved = await saveDeckToDrive(accessToken, name, deck.file);
     return done({ drive: "saved", url: saved.url, name, warn: JSON.stringify(deck.warnings) });

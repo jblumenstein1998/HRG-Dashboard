@@ -5,8 +5,9 @@ import { findByEmail, recordLogin } from "@/lib/users/store";
 import { DRIVE_STATE_PREFIX } from "@/lib/google/drive";
 import { finishDriveSave } from "@/lib/wbr/driveSave";
 
-// A Drive save builds and uploads a deck on the way back, which takes a few seconds.
-export const maxDuration = 120;
+// A Drive save builds and uploads a deck on the way back — a leader's deck,
+// every one of their stores, can take a couple of minutes.
+export const maxDuration = 300;
 
 /**
  * Where Google sends the browser back.

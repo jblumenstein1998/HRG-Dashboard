@@ -6,15 +6,17 @@ import TabOptions from "@/components/TabOptions";
 import { PERIODS } from "@/lib/fiscal";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
 import type { Tab } from "@/lib/users/tabs";
-import StoreDeckPanel, { type DriveResult } from "@/components/StoreDeckPanel";
+import StoreDeckPanel, { type DeckLeader, type DriveResult } from "@/components/StoreDeckPanel";
 import type { WbrWeekOption } from "@/lib/wbr/weeks";
 
 /** The store presentation's inputs; null hides it (anyone not signed in with Google). */
 type DeckProps = {
   weeks: WbrWeekOption[];
   stores: { label: string; section: string }[];
+  leaders: DeckLeader[];
   driveResult: DriveResult | null;
   initialStore: string;
+  initialLeader: string;
   initialWeekEnd: string;
 } | null;
 
@@ -348,8 +350,10 @@ export default function ManagementClient({
           <StoreDeckPanel
             weeks={deck.weeks}
             stores={deck.stores}
+            leaders={deck.leaders}
             driveResult={deck.driveResult}
             initialStore={deck.initialStore}
+            initialLeader={deck.initialLeader}
             initialWeekEnd={deck.initialWeekEnd}
           />
         )}

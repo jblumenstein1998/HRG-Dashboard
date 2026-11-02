@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getViewer } from "@/lib/users/access";
 import { createPkce, googleConfigured, randomToken } from "@/lib/users/google";
 import { buildDriveAuthUrl, DRIVE_COOKIE, DRIVE_STATE_PREFIX } from "@/lib/google/drive";
-import { storeDeckOptions } from "@/lib/wbr/storeData";
+import { resolveDeckTarget } from "@/lib/wbr/generateStore";
 
 /**
  * GET /api/wbr/drive/start?store=<label>&weekEnd=YYYY-MM-DD
+ *  or ?leader=<leader id>&weekEnd=… for every store that leader covers
  *
  * Begins "Save to Google Drive" for the store presentation: checks the person
  * may make decks (the Management tab) and signs in with Google (a shared store login
@@ -28,15 +29,17 @@ export async function GET(request: NextRequest) {
   if (!googleConfigured()) return back("Google isn't configured on this deployment.");
 
   const p = request.nextUrl.searchParams;
-  const store = storeDeckOptions().find((s) => s.label === p.get("store"))?.label;
-  if (!store) return back("Pick a store.");
+  const leader = p.get("leader") ?? "";
+  const store = leader ? "" : (p.get("store") ?? "");
+  const target = await resolveDeckTarget({ store, leader });
+  if (!target) return back(leader ? "None of that leader's stores are on PAR." : "Pick a store.");
   const weekEnd = /^\d{4}-\d{2}-\d{2}$/.test(p.get("weekEnd") ?? "") ? p.get("weekEnd")! : "";
 
   const state = DRIVE_STATE_PREFIX + randomToken(16);
   const { verifier, challenge } = await createPkce();
   const res = NextResponse.redirect(buildDriveAuthUrl({ origin: request.nextUrl.origin, state, challenge, email: viewer.user.email }));
   // What to build rides with the state; httpOnly, lax (the return is a cross-site redirect), ten minutes.
-  res.cookies.set(DRIVE_COOKIE, `${state}.${verifier}.${Buffer.from(JSON.stringify({ store, weekEnd })).toString("base64url")}`, {
+  res.cookies.set(DRIVE_COOKIE, `${state}.${verifier}.${Buffer.from(JSON.stringify({ store, leader, weekEnd })).toString("base64url")}`, {
     httpOnly: true,
     secure: request.nextUrl.protocol === "https:",
     sameSite: "lax",
