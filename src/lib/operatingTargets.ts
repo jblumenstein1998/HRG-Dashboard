@@ -58,20 +58,32 @@ export function buildOperatingTargets(): OperatingTargets {
     return x;
   };
 
-  /** One row, or one per sales tier ("… | sales ≤$45k/wk"). */
   /**
+   * One row, or one per sales tier ("… | sales ≤$45k/wk").
+   *
    * `allOrNothing`: the sheet gives no threshold — the rules set threshold =
    * target so the category pays all or nothing — and prints "—" for it.
    * `words`: print these instead of the gates (Living Our Values' Meets /
    * Exceeds, which the rules hold as display gates on a ten-point review).
+   * `counts`: the gates' numbers in the sheet's words ("1 training", "2 ready").
    */
   const row = (
     id: string,
     metric: string,
-    opts: { note?: string; target?: (t: string) => string; both?: (s: string) => string; allOrNothing?: boolean; words?: [string, string] } = {},
+    opts: {
+      note?: string;
+      target?: (t: string) => string;
+      both?: (s: string) => string;
+      allOrNothing?: boolean;
+      words?: [string, string];
+      counts?: [string, string];
+    } = {},
   ): TargetRow[] => {
     const x = c(id);
     if (opts.words) return [{ metric, threshold: opts.words[0], target: opts.words[1], note: opts.note }];
+    if (opts.counts) {
+      return [{ metric, threshold: `${x.threshold.value} ${opts.counts[0]}`, target: `${x.target.value} ${opts.counts[1]}`, note: opts.note }];
+    }
     const b = opts.both ?? ((s: string) => s);
     const t = (s: string) => (opts.target ?? ((v: string) => v))(b(s));
     if (opts.allOrNothing) return [{ metric, threshold: "—", target: t(gate(x.target, x.unit)), note: opts.note }];
@@ -135,7 +147,7 @@ export function buildOperatingTargets(): OperatingTargets {
           ...row("t_retention_30", "30-day new-hire retention"),
           ...row("t_retention_60", "60-day new-hire retention"),
           ...row("t_retention_90", "90-day new-hire retention"),
-          ...row("t_shift_lead_pipeline", "Shift Lead bench (candidates)"),
+          ...row("t_shift_lead_pipeline", "Shift Lead bench", { counts: ["training", "ready"] }),
         ],
       },
       {
