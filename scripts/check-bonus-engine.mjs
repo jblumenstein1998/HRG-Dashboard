@@ -59,7 +59,7 @@ try {
   const perfectDT = new Map(Object.entries({
     weeklyEquivalentSales: 40000,
     dtWindowSecs: 65, dtTotalSecs: 210, dtDaysMissingTarget: 0, dtMaxWeeklyPullForwards: 3,
-    smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70,
+    smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70, smgResponses: 70,
     lov_driveThru: 10, txnAllWeeksGrew: 1,
   }));
   let r = scorePosition("driveThru", "36001", "P7 FY2026", perfectDT);
@@ -105,7 +105,7 @@ try {
   const bigStore = new Map(Object.entries({
     weeklyEquivalentSales: 90000,
     dtWindowSecs: 56, dtTotalSecs: 235, dtDaysMissingTarget: 0, dtMaxWeeklyPullForwards: 9,
-    smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70,
+    smgAccuracy: 92, smgOsat: 82, smgAccuracyMinWeekly: 70, smgResponses: 70,
     lov_driveThru: 10, txnAllWeeksGrew: 0, dt_line_busting: 85,
   }));
   r = scorePosition("driveThru", "57004", "P7 FY2026", bigStore);
@@ -168,6 +168,14 @@ try {
   mixed.set("q_reports_24h", 80);
   const half = scoreStore("36001", "P7 FY2026", mixed);
   check("Quality ex-LOV = 50%", half.quality.scoreExLov, 50);
+
+  // Drive-Thru survey count, tiered by sales: 35 surveys is threshold at ≤$45k, a miss above.
+  const fewSurveys = new Map(Object.entries(base));
+  fewSurveys.set("smgResponses", 35);
+  fewSurveys.set("weeklyEquivalentSales", 40000);
+  check("DT 35 surveys at $40k/wk is threshold", cat(scoreStore("36001", "P7 FY2026", fewSurveys).driveThru, "accuracy_gsat").conditions.find((c) => c.condition.id === "dt_survey_count").status, "threshold");
+  fewSurveys.set("weeklyEquivalentSales", 70000);
+  check("DT 35 surveys at $70k/wk misses", cat(scoreStore("36001", "P7 FY2026", fewSurveys).driveThru, "accuracy_gsat").conditions.find((c) => c.condition.id === "dt_survey_count").status, "missed");
 
   // Jolt on-time guardrail: 80% or fewer on time zeroes Food Safety.
   const late = new Map(Object.entries(base));

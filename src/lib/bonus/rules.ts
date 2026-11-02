@@ -1,7 +1,9 @@
 /**
  * The six bonus scorecards, transcribed from the HRG Binder Google Docs.
  *
- * Folder: https://drive.google.com/drive/folders/1WnG3G2V-7jxjV4aG150GQekkKbSa_8ig
+ * Folder: 00 - HRG Binder / 05 - LEADERSHIP & PERFORMANCE / 01 - Bonus Plans
+ * https://drive.google.com/drive/folders/11mNqKP9pePKf3BIfEXYhVYpGiO2dLwxA
+ * (checked against all six docs 2026-11-02)
  *
  * Several near-identical copies of these docs exist elsewhere in Drive with
  * different numbers (an older Quality doc says "105 on an external Steritech"
@@ -195,6 +197,23 @@ const DRIVE_THRU: PositionRules = {
           grain: "period",
           threshold: { cmp: "gte", value: 75 },
           target: { cmp: "gte", value: 80 },
+        },
+        {
+          // The binder's Drive-Thru doc puts the survey count in this category
+          // too (2026-11-02), with the same sales tiers as Hospitality's.
+          id: "dt_survey_count",
+          label: "Survey responses",
+          metric: "smgResponses",
+          source: "auto",
+          unit: "count",
+          grain: "period",
+          threshold: { cmp: "gte", value: 40 },
+          target: { cmp: "gte", value: 60 },
+          tiers: [
+            { maxWeeklySales: 45000, threshold: { cmp: "gte", value: 30 }, target: { cmp: "gte", value: 50 } },
+            { maxWeeklySales: null, threshold: { cmp: "gte", value: 40 }, target: { cmp: "gte", value: 60 } },
+          ],
+          note: "SMG response count (n) for the period. ≤$45k/week: ≥30 / ≥50; above: ≥40 / ≥60.",
         },
       ],
       disqualifiers: [
@@ -560,7 +579,7 @@ const QUALITY: PositionRules = {
       multipliers: [
         {
           factor: 1.5,
-          label: "100% county health inspection or 105 external Steritech",
+          label: "100% county health inspection, or 100 on an external Food Safety Steritech",
           mode: "any",
           conditions: [
             {
@@ -574,14 +593,17 @@ const QUALITY: PositionRules = {
               target: { cmp: "gte", value: 1 },
             },
             {
+              // The id keeps its old "105" so entries already made still count —
+              // the binder doc says 100 (2026-11-02).
               id: "q_steritech_105",
-              label: "105 on an external Food Safety Steritech report",
+              label: "100 on an external Food Safety Steritech report, with weekly mocks completed since the last external",
               metric: "q_steritech_105",
               source: "manual",
               unit: "boolean",
               grain: "entered",
               threshold: { cmp: "gte", value: 1 },
               target: { cmp: "gte", value: 1 },
+              note: "Yes only when both hold: a 100 on the external Food Safety Steritech, and a mock Food Safety inspection completed every week since the previous external one.",
             },
           ],
         },
@@ -656,14 +678,39 @@ const QUALITY: PositionRules = {
           target: { cmp: "lte", value: 48 },
           note: "Hours to resolve, with truck orders placed on time. Enter the worst case in the period.",
         },
+        // ArrowStream: "The Quality Director at the store with the largest
+        // number ArrowStream credits received will receive the full dollar
+        // amount of credits received as a one-time bonus for that period." A
+        // flat dollar award decided across stores, not a percentage of this
+        // store's target — so both figures are recorded here (advisory: shown,
+        // never scored) and the Bonus tab's ArrowStream card names the winner.
+        {
+          id: "q_arrowstream_credits",
+          label: "ArrowStream credits received",
+          metric: "q_arrowstream_credits",
+          source: "manual",
+          unit: "count",
+          grain: "entered",
+          threshold: { cmp: "gte", value: 0 },
+          target: { cmp: "gte", value: 0 },
+          advisory: true,
+          note: "Number of credits this period. The store with the most wins the one-time ArrowStream bonus.",
+        },
+        {
+          id: "q_arrowstream_dollars",
+          label: "ArrowStream credit dollars received",
+          metric: "q_arrowstream_dollars",
+          source: "manual",
+          unit: "currency",
+          grain: "entered",
+          threshold: { cmp: "gte", value: 0 },
+          target: { cmp: "gte", value: 0 },
+          advisory: true,
+          note: "Dollar value of those credits — what the winning store's Quality Director is paid.",
+        },
       ],
       disqualifiers: [],
       multipliers: [],
-      // ArrowStream is deliberately absent: the doc awards the Quality Director
-      // at the store with the largest ArrowStream credits "the full dollar
-      // amount of credits received as a one-time bonus". That is a flat dollar
-      // payment, not a multiplier on percentage attainment, so it has no
-      // representation in a percentage scorecard. Track it outside this tab.
     },
     {
       id: "reporting",

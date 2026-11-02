@@ -41,6 +41,7 @@ import RetentionPanel from "@/components/RetentionPanel";
 import InventoryCountsPanel from "@/components/InventoryCountsPanel";
 import BonusTeamCard, { type TeamByPosition } from "@/components/BonusTeamCard";
 import BonusPnlCard from "@/components/BonusPnlCard";
+import BonusArrowStreamCard from "@/components/BonusArrowStreamCard";
 import { BONUS_STORES } from "@/lib/bonus/storeMap";
 import { currentPeriodLabel, parsePeriodLabel } from "@/lib/bonus/periods";
 import { OVERRIDE_PREFIX, RETENTION_AUTO_FROM, categoryOverrideId } from "@/lib/bonus/rules";
@@ -586,6 +587,10 @@ export default function BonusClient({
           onTeam={setTeam}
         />
 
+        {/* Quality's ArrowStream award: decided across every store, so it reads
+            all stores' entries for the period rather than this store's. */}
+        <BonusArrowStreamCard period={period} refreshKey={refreshKey} />
+
         {/* The company's financials — admins only, like the route behind it.
             Saving rescores the period, so the GM's labor criterion moves. */}
         {isAdmin && <BonusPnlCard period={period} onSaved={() => setRefreshKey((k) => k + 1)} />}
@@ -921,8 +926,11 @@ function ConditionRow({
   // Compared as rendered text rather than as gates: a two-sided "between" and
   // a one-sided gate can print the same thing, and what matters here is only
   // whether the reader would see the same figure twice.
-  const thresholdText = fmtGateValue(r.thresholdUsed, unit);
-  const targetText = fmtGateValue(r.targetUsed, unit);
+  // A recorded-only figure with no goal of its own (ArrowStream's credits and
+  // dollars, gated at ≥ 0) shows no threshold or target rather than "≥ 0".
+  const noGoal = !!r.condition.advisory && r.targetUsed.cmp === "gte" && r.targetUsed.value === 0;
+  const thresholdText = noGoal ? "" : fmtGateValue(r.thresholdUsed, unit);
+  const targetText = noGoal ? "" : fmtGateValue(r.targetUsed, unit);
   const oneGate = thresholdText === targetText;
 
   // A computed criterion can be switched to manual while the scorecard is
