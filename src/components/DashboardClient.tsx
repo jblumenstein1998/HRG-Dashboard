@@ -264,7 +264,7 @@ export default function DashboardClient({
     <div className="min-h-screen bg-gray-50">
       <div className="sticky top-0 z-10">
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-3 shrink-0">
             <img src="/hrglogo.png" alt="HRG" className="h-9 w-auto" />
             <div className="flex flex-col">
@@ -282,70 +282,7 @@ export default function DashboardClient({
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 flex-1 min-w-0">
-            {/* WTD / PTD quick toggle */}
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-              {QUICK_TOGGLE.map(o => (
-                <button
-                  key={o.key}
-                  onClick={() => handleRangeChange(o.key)}
-                  className={`text-xs px-3 py-1.5 transition ${
-                    rangeKey === o.key
-                      ? "bg-red-700 text-white font-medium"
-                      : "bg-white text-gray-600 hover:bg-gray-50"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            {/* Historical range dropdown */}
-            <select
-              value={RANGE_OPTIONS.some(o => o.key === rangeKey) ? rangeKey : ""}
-              onChange={(e) => { if (e.target.value) handleRangeChange(e.target.value as RangeKey); }}
-              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-600"
-            >
-              <option value="">Period…</option>
-              {RANGE_OPTIONS.map(o => (
-                <option key={o.key} value={o.key}>{o.label}</option>
-              ))}
-            </select>
-            {/* Custom range — styled to match the POS Sales and Slack tabs'
-                From/To pickers. */}
-            <div className="flex items-center gap-1">
-              <input
-                type="date"
-                aria-label="From"
-                value={customStart}
-                max={customEnd || todayISO}
-                onChange={e => setCustomStart(e.target.value)}
-                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
-              />
-              <span className="text-xs text-gray-400">to</span>
-              <input
-                type="date"
-                aria-label="To"
-                value={customEnd}
-                min={customStart || undefined}
-                max={todayISO}
-                onChange={e => setCustomEnd(e.target.value)}
-                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
-              />
-            </div>
-            <button
-              onClick={() => handleRangeChange(customRangeKey(customStart, customEnd))}
-              disabled={!customValid || customIsCurrent || dataLoading}
-              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
-            >
-              Apply
-            </button>
-            <button
-              onClick={() => fetchData(rangeKey, true)}
-              disabled={dataLoading}
-              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
-            >
-              {dataLoading ? "Loading…" : "Refresh"}
-            </button>
+          <div className="flex items-center gap-2 ml-auto">
             <button
               onClick={handleLogout}
               className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
@@ -356,35 +293,104 @@ export default function DashboardClient({
         </div>
       </header>
 
-      {!branchesLoading && branches.length > 0 && (
-        <div className="bg-gray-50 border-b border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-500">
-              {driveThruLabel && <span>Drive-thru / Productivity: <span className="font-medium text-gray-700">{driveThruLabel}</span></span>}
-              {driveThruLabel && salesLabel && <span className="text-gray-300">·</span>}
-              {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
-                {(["summary", "daypart"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => setViewMode(mode)}
-                    className={`text-xs px-3 py-1.5 transition ${
-                      viewMode === mode
-                        ? "bg-gray-800 text-white font-medium"
-                        : "bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    {mode === "summary" ? "Summary" : "By Daypart"}
-                  </button>
-                ))}
-              </div>
-            </div>
+      {/* Ribbon: the range, the store cut and the view, under the header as on
+          the other tabs. Always shown, so the range can be changed while the
+          stores are still loading. */}
+      <div className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-x-2 gap-y-2">
+          {/* WTD / PTD quick toggle */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+            {QUICK_TOGGLE.map(o => (
+              <button
+                key={o.key}
+                onClick={() => handleRangeChange(o.key)}
+                className={`text-xs px-2.5 py-1.5 transition ${
+                  rangeKey === o.key
+                    ? "bg-red-700 text-white font-medium"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {/* Historical range dropdown */}
+          <select
+            value={RANGE_OPTIONS.some(o => o.key === rangeKey) ? rangeKey : ""}
+            onChange={(e) => { if (e.target.value) handleRangeChange(e.target.value as RangeKey); }}
+            className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-600"
+          >
+            <option value="">Period…</option>
+            {RANGE_OPTIONS.map(o => (
+              <option key={o.key} value={o.key}>{o.label}</option>
+            ))}
+          </select>
+          {/* Custom range — styled to match the POS Sales and Slack tabs'
+              From/To pickers. */}
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              aria-label="From"
+              value={customStart}
+              max={customEnd || todayISO}
+              onChange={e => setCustomStart(e.target.value)}
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+            />
+            <span className="text-xs text-gray-400">to</span>
+            <input
+              type="date"
+              aria-label="To"
+              value={customEnd}
+              min={customStart || undefined}
+              max={todayISO}
+              onChange={e => setCustomEnd(e.target.value)}
+              className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+            />
+          </div>
+          <button
+            onClick={() => handleRangeChange(customRangeKey(customStart, customEnd))}
+            disabled={!customValid || customIsCurrent || dataLoading}
+            className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+          >
+            Apply
+          </button>
+          <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden shrink-0">
+            {(["summary", "daypart"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`text-xs px-2.5 py-1.5 transition ${
+                  viewMode === mode
+                    ? "bg-gray-800 text-white font-medium"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {mode === "summary" ? "Summary" : "By Daypart"}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => fetchData(rangeKey, true)}
+              disabled={dataLoading}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+            >
+              {dataLoading ? "Loading…" : "Refresh"}
+            </button>
           </div>
         </div>
-        )}
+      </div>
+
+      {(driveThruLabel || salesLabel) && (
+        <div className="bg-gray-50 border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+            {driveThruLabel && <span>Drive-thru / Productivity: <span className="font-medium text-gray-700">{driveThruLabel}</span></span>}
+            {driveThruLabel && salesLabel && <span className="text-gray-300">·</span>}
+            {salesLabel && <span>Sales: <span className="font-medium text-gray-700">{salesLabel}</span></span>}
+          </div>
+        </div>
+      )}
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">

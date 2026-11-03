@@ -510,7 +510,7 @@ export default function StaffingClient({
               onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.push("/login"); }}
               className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
             >
-              Log out
+              Sign out
             </button>
           </div>
         </header>

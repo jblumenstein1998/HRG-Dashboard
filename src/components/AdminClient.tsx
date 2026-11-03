@@ -112,7 +112,7 @@ export default function AdminClient({
                 }}
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition"
               >
-                Log out
+                Sign out
               </button>
             </form>
           </div>
