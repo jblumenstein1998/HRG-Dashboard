@@ -115,7 +115,7 @@ const CACHE_REVALIDATE_SECONDS = 60 * 60; // 1 hr
  * minutes to a shift did exactly that: a week that was already cached reported
  * zero hours for every store while a week that was not reported correctly.
  */
-const PARSE_VERSION = "v2";
+const PARSE_VERSION = "v3"; // v3: orders carry reportMinutes (future orders by send time)
 
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
@@ -187,15 +187,25 @@ async function soapPost(service: string, action: string, body: string, locationT
 
 export type PAROrder = {
   netSales:   number;
-  // Hour/minute-of-day this order was OPENED, not closed — verified against
-  // PAR's own back-office "Sales and Labor Report by Hour": it buckets orders
-  // by OpenedTime, and an order that opens right before an hour boundary but
-  // doesn't close/pay until just after it (routine for anything that takes
-  // more than a few seconds to ring up) lands in the earlier hour there, not
-  // the later one ClosedTime would suggest. Matching that convention here is
-  // what makes our hourly numbers reconcile with PAR's own report.
-  openedHour: number | null; // local hour 0-23, null if OpenedTime missing
-  openedMinutes: number | null; // minutes since local midnight, null if OpenedTime missing
+  // The hour/minute-of-day PAR's own back-office "Sales and Labor Report by
+  // Hour" files this order under. Every hourly figure in the app reads it.
+  //
+  // - Ordinary orders: OpenedTime, not ClosedTime. An order opened just before
+  //   an hour boundary and paid just after it lands in the earlier hour there.
+  // - Future orders (IsFutureOrder: online, app and catering orders placed
+  //   ahead): FirstSendTime, the moment the POS released it to the kitchen.
+  //   Their OpenedTime is when the guest placed it, which can be seconds before
+  //   an hour boundary or days earlier for catering.
+  //
+  // Verified 2026-11-03 against PAR's report for Springfield 11/1, Brentwood
+  // 11/1, Beach 10/31 and Chesapeake 10/31: every hour matched to the cent.
+  // Two other rules failed: using OpenedTime for future orders too (a $69.99
+  // app order opened 2:59:59 PM, sent 3:00:04 PM, was put in 2 PM and a GM's
+  // correct Slack figures were flagged as wrong), and using FirstSendTime for
+  // every order (off in 2–8 hours per store-day). A catering order sent to the
+  // kitchen at 2:17 AM shows in PAR's 2 AM row, and so it does here.
+  reportHour: number | null; // local hour 0-23, null if the order has no usable time
+  reportMinutes: number | null; // minutes since local midnight, null if the order has no usable time
   isRefund:   boolean;
   // PAR's own "does this count as a transaction" flag (Order.Count, always 0 or 1).
   // Some closed $0 orders have Count=0 (not real transactions — duplicates/corrections)
@@ -301,11 +311,14 @@ function parseOrdersXml(xml: string, timeZone: string): PAROrder[] {
     const netSales      = parseFloat(tagVal(top, "NetSales") ?? "0") || 0;
     const isRefund      = tagVal(top, "IsRefund") === "true";
     const isCountedOrder = tagVal(top, "Count") === "1";
-    const openedTimeXml = tagVal(top, "OpenedTime") ?? "";
-    const dtStr         = tagVal(openedTimeXml, "DateTime");
-    const openedMinutes = dtStr ? zonedMinutesOfDay(new Date(dtStr), timeZone) : null;
-    const openedHour    = openedMinutes != null ? Math.floor(openedMinutes / 60) : null;
-    return { netSales, openedHour, openedMinutes, isRefund, isCountedOrder };
+    // See PAROrder.reportMinutes for why future orders use the send time.
+    const isFuture      = tagVal(top, "IsFutureOrder") === "true";
+    const sentStr       = isFuture ? tagVal(tagVal(top, "FirstSendTime") ?? "", "DateTime") : null;
+    const openedStr     = tagVal(tagVal(top, "OpenedTime") ?? "", "DateTime");
+    const dtStr         = sentStr ?? openedStr;
+    const reportMinutes = dtStr ? zonedMinutesOfDay(new Date(dtStr), timeZone) : null;
+    const reportHour    = reportMinutes != null ? Math.floor(reportMinutes / 60) : null;
+    return { netSales, reportHour, reportMinutes, isRefund, isCountedOrder };
   });
 }
 

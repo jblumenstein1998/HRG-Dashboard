@@ -188,7 +188,7 @@ function summarize(orders: PAROrder[], cutoffMinutes: number | null): { netSales
   let transactions = 0;
   for (const o of orders) {
     // Both sides in minutes since 2:15 AM, so a 1 AM order sorts after 11 PM.
-    if (cutoffMinutes != null && (o.openedMinutes == null || businessMinutes(o.openedMinutes) > cutoffMinutes)) continue;
+    if (cutoffMinutes != null && (o.reportMinutes == null || businessMinutes(o.reportMinutes) > cutoffMinutes)) continue;
     netSales += o.netSales;
     if (o.isCountedOrder) transactions += 1;
   }

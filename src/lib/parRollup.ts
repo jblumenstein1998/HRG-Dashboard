@@ -526,7 +526,7 @@ export async function getWindowTotals(
   // Same isCountedOrder distinction computeDayTotals uses above — orders.length
   // over/undercounts real transactions.
   const windowOrders = orders.filter(
-    (o) => o.openedMinutes != null && o.openedMinutes >= startMinutes && o.openedMinutes < endMinutes
+    (o) => o.reportMinutes != null && o.reportMinutes >= startMinutes && o.reportMinutes < endMinutes
   );
   const netSales = windowOrders.reduce((sum, o) => sum + o.netSales, 0);
   const orderCount = windowOrders.filter((o) => o.isCountedOrder).length;
@@ -604,7 +604,7 @@ function toHourBuckets(orders: PAROrders, shifts: PARShift[]): HourBucket[] {
     const endMinutes = startMinutes + 60;
 
     const hourOrders = orders.filter(
-      (o) => o.openedMinutes != null && o.openedMinutes >= startMinutes && o.openedMinutes < endMinutes
+      (o) => o.reportMinutes != null && o.reportMinutes >= startMinutes && o.reportMinutes < endMinutes
     );
     const netSales = hourOrders.reduce((sum, o) => sum + o.netSales, 0);
     const orderCount = hourOrders.filter((o) => o.isCountedOrder).length;
