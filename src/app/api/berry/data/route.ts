@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { after } from "next/server";
 import { getBerryAuth } from "@/lib/auth";
-import { resolveRange, RangeKey } from "@/lib/fiscal";
+import { resolveRange, parseCustomRangeKey, RangeKey } from "@/lib/fiscal";
 import { getDriveThruMetrics, warmStandardRanges, ChartFetchError } from "@/lib/berryData";
 
 export async function GET(request: NextRequest) {
@@ -9,6 +9,11 @@ export async function GET(request: NextRequest) {
   if (!token) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const rangeKey = (request.nextUrl.searchParams.get("range") ?? "mtd") as RangeKey;
+  // resolveRange falls back to PTD for a key it can't read; a garbled custom
+  // range should say so rather than quietly show a different window.
+  if (rangeKey.startsWith("custom:") && !parseCustomRangeKey(rangeKey)) {
+    return Response.json({ error: `invalid custom range "${rangeKey}"` }, { status: 400 });
+  }
   const { range: timeRange, label: rangeLabel } = resolveRange(rangeKey);
   const bust = request.nextUrl.searchParams.get("bust") === "1";
 

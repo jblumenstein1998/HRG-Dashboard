@@ -242,9 +242,40 @@ export function getPriorYearRange(start: string, end: string): { start: string; 
   return { start: getPriorYearDate(start), end: getPriorYearDate(end) };
 }
 
-export type RangeKey = "today" | "yesterday" | "wtd" | "last_week" | "t7" | "mtd" | "last_period" | "qtd" | "ytd" | `p${number}`;
+export type RangeKey =
+  | "today" | "yesterday" | "wtd" | "last_week" | "t7" | "mtd" | "last_period" | "qtd" | "ytd"
+  | `p${number}`
+  | `custom:${string}`;
+
+const CUSTOM_KEY_RE = /^custom:(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$/;
+
+/** The RangeKey for an arbitrary inclusive window, YYYY-MM-DD both ends. */
+export function customRangeKey(start: string, end: string): RangeKey {
+  return `custom:${start}:${end}`;
+}
+
+/** The inclusive dates a custom RangeKey names, or null if it isn't one (or is malformed). */
+export function parseCustomRangeKey(key: string): { start: string; end: string } | null {
+  const m = key.match(CUSTOM_KEY_RE);
+  if (!m || m[1] > m[2]) return null;
+  return { start: m[1], end: m[2] };
+}
+
+/**
+ * A custom window ends at the next day's exclusive midnight — the spelling
+ * berryData's canonicalTimeRange settles on, so a custom 10/29 and the
+ * "Yesterday" preset for 10/29 share one Drive-Thru cache row, not two.
+ */
+function getCustomRange(start: string, end: string): { range: string; label: string } {
+  const e = toDate(end);
+  const next = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1);
+  const range = `${fmtDT(toDate(start))} : ${fmtDT(next)}`;
+  return { range, label: formatRangeDates(range) };
+}
 
 export function resolveRange(key: RangeKey): { range: string; label: string } {
+  const custom = parseCustomRangeKey(key);
+  if (custom) return getCustomRange(custom.start, custom.end);
   if (key === "today") return getTodayRange();
   if (key === "yesterday") return getYesterdayRange();
   if (key === "last_week") return getLastWeekRange();

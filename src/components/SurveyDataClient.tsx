@@ -9,7 +9,7 @@ import GoogleReviewsSection from "@/components/GoogleReviewsSection";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
 import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader } from "@/components/StoreFilter";
-import { getPriorYearRange, PERIODS } from "@/lib/fiscal";
+import { getPriorYearRange, PERIODS, resolveRange } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
   STORE_LABELS,
@@ -66,6 +66,39 @@ type SnapshotsResponse = {
   rows: SnapshotRow[];
   error?: string;
 };
+
+/** /api/smg/custom — one custom window, both levels. */
+type CustomResponse = {
+  start: string;
+  end: string;
+  store: (SnapshotRow & { asOf: string })[];
+  regionManager: (SnapshotRow & { asOf: string })[];
+};
+
+/**
+ * The stored snapshot windows plus the custom one, once it's been pulled, as
+ * window "custom". Its dates are the ones asked for rather than read off the
+ * rows, so a range with no surveys at all still shows as that range.
+ */
+function withCustom(
+  base: SnapshotsResponse | null,
+  custom: CustomResponse | null,
+  level: "store" | "regionManager",
+): SnapshotsResponse | null {
+  if (!custom) return base;
+  const rows = custom[level];
+  const newest = rows.reduce((t, r) => Math.max(t, Date.parse(r.asOf) || 0), 0);
+  const asOf = new Date(newest || Date.now()).toISOString();
+  return {
+    ranges: [
+      ...(base?.ranges ?? []),
+      { key: "custom", label: "Custom", windowStart: custom.start, windowEnd: custom.end, asOf },
+    ],
+    units: base?.units ?? [],
+    metrics: base?.metrics ?? [],
+    rows: [...(base?.rows ?? []), ...rows.map((r) => ({ ...r, rangeKey: "custom" }))],
+  };
+}
 
 // Fixed rather than exposed: the tab always reads store level, visit date, at
 // period grain. The regional/district-manager cuts are still ingested by the
@@ -218,14 +251,55 @@ export default function SurveyDataClient({
   const cardRef = useRef<HTMLDivElement>(null);
 
   const [scores, setScores] = useState<ScoresResponse | null>(null);
-  const [snapshots, setSnapshots] = useState<SnapshotsResponse | null>(null);
+  const [storedSnapshots, setSnapshots] = useState<SnapshotsResponse | null>(null);
   // SMG's region-manager rows, which are the TN and VA totals as SMG itself
   // publishes them. Fetched alongside the store rows rather than replacing
   // them: the table still lists stores, and the market lines only borrow these
   // where they provably cover the same stores.
   const [rmScores, setRmScores] = useState<ScoresResponse | null>(null);
-  const [rmSnapshots, setRmSnapshots] = useState<SnapshotsResponse | null>(null);
+  const [storedRmSnapshots, setRmSnapshots] = useState<SnapshotsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // ── custom date range ──
+  // Pulled from SMG on demand (no cron can know which ranges get asked for) and
+  // folded in below as one more snapshot window, "snap:custom", so the table,
+  // market lines, sales and ZCases all treat it exactly like PTD or T7.
+  const [customStart, setCustomStart] = useState(() => resolveRange("yesterday").range.slice(0, 10));
+  const [customEnd, setCustomEnd] = useState(() => resolveRange("yesterday").range.slice(0, 10));
+  const [custom, setCustom] = useState<CustomResponse | null>(null);
+  const [customLoading, setCustomLoading] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const todayISO = resolveRange("today").range.slice(0, 10);
+  const customValid = Boolean(customStart && customEnd && customStart <= customEnd && customEnd <= todayISO);
+
+  const loadCustom = async (start: string, end: string, bust = false): Promise<boolean> => {
+    setCustomLoading(true);
+    setCustomError(null);
+    try {
+      const res = await fetch(
+        `/api/smg/custom?start=${start}&end=${end}&dateBasis=${DATE_BASIS}${bust ? "&bust=1" : ""}`,
+      );
+      const j = (await res.json()) as CustomResponse & { error?: string };
+      if (!res.ok || j.error) {
+        setCustomError(j.error ? `Custom range failed — ${j.error}` : "Custom range failed");
+        return false;
+      }
+      setCustom(j);
+      return true;
+    } catch {
+      setCustomError("Custom range failed — couldn't reach the server");
+      return false;
+    } finally {
+      setCustomLoading(false);
+    }
+  };
+
+  const applyCustom = async () => {
+    if (await loadCustom(customStart, customEnd)) setPeriodSel("snap:custom");
+  };
+
+  const snapshots = useMemo(() => withCustom(storedSnapshots, custom, "store"), [storedSnapshots, custom]);
+  const rmSnapshots = useMemo(() => withCustom(storedRmSnapshots, custom, "regionManager"), [storedRmSnapshots, custom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,6 +337,8 @@ export default function SurveyDataClient({
   const defaultPeriod = periodOptions.find(([v]) => v === "snap:ptd")?.[0] ?? periodOptions[0]?.[0] ?? "";
   const selected = periodOptions.some(([v]) => v === periodSel) ? periodSel : defaultPeriod;
   const selectedLabel = periodOptions.find(([v]) => v === selected)?.[1] ?? "";
+  // Apply greys out when the boxes already name the range on screen, as on POS Sales.
+  const customIsCurrent = selected === "snap:custom" && custom?.start === customStart && custom?.end === customEnd;
   const selectedWindow = selected.startsWith("snap:")
     ? snapshots?.ranges.find((r) => r.key === selected.slice(5))
     : undefined;
@@ -520,6 +596,14 @@ export default function SurveyDataClient({
     setFetching(true);
     setFetchNote(null);
     setZcaseFetchKey((k) => k + 1);
+    // A custom window isn't one the refresh route knows; it re-pulls through
+    // its own endpoint, skipping the cache.
+    if (selected === "snap:custom" && custom) {
+      await loadCustom(custom.start, custom.end, true);
+      setRefreshKey((k) => k + 1);
+      setFetching(false);
+      return;
+    }
     try {
       const res = await fetch("/api/smg/refresh", {
         method: "POST",
@@ -606,6 +690,37 @@ export default function SurveyDataClient({
               ))}
             </select>
 
+            {/* Custom range — pulled from SMG on Apply, then listed above as
+                "Custom". Styled to match the POS Sales and Slack pickers. */}
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                aria-label="From"
+                value={customStart}
+                max={customEnd || todayISO}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+              <span className="text-xs text-gray-400">to</span>
+              <input
+                type="date"
+                aria-label="To"
+                value={customEnd}
+                min={customStart || undefined}
+                max={todayISO}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
+            <button
+              onClick={applyCustom}
+              disabled={!customValid || customLoading || customIsCurrent}
+              title="Pull this range from SMG. Takes a few seconds the first time."
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 transition disabled:opacity-50"
+            >
+              {customLoading ? "Loading…" : "Apply"}
+            </button>
+
             {/* The cut the tab offers. The scores table, its TN/VA/HRG summary
                 rows and the ZCases section all follow it. */}
             <StoreFilterPicker leaders={leaders} value={storeFilter.value} onChange={storeFilter.setValue} />
@@ -622,6 +737,7 @@ export default function SurveyDataClient({
               {fetchNote && !fetchNote.ok && (
                 <span className="text-xs text-red-600">{fetchNote.text}</span>
               )}
+              {customError && <span className="text-xs text-red-600">{customError}</span>}
               <button
                 onClick={refreshAll}
                 disabled={fetching || busy || !selected}

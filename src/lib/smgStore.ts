@@ -300,7 +300,24 @@ export async function ingestSnapshot(opts: {
 }): Promise<{ rows: number; start: string; end: string } | null> {
   const window = resolveSnapshotWindow(opts.key);
   if (!window) return null;
+  return writeWindow({ ...opts, rangeKey: opts.key, start: window.start, end: window.end });
+}
 
+/**
+ * Fetches one calendar window from SMG and replaces whatever smg_snapshots held
+ * under `rangeKey` for that level. Shared by the preset windows and the
+ * Guest Experience tab's custom ranges, which are stored as `custom:…` keys.
+ */
+async function writeWindow(opts: {
+  rangeKey: string;
+  start: Date;
+  end: Date;
+  level?: LevelKey;
+  items?: SurveyItemKey[];
+  dateBasis?: DateBasis;
+  session?: SmgSession;
+}): Promise<{ rows: number; start: string; end: string }> {
+  const window = { start: opts.start, end: opts.end };
   const session = opts.session ?? (await smgLogin());
   const level = opts.level ?? "store";
   const dateBasis = opts.dateBasis ?? "visit";
@@ -324,7 +341,7 @@ export async function ingestSnapshot(opts: {
         range_key, level, unit_key, unit_name, date_basis, metric,
         score, responses, below_min, window_start, window_end, as_of
       )
-      SELECT ${opts.key}, ${level}, u.unit_key, u.unit_name, ${dateBasis}, u.metric,
+      SELECT ${opts.rangeKey}, ${level}, u.unit_key, u.unit_name, ${dateBasis}, u.metric,
              u.score, u.responses, u.below_min, ${ws}::date, ${we}::date, now()
       FROM UNNEST(
         ${rows.map((r) => r.unitId ?? r.unitName)}::text[],
@@ -360,7 +377,7 @@ export async function ingestSnapshot(opts: {
     // place rather than blank the tile.
     await sql`
       DELETE FROM smg_snapshots
-      WHERE range_key = ${opts.key}
+      WHERE range_key = ${opts.rangeKey}
         AND level = ${level}
         AND date_basis = ${dateBasis}
         AND (window_start, window_end) <> (${ws}::date, ${we}::date)
@@ -392,9 +409,98 @@ export async function querySnapshots(
            window_start, window_end, as_of
     FROM smg_snapshots
     WHERE level = ${level} AND date_basis = ${dateBasis}
+      AND range_key NOT LIKE 'custom:%'
     ORDER BY unit_name, metric
   `;
-  return (rows as Record<string, unknown>[]).map((r) => ({
+  return toSnapshotRows(rows as Record<string, unknown>[]);
+}
+
+// ── custom windows ────────────────────────────────────────────────────────────
+
+/**
+ * How long a custom window pulled from SMG is served before it's pulled again.
+ * Scores keep moving for 14 days after the visit date, so even a closed range
+ * isn't final — but a pull is several seconds, and flipping between two ranges
+ * shouldn't pay that every time. Refresh bypasses this.
+ */
+const CUSTOM_TTL_MS = 3 * 60 * 60 * 1000;
+
+/** Custom windows nobody has asked for in this long are cleared out on the next pull. */
+const CUSTOM_RETENTION_DAYS = 14;
+
+export function customSnapshotKey(start: string, end: string): string {
+  return `custom:${start}:${end}`;
+}
+
+/** Stored rows for one custom window and level, newest pull only. */
+export async function queryCustomSnapshot(
+  rangeKey: string,
+  level: LevelKey = "store",
+  dateBasis: DateBasis = "visit",
+): Promise<SnapshotRow[]> {
+  await ensureSnapshotSchema();
+  const rows = await sql`
+    SELECT range_key, unit_key, unit_name, metric, score, responses, below_min,
+           window_start, window_end, as_of
+    FROM smg_snapshots
+    WHERE range_key = ${rangeKey} AND level = ${level} AND date_basis = ${dateBasis}
+    ORDER BY unit_name, metric
+  `;
+  return toSnapshotRows(rows as Record<string, unknown>[]);
+}
+
+/**
+ * Store- and region-manager-level rows for an arbitrary inclusive window
+ * (YYYY-MM-DD both ends), pulled from SMG when the stored copy is missing,
+ * older than CUSTOM_TTL_MS, or `bust` is set.
+ *
+ * Both levels are pulled together under one login for the reason the refresh
+ * route gives: the market lines only borrow SMG's region-manager totals when
+ * their response counts match the store rows, so the two must cover the same
+ * moment.
+ */
+export async function getCustomWindow(opts: {
+  start: string;
+  end: string;
+  dateBasis?: DateBasis;
+  bust?: boolean;
+}): Promise<{ rangeKey: string; store: SnapshotRow[]; regionManager: SnapshotRow[] }> {
+  const dateBasis = opts.dateBasis ?? "visit";
+  const rangeKey = customSnapshotKey(opts.start, opts.end);
+  const levels: LevelKey[] = ["store", "regionManager"];
+
+  const read = async () => {
+    const [store, regionManager] = await Promise.all(levels.map((l) => queryCustomSnapshot(rangeKey, l, dateBasis)));
+    return { rangeKey, store, regionManager };
+  };
+
+  if (!opts.bust) {
+    const cached = await read();
+    const fresh = (rows: SnapshotRow[]) =>
+      rows.length > 0 && rows.every((r) => Date.now() - new Date(r.asOf).getTime() < CUSTOM_TTL_MS);
+    if (fresh(cached.store) && fresh(cached.regionManager)) return cached;
+  }
+
+  const toLocal = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const session = await smgLogin();
+  for (const level of levels) {
+    await writeWindow({ rangeKey, start: toLocal(opts.start), end: toLocal(opts.end), level, dateBasis, session });
+  }
+
+  await sql`
+    DELETE FROM smg_snapshots
+    WHERE range_key LIKE 'custom:%'
+      AND as_of < now() - make_interval(days => ${CUSTOM_RETENTION_DAYS})
+  `;
+
+  return read();
+}
+
+function toSnapshotRows(rows: Record<string, unknown>[]): SnapshotRow[] {
+  return rows.map((r) => ({
     rangeKey: String(r.range_key),
     unitKey: String(r.unit_key),
     unitName: String(r.unit_name),

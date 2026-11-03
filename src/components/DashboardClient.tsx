@@ -7,7 +7,7 @@ import DriveThruTrendCharts from "./DriveThruTrendCharts";
 import { BranchStore, StoreMetrics, parseMMSS } from "@/lib/berry";
 import TabOptions from "@/components/TabOptions";
 import type { Tab } from "@/lib/users/tabs";
-import { RangeKey, PERIODS, resolveRange } from "@/lib/fiscal";
+import { RangeKey, PERIODS, resolveRange, customRangeKey, parseCustomRangeKey } from "@/lib/fiscal";
 import { groupBranches, getStoreLabel, getStoreSection, type StoreSection } from "@/lib/stores";
 import { CopyableTitle } from "@/components/CopyImageButton";
 import { StoreFilterPicker, useStoreFilter, inFilter, type Leader } from "@/components/StoreFilter";
@@ -58,7 +58,21 @@ export default function DashboardClient({
   const storeFilter = useStoreFilter(leaders);
   // The one day on screen, when there is one — a daypart's team on duty only
   // means something for a single date. The range opens at that date's midnight.
-  const teamDate = rangeKey === "today" || rangeKey === "yesterday" ? resolveRange(rangeKey).range.slice(0, 10) : null;
+  const custom = parseCustomRangeKey(rangeKey);
+  const teamDate =
+    rangeKey === "today" || rangeKey === "yesterday"
+      ? resolveRange(rangeKey).range.slice(0, 10)
+      : custom && custom.start === custom.end
+        ? custom.start
+        : null;
+  // The From/To inputs. They open on yesterday, the day the tab itself opens
+  // on, and only take effect on Go — so a half-typed range doesn't fire a
+  // Superset query per keystroke.
+  const [customStart, setCustomStart] = useState(() => resolveRange("yesterday").range.slice(0, 10));
+  const [customEnd, setCustomEnd] = useState(() => resolveRange("yesterday").range.slice(0, 10));
+  const todayISO = resolveRange("today").range.slice(0, 10);
+  const customValid = Boolean(customStart && customEnd && customStart <= customEnd && customEnd <= todayISO);
+  const customIsCurrent = custom?.start === customStart && custom?.end === customEnd;
 
   const fetchData = useCallback(async (key: RangeKey, bust = false) => {
     const fetchId = ++latestFetchId.current;
@@ -296,6 +310,35 @@ export default function DashboardClient({
                 <option key={o.key} value={o.key}>{o.label}</option>
               ))}
             </select>
+            {/* Custom range — styled to match the POS Sales and Slack tabs'
+                From/To pickers. */}
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                aria-label="From"
+                value={customStart}
+                max={customEnd || todayISO}
+                onChange={e => setCustomStart(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+              <span className="text-xs text-gray-400">to</span>
+              <input
+                type="date"
+                aria-label="To"
+                value={customEnd}
+                min={customStart || undefined}
+                max={todayISO}
+                onChange={e => setCustomEnd(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-lg border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
+            <button
+              onClick={() => handleRangeChange(customRangeKey(customStart, customEnd))}
+              disabled={!customValid || customIsCurrent || dataLoading}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition"
+            >
+              Apply
+            </button>
             <button
               onClick={() => fetchData(rangeKey, true)}
               disabled={dataLoading}
