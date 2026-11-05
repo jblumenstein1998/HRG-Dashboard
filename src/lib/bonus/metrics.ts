@@ -458,7 +458,7 @@ export async function resolvePeriodMetrics(
     warnings.push(`ZU fetch failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── Inventory counts (Net-Chef) ────────────────────────────────────────────
+  // ── Full inventory counts (Net-Chef) ────────────────────────────────────────────
   // One login and one report per store: Daily Inventory Counts ignores the
   // location filter the other Net-Chef reports take (netchefInventory.ts).
   // A store that fails is left absent — pending — and compute.ts carries the
@@ -473,7 +473,6 @@ export async function resolvePeriodMetrics(
       const v = vals(store.storeId);
       try {
         const counts = await getStoreInventoryCounts(locationId, window.start, window.end, today);
-        put(v, "q_critical_counts_pct", counts.criticalPct);
         put(v, "q_full_counts_weekly", counts.fullCountsOnTime);
         inventoryStores++;
       } catch (err) {
@@ -505,7 +504,11 @@ export async function resolvePeriodMetrics(
   // is deliberate — somebody in the cohort still has to be checked against PAR
   // — so the metrics are reported as authoritative and compute.ts never papers
   // over the gap with the previous run's figure.
-  const authoritative: string[] = [];
+  //
+  // The retired critical-count metric is listed too, so the figure already
+  // stored for an open period is dropped instead of being carried forward (and
+  // reported as a vendor failure) on every run.
+  const authoritative: string[] = ["q_critical_counts_pct"];
   if (window.period.period >= RETENTION_AUTO_FROM) {
     try {
       const report = await getRetention(window.start, window.end);

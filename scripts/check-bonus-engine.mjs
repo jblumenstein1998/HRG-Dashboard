@@ -139,7 +139,7 @@ try {
     hosp_health_cleanliness_violation: 0, hosp_recognition: 100, hosp_pulse_check: 1,
     joltCompletePct: 100, joltOnTimePct: 95, q_mock_steritech_weekly: 1, q_health_inspection_score: 98,
     q_mock_steritech_dishonest: 0, q_high_risk: 0, q_health_inspection_100: 0, q_steritech_105: 0,
-    q_full_counts_weekly: 1, q_critical_counts_pct: 100, q_truck_order_resolution: 24, q_reports_24h: 100,
+    q_full_counts_weekly: 1, q_truck_order_resolution: 24, q_reports_24h: 100,
     t_onboarding_completion: 100, t_lto_compliance: 100, t_onboarding_slack: 1,
     t_focus_area_improvement: 12, t_bin_management: 95,
     t_retention_30: 85, t_retention_60: 75, t_retention_90: 75,
@@ -163,7 +163,6 @@ try {
   // The worked example the AGM doc states in prose.
   const mixed = new Map(Object.entries(base));
   mixed.set("joltCompletePct", 92); // threshold band: ≥90, <95
-  mixed.set("q_critical_counts_pct", 96);
   mixed.set("q_truck_order_resolution", 60);
   mixed.set("q_reports_24h", 80);
   const half = scoreStore("36001", "P7 FY2026", mixed);
@@ -187,18 +186,21 @@ try {
     cat(half.agm, "director_performance").score * 100, 87.5);
   check("AGM Director Perf payout = 90 x 0.875", cat(half.agm, "director_performance").payout, 78.75);
 
-  // Inventory counts, Josh 2026-10-28: a Monday full count every week at both
-  // levels; critical counts >=95% for half, 100% for full.
-  const inv = (full, crit) => {
+  // Full inventory count, Josh 2026-10-28: every Monday at both levels. Daily
+  // critical counts stopped 2026-11-04 and must not affect the score.
+  const inv = (full) => {
     const m = new Map(Object.entries(base));
     m.set("q_full_counts_weekly", full);
-    m.set("q_critical_counts_pct", crit);
-    return cat(scoreStore("36001", "P7 FY2026", m).quality, "cogs").score;
+    return m;
   };
-  check("inventory: full + 100% critical -> COGS 100%", inv(1, 100), 1);
-  check("inventory: full + 95% critical -> COGS 50%", inv(1, 95), 0.5);
-  check("inventory: full + 94.9% critical -> COGS 0", inv(1, 94.9), 0);
-  check("inventory: a missed Monday -> COGS 0 even at 100% critical", inv(0, 100), 0);
+  const cogsOf = (m) => cat(scoreStore("36001", "P7 FY2026", m).quality, "cogs");
+  check("inventory: Monday full counts -> COGS 100%", cogsOf(inv(1)).score, 1);
+  check("inventory: a missed Monday -> COGS 0", cogsOf(inv(0)).score, 0);
+  const stale = inv(1);
+  stale.set("q_critical_counts_pct", 0);
+  check("inventory: a stale critical-count figure is ignored", cogsOf(stale).score, 1);
+  check("inventory: critical counts are not a COGS condition",
+    cogsOf(inv(1)).conditions.some((c) => c.condition.id === "q_critical_counts") ? 1 : 0, 0);
 
   // Josh confirmed both of these explicitly on 2026-07-31. They are the two
   // places the order of operations actually changes what someone is paid, so

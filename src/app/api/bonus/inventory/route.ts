@@ -6,14 +6,14 @@ import { businessDateISO } from "@/lib/businessDay";
 import { getStoreInventoryCounts } from "@/lib/netchefInventory";
 
 /**
- * One store's inventory counts for a bonus period, day by day — what sits
- * behind the Quality Director's two inventory criteria.
+ * One store's weekly full inventory counts for a bonus period — what sits behind
+ * the Quality Director's full-count criterion.
  *
  * GET /api/bonus/inventory?period=P10%20FY2026&store=36001
  *
  * Read live from Net-Chef (one login, one report) rather than from the stored
- * metrics, because the screen exists to show which days were missed, and the
- * scorecard only keeps the two totals.
+ * metrics, because the screen exists to show which weeks were missed or late,
+ * and the scorecard only keeps a yes or no for the period.
  */
 
 export const maxDuration = 60;

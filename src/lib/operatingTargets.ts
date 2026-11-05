@@ -159,7 +159,6 @@ export function buildOperatingTargets(): OperatingTargets {
           ...row("gm_tplh", "Transactions per labor hour (TPLH)"),
           ...row("gm_cogs", "COGS / food cost"),
           ...row("q_food_cost_variance", "Food-cost variance vs. theoretical", { both: (s) => s.replace("≤ ", "± ") }),
-          ...row("q_critical_counts", "Daily critical inventory completion"),
           ...row("q_truck_order_resolution", "Truck-order discrepancies resolved (hrs)"),
         ],
       },
