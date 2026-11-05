@@ -76,7 +76,7 @@ const SUMMARY_KEYS = SUMMARY_SERIES.map((s) => s.key) as readonly string[];
 const SUMMARY_WIDTH = 2.5;
 
 /** Dash encodes the metric, so several metrics can share one chart. */
-const METRIC_DASH = [undefined, "6 3", "2 2", "8 3 2 3", "1 3", "10 3"];
+const METRIC_DASH = [undefined, "6 3", "2 2", "8 3 2 3", "1 3", "10 3", "4 2 1 2"];
 
 /**
  * Survey volume, offered alongside the score metrics but plotted on its own.
@@ -131,8 +131,9 @@ function buildPoint(label: string, rows: AnyRow[], published: AnyRow[] = []): Po
     if (m) (market[m][r.metric] ||= []).push({ score: r.score, responses: r.responses });
   }
 
-  // Survey volume: a store's metrics all share a response count, so take the
-  // largest; a market's is the sum of its stores, not an average of them.
+  // Survey volume: a store's metrics share a response count, Digital OSAT's
+  // subset aside, so take the largest; a market's is the sum of its stores, not
+  // an average of them.
   const countByStore = new Map<string, number>();
   for (const r of rows) {
     if (r.unitKey === COMBINED_KEY || r.responses == null) continue;

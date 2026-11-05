@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ingestTrend, type DateBasis } from "@/lib/smgStore";
-import { listPeriodsOfType, MAX_TREND_PERIODS, smgLogin, type DateTypeKey, type LevelKey } from "@/lib/smgTrend";
+import {
+  listPeriodsOfType,
+  MAX_TREND_PERIODS,
+  smgLogin,
+  SURVEY_ITEM,
+  type DateTypeKey,
+  type LevelKey,
+  type SurveyItemKey,
+} from "@/lib/smgTrend";
 
 export const maxDuration = 300;
 
@@ -14,6 +22,10 @@ export const maxDuration = 300;
  * `from`/`to` are SMG period labels (omit for everything available). Reports are
  * requested in chunks because a single very wide trend report times out on
  * SMG's side well before it returns.
+ *
+ * `items` (SURVEY_ITEM keys) limits the pull to those metrics, for filling in a
+ * newly added one without rewriting older scores the bonus reads. Omit it for
+ * the default set.
  */
 export async function POST(req: NextRequest) {
   const auth = req.headers.get("authorization");
@@ -28,7 +40,13 @@ export async function POST(req: NextRequest) {
     to?: string;
     dateBasis?: DateBasis;
     chunk?: number;
+    items?: SurveyItemKey[];
   };
+
+  const unknownItems = (body.items ?? []).filter((k) => !Object.hasOwn(SURVEY_ITEM, k));
+  if (unknownItems.length) {
+    return NextResponse.json({ error: "unknown items", items: unknownItems }, { status: 400 });
+  }
 
   const level = body.level ?? "store";
   const dateType = body.dateType ?? "weekly";
@@ -66,6 +84,7 @@ export async function POST(req: NextRequest) {
         startPeriodId: first.id,
         endPeriodId: last.id,
         periods: slice.length,
+        items: body.items,
       });
       batches.push({ from: first.label, to: last.label, rows });
     } catch (err) {

@@ -207,6 +207,13 @@ export type ScoreTone = "good" | "ok" | "bad" | "none";
 export const ACCURACY_METRIC = /accuracy/i;
 
 /**
+ * "Overall Satisfaction - Digital". Unlike the other metrics it has its own,
+ * much smaller response count — a median of 4 per store per period — so its
+ * base can't be read off the Surveys column.
+ */
+export const DIGITAL_METRIC = /digital/i;
+
+/**
  * Satisfaction metrics: >=80 good, >=75 ok, below that bad.
  * Order accuracy: >=90 good, >=85 ok (Store Operating Targets, 2026-11-02 —
  * the same 85 / 90 the bonus scores it on).
@@ -255,6 +262,7 @@ export function scoreColor(value: number | null, metric: string): string {
 /** Reading order for the metric columns; matched loosely so SMG can rename. */
 const METRIC_ORDER = [
   /^overall satisfaction$/i,
+  DIGITAL_METRIC,
   /accuracy/i,
   /friendliness/i,
   /cleanliness/i,
@@ -273,4 +281,5 @@ export const shortMetric = (m: string) =>
     .replace(" (Y/N)", "")
     .replace(" of Order", "")
     .replace(" of Food", "")
+    .replace("Overall Satisfaction - Digital", "Digital OSAT")
     .replace("Overall Satisfaction", "OSAT");

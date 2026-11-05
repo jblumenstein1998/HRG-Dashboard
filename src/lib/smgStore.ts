@@ -20,10 +20,12 @@ import {
   fetchComparison,
   fetchTrend,
   listPeriodsOfType,
+  MAX_TREND_PERIODS,
   smgDate,
   smgLogin,
   type DateTypeKey,
   type LevelKey,
+  type SmgPeriod,
   type SmgSession,
   type SurveyItemKey,
   type TrendRow,
@@ -189,6 +191,81 @@ export async function ingestRecentPeriods(opts: {
   });
 
   return { rows, from: oldest.label, to: newest.label };
+}
+
+// ── Digital OSAT history ──────────────────────────────────────────────────────
+
+const DIGITAL_OSAT = "Overall Satisfaction - Digital";
+
+/**
+ * Reports covering every reportable period not in `stored`, oldest first, each
+ * within SMG's per-report limit. `available` is newest first, as
+ * listPeriodsOfType returns it.
+ */
+export function planBackfillChunks(available: SmgPeriod[], stored: Set<string>): SmgPeriod[][] {
+  const eligible = available.filter((p) => (p.year ?? 0) >= EARLIEST_FISCAL_YEAR).reverse();
+  const chunks: SmgPeriod[][] = [];
+  for (let i = 0; i < eligible.length; ) {
+    if (stored.has(eligible[i].label)) {
+      i++;
+      continue;
+    }
+    const slice = eligible.slice(i, i + MAX_TREND_PERIODS);
+    chunks.push(slice);
+    i += slice.length;
+  }
+  return chunks;
+}
+
+/**
+ * Fills in Digital OSAT for periods from before it was added to the daily pull,
+ * back to the earliest fiscal year the dashboard reports on.
+ *
+ * Runs from the daily sync and finishes itself: only periods with no digital
+ * rows are pulled, so once history is in, it does nothing but check. Only the
+ * digital item is requested, leaving the stored scores the bonus reads alone.
+ *
+ * Stops at `deadline` so the sync can't hit the function timeout; the next day's
+ * run picks up whatever is still missing.
+ */
+export async function backfillDigitalOsat(session: SmgSession, deadline: number): Promise<Record<string, unknown>[]> {
+  const results: Record<string, unknown>[] = [];
+
+  for (const dateType of ["period", "weekly"] as const) {
+    const available = await listPeriodsOfType(session, dateType);
+
+    for (const level of ["store", "regionManager", "districtManager"] as const) {
+      const rows = (await sql`
+        SELECT DISTINCT period_label FROM smg_scores
+        WHERE level = ${level} AND period_type = ${dateType} AND date_basis = 'visit' AND metric = ${DIGITAL_OSAT}
+      `) as { period_label: string }[];
+
+      for (const slice of planBackfillChunks(available, new Set(rows.map((r) => r.period_label)))) {
+        const cut = { backfill: "digital", level, dateType, from: slice[0].label, to: slice[slice.length - 1].label };
+        if (Date.now() >= deadline) {
+          results.push({ ...cut, skipped: "out of time; resumes on the next sync" });
+          return results;
+        }
+        try {
+          const written = await ingestTrend({
+            level,
+            dateType,
+            dateBasis: "visit",
+            session,
+            startPeriodId: slice[0].id,
+            endPeriodId: slice[slice.length - 1].id,
+            periods: slice.length,
+            items: ["overallDigital"],
+          });
+          results.push({ ...cut, rows: written });
+        } catch (err) {
+          results.push({ ...cut, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+  }
+
+  return results;
 }
 
 // ── snapshots (rolling / to-date windows) ─────────────────────────────────────

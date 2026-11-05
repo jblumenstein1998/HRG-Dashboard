@@ -21,7 +21,7 @@ import type { Gate } from "@/lib/bonus/types";
 import type { DayFigures, StoreDeckData } from "@/lib/wbr/storeData";
 import type { DriveThru } from "@/lib/wbr/opsData";
 import { SMG_METRICS } from "@/lib/wbr/storeExtras";
-import { ACCURACY_METRIC, LOWER_IS_BETTER } from "@/lib/surveyMeta";
+import { ACCURACY_METRIC, DIGITAL_METRIC, LOWER_IS_BETTER } from "@/lib/surveyMeta";
 import type { SlackDay } from "@/lib/slackReports";
 import { SLACK_SLOTS } from "@/lib/slackReports";
 import { change, count, usd0, usd2, weekSpan } from "@/lib/wbr/slides";
@@ -171,7 +171,7 @@ type Run = { text: string; color?: string };
 /** A KPI card: label, value, then up to three lines of runs (changes or context). */
 function tile(c: Canvas, x: number, y: number, w: number, h: number, t: { label: string; value: string; tone?: Tone; lines?: Run[][]; size?: number }) {
   card(c, x, y, w, h);
-  c.text(x + 10, y + 7, w - 20, 10, t.label, { size: 6.5, color: C.gray500 });
+  c.text(x + 10, y + 7, w - 20, 10, t.label, { size: 6.5, color: C.gray500, noWrap: true });
   c.text(x + 10, y + 17, w - 20, 22, t.value, { size: t.size ?? 16, bold: true, color: ink(t.tone ?? "neutral") });
   (t.lines ?? []).forEach((line, i) => {
     let cx = x + 10;
@@ -663,7 +663,11 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
         value: smgPct(v),
         tone: smgTone(v, m.name),
         size: 15,
-        lines: [[{ text: goals }], ...(m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : [])],
+        lines: [
+          [{ text: goals }],
+          ...(m.name === OSAT ? [[{ text: `${latest?.responses ?? 0} surveys` }]] : []),
+          ...(DIGITAL_METRIC.test(m.name) ? [[{ text: `${latest?.digitalResponses ?? 0} digital surveys` }]] : []),
+        ],
       };
     }),
   );
@@ -694,7 +698,8 @@ export function storeSmgSlide(d: StoreDeckData): Canvas {
     cells: [{ text: m.label, bold: false, color: C.gray900 }, ...shown.map(({ s }) => { const v = s?.scores[m.name] ?? null; return goalCell(smgPct(v), smgTone(v, m.name)); })] as Cell[],
   }));
   rows.push({ cells: [{ text: "Surveys", bold: false, color: C.gray500 }, ...shown.map(({ s }) => ({ text: s?.responses != null ? String(s.responses) : "—", color: C.gray500, bold: false }))] });
-  table(c, L + half + 8, 140, cols, rows, 17.3);
+  // Eight rows, sized so the card stays level with the 142pt chart beside it.
+  table(c, L + half + 8, 140, cols, rows, 15.1);
 
   // ZCases
   const z = d.extras.zcases;

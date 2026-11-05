@@ -74,9 +74,15 @@ export const SURVEY_ITEM = {
 } as const;
 export type SurveyItemKey = keyof typeof SURVEY_ITEM;
 
-/** The six HRG tracks week to week. Response counts come back with every item. */
+/**
+ * What HRG tracks week to week. Response counts come back with every item.
+ *
+ * Digital OSAT is for display, on the Guest Experience tab and the store deck.
+ * The bonus reads named metrics, so pulling it here doesn't reach bonuses.
+ */
 export const DEFAULT_ITEMS: SurveyItemKey[] = [
   "overall",
+  "overallDigital",
   "temperature",
   "accuracy",
   "friendliness",

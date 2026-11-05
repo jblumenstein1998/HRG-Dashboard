@@ -12,10 +12,10 @@ import { StoreFilterPicker, useStoreFilter, inFilter, marketShown, type Leader }
 import { getPriorYearRange, PERIODS, resolveRange } from "@/lib/fiscal";
 import {
   COMBINED_KEY,
+  DIGITAL_METRIC,
   STORE_LABELS,
   TONE_BG,
   TONE_TEXT,
-  formatSyncStamp,
   marketOf,
   metricRank,
   pooledScore,
@@ -41,10 +41,6 @@ type ScoresResponse = {
   periods: string[];
   units: { key: string; name: string }[];
   availableMetrics: string[];
-  /** When the ingest last wrote this cut, as a single MAX across periods. */
-  syncedAt: string | null;
-  /** Per-period write times, keyed by period label. Drives the freshness label. */
-  syncedByPeriod: Record<string, string>;
   rows: ScoreRow[];
   error?: string;
 };
@@ -366,7 +362,8 @@ export default function SurveyDataClient({
           key,
           name: rows[0].unitName,
           label: prettyUnit(rows[0].unitName, key),
-          // Response counts match across a unit's metrics; take the largest.
+          // Response counts match across a unit's metrics, except Digital OSAT's
+          // smaller subset; the largest is every survey the unit received.
           surveys: rows.reduce((n, r) => Math.max(n, r.responses ?? 0), 0) || null,
           sales: null as number | null,
           cells: new Map<string, Cell>(
@@ -559,25 +556,6 @@ export default function SurveyDataClient({
 
   const colCount = metrics.length + 3;
 
-  /**
-   * When the *selected* window was last written — which is not one timestamp.
-   *
-   * The two kinds of selection are backed by different tables, and Refresh
-   * writes only the one the selection needs. Stamping a table-wide MAX of
-   * smg_scores meant a snapshot window (PTD, Today, WTD…) reported the last
-   * time any *period* was ingested, so it sat unchanged while Refresh said
-   * "Updated from SMG just now" — the snapshot had gone into smg_snapshots,
-   * which the stamp never looked at.
-   *
-   * Reading each selection's own row also stops a refresh of one period from
-   * making every other period claim to be fresh.
-   */
-  const selectionSyncedAt = selected.startsWith("snap:")
-    ? (selectedWindow?.asOf ?? null)
-    : selected.startsWith("period:")
-      ? (scores?.syncedByPeriod?.[selected.slice(7)] ?? null)
-      : null;
-
   // The note describes the window it was fetched for, so it can't outlive it.
   useEffect(() => setFetchNote(null), [selected]);
 
@@ -615,10 +593,9 @@ export default function SurveyDataClient({
         setFetchNote({ ok: false, text: j.error ? `Fetch failed — ${j.error}` : "Fetch failed" });
         return;
       }
-      // Re-read so the table shows what was just written. No success note —
-      // the card's own "Updated …" stamp already moves, and saying it twice in
-      // two places was noise. Failures still surface, since nothing else would
-      // show them.
+      // Re-read so the table shows what was just written. No success note; the
+      // button returning from "Refreshing…" says it. Failures still surface,
+      // since nothing else would show them.
       setRefreshKey((k) => k + 1);
     } catch {
       setFetchNote({ ok: false, text: "Fetch failed — couldn't reach the server" });
@@ -732,8 +709,7 @@ export default function SurveyDataClient({
             )}
 
             <div className="ml-auto flex items-center gap-2">
-              {/* Only failures appear here; success is reported by the card's
-                  own "Updated …" stamp rather than said twice. */}
+              {/* Only failures appear here. */}
               {fetchNote && !fetchNote.ok && (
                 <span className="text-xs text-red-600">{fetchNote.text}</span>
               )}
@@ -767,17 +743,6 @@ export default function SurveyDataClient({
                 </span>
               )}
             </div>
-            {/* The dates used to sit here as well; they're in the title now, and
-                only snapshot selections ever had them. Freshness does belong
-                here rather than up in the banner — it describes these scores,
-                not the tab, and the ZCases section reports its own the same way. */}
-            <span className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
-              {fetching && <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-pulse" />}
-              <span>
-                Updated {formatSyncStamp(selectionSyncedAt)}
-                {fetching ? " · refreshing…" : ""}
-              </span>
-            </span>
           </div>
           <div className={`overflow-x-auto transition-opacity ${busy ? "opacity-50" : "opacity-100"}`}>
             {/* text-sm cells / text-xs headers / py-3 rows — same metrics as the
@@ -839,7 +804,8 @@ export default function SurveyDataClient({
 
         <p className="text-xs text-gray-500 mt-3">
           Visit date — a guest&apos;s response counts on the day they visited, not the day they
-          answered.
+          answered. Digital OSAT counts only surveys SMG tags as digital, so most stores fall
+          under SMG&apos;s minimum response threshold (italics); hover a score for its count.
         </p>
 
         {/* Current Google ratings — follows the store filter, not the period
@@ -919,6 +885,20 @@ function SortHeader({
   );
 }
 
+/**
+ * Hover text for a score. Digital OSAT states its own count, because it's the
+ * one metric whose base isn't the row's Surveys figure.
+ */
+function cellTitle(c: Cell | undefined, metric: string): string | undefined {
+  const notes = [
+    c?.belowMin ? "Below SMG's minimum response threshold" : null,
+    c?.responses && DIGITAL_METRIC.test(metric)
+      ? `${c.responses} digital ${c.responses === 1 ? "survey" : "surveys"}`
+      : null,
+  ].filter(Boolean);
+  return notes.length ? notes.join(" · ") : undefined;
+}
+
 function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
   return (
     <tr className="border-b border-gray-100">
@@ -931,7 +911,7 @@ function DataRow({ row, metrics }: { row: UnitRow; metrics: string[] }) {
         return (
           <td
             key={m}
-            title={c?.belowMin ? "Below SMG's minimum response threshold" : undefined}
+            title={cellTitle(c, m)}
             // Below-minimum cells are marked with italics only. They used to
             // carry opacity-70 as well, which faded the fill along with the
             // text and made those rows look like a lighter shade of the same
@@ -974,6 +954,7 @@ function SummaryRow({
         return (
           <td
             key={m}
+            title={cellTitle(c, m)}
             className={`px-4 py-3 text-right tabular-nums font-semibold ${TONE_TEXT[tone]} ${TONE_BG[tone]}`}
           >
             {c?.score === null || c === undefined ? "—" : `${c.score}%`}

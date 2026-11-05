@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ingestRecentPeriods } from "@/lib/smgStore";
+import { backfillDigitalOsat, ingestRecentPeriods } from "@/lib/smgStore";
 import { smgLogin } from "@/lib/smgTrend";
 
 // SMG pulls are slow (four sequential requests per report, several reports).
 export const maxDuration = 300;
+
+/** When to stop starting history reports, leaving room for one in flight to finish. */
+const HISTORY_BUDGET_MS = 240_000;
 
 /**
  * Vercel Cron hits this daily (see vercel.json).
@@ -21,6 +24,8 @@ export async function GET(req: NextRequest) {
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const startedAt = Date.now();
 
   // One login reused across every cut below.
   const session = await smgLogin();
@@ -44,6 +49,13 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       results.push({ ...cut, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  // After the regular cuts, so a slow history pull can't cost today's numbers.
+  try {
+    results.push(...(await backfillDigitalOsat(session, startedAt + HISTORY_BUDGET_MS)));
+  } catch (err) {
+    results.push({ backfill: "digital", error: err instanceof Error ? err.message : String(err) });
   }
 
   const failed = results.filter((r) => r.error);

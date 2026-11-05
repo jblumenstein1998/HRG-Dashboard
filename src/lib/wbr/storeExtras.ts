@@ -31,14 +31,20 @@ export type FoodWeek = { cogsPct: number | null; variancePct: number | null };
 /** The SMG items the deck shows, by SMG's own metric names (as stored). */
 export const SMG_METRICS = [
   { name: "Overall Satisfaction", label: "Overall Satisfaction" },
+  { name: "Overall Satisfaction - Digital", label: "Digital OSAT" },
   { name: "Temperature of Food", label: "Temperature" },
   { name: "Accuracy of Order", label: "Accuracy" },
   { name: "Friendliness of Team Members", label: "Friendliness" },
   { name: "Cleanliness", label: "Cleanliness" },
-  { name: "Experienced Problem (Y/N)", label: "Experienced a Problem" },
+  { name: "Experienced Problem (Y/N)", label: "Experienced Problem" },
 ] as const;
 
-export type SmgWeek = { scores: Record<string, number | null>; responses: number | null };
+export type SmgWeek = {
+  scores: Record<string, number | null>;
+  responses: number | null;
+  /** Digital OSAT has its own, much smaller base, which `responses` doesn't describe. */
+  digitalResponses: number | null;
+};
 
 export type ZCaseSummary = {
   /** Per trend week, cases opened (by visit date, like the SMG tab). */
@@ -169,7 +175,8 @@ export async function buildExtras(o: { label: string; storeId: string; weeks: We
         if (!mine.length) return null;
         const scores: Record<string, number | null> = {};
         for (const r of mine) scores[r.metric] = r.score;
-        return { scores, responses: mine.find((r) => r.metric === "Overall Satisfaction")?.responses ?? null };
+        const count = (metric: string) => mine.find((r) => r.metric === metric)?.responses ?? null;
+        return { scores, responses: count("Overall Satisfaction"), digitalResponses: count("Overall Satisfaction - Digital") };
       });
     }),
 
